@@ -10,6 +10,7 @@ rust_binary(
         "//third_party/rust:clap",
         "//third_party/rust:anyhow",
         "//third_party/rust:toml",
+        "//third_party/rust:regex_lite",
     ],
 )
 
@@ -19,5 +20,21 @@ sh_test(
     data = [":straddle_carrier_bin"],
     deps = [":straddle_carrier_bin"],
     labels = ["cli"],
+)
+
+filegroup(
+    name = "test_data",
+    srcs = glob(["test_data/**/*.build"]),
+)
+
+sh_test(
+    name = "merge_test",
+    src = "test_merge.sh",
+    data = [
+        ":straddle_carrier_bin",
+        ":test_data",
+    ],
+    deps = [":straddle_carrier_bin"],
+    labels = ["merge"],
 )
 

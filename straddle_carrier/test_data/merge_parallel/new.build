@@ -1,0 +1,19 @@
+# New BUILD file for parallel test
+
+rust_crate(
+    name = "serde",
+    crate = "serde",
+    version = "2.0.0",
+    edition = "2021",
+    features = [
+        "derive",
+    ],
+)
+
+rust_crate(
+    name = "new_only_crate",
+    crate = "new-only",
+    version = "0.5.0",
+    edition = "2021",
+)
+

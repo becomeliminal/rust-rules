@@ -1,0 +1,40 @@
+# Expected output for parallel test
+# - serde 1.0.100: kept as-is
+# - serde 2.0.0: added with version suffix (serde.2_0_0)
+# - old_only_crate: kept
+# - new_only_crate: added
+
+rust_crate(
+    name = "new_only_crate",
+    crate = "new-only",
+    version = "0.5.0",
+    edition = "2021",
+)
+
+rust_crate(
+    name = "old_only_crate",
+    crate = "old-only",
+    version = "0.1.0",
+    edition = "2021",
+)
+
+rust_crate(
+    name = "serde",
+    crate = "serde",
+    version = "1.0.100",
+    edition = "2021",
+    features = [
+        "default",
+    ],
+)
+
+rust_crate(
+    name = "serde.2_0_0",
+    crate = "serde",
+    version = "2.0.0",
+    edition = "2021",
+    features = [
+        "derive",
+    ],
+)
+

@@ -1,0 +1,42 @@
+# Expected output for update_or_expand_only test
+# - serde: version bumped 1.0.100 -> 1.0.200 (same major), features expanded
+# - old_only_crate: kept as-is
+# - new_only_crate: added (new crate)
+# - shared_crate: version bumped 2.0.0 -> 2.1.0, features expanded
+
+rust_crate(
+    name = "new_only_crate",
+    crate = "new-only",
+    version = "0.5.0",
+    edition = "2021",
+)
+
+rust_crate(
+    name = "old_only_crate",
+    crate = "old-only",
+    version = "0.1.0",
+    edition = "2021",
+)
+
+rust_crate(
+    name = "serde",
+    crate = "serde",
+    version = "1.0.200",
+    edition = "2021",
+    features = [
+        "default",
+        "derive",
+    ],
+)
+
+rust_crate(
+    name = "shared_crate",
+    crate = "shared",
+    version = "2.1.0",
+    edition = "2021",
+    features = [
+        "feature_a",
+        "feature_b",
+    ],
+)
+

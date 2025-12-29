@@ -1,0 +1,30 @@
+# New BUILD file for update_or_expand_only test
+
+rust_crate(
+    name = "serde",
+    crate = "serde",
+    version = "1.0.200",
+    edition = "2021",
+    features = [
+        "default",
+        "derive",
+    ],
+)
+
+rust_crate(
+    name = "new_only_crate",
+    crate = "new-only",
+    version = "0.5.0",
+    edition = "2021",
+)
+
+rust_crate(
+    name = "shared_crate",
+    crate = "shared",
+    version = "2.1.0",
+    edition = "2021",
+    features = [
+        "feature_b",
+    ],
+)
+

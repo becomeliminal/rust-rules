@@ -1781,14 +1781,71 @@ rust_crate(
 )
 
 rust_crate(
+    name = "anstream",
+    crate = "anstream",
+    version = "0.6.21",
+    edition = "2021",
+    features = [
+        "auto",
+        "default",
+        "wincon",
+    ],
+    deps = [
+        ":anstyle",
+        ":anstyle_parse",
+        ":anstyle_query",
+        ":colorchoice",
+        ":is_terminal_polyfill",
+        ":utf8parse",
+    ],
+)
+
+rust_crate(
+    name = "anstyle_parse",
+    crate = "anstyle-parse",
+    version = "0.2.7",
+    edition = "2021",
+    features = [
+        "default",
+        "utf8",
+    ],
+    deps = [
+        ":utf8parse",
+    ],
+)
+
+rust_crate(
+    name = "anstyle_query",
+    crate = "anstyle-query",
+    version = "1.1.5",
+    edition = "2021",
+)
+
+rust_crate(
+    name = "anstyle",
+    crate = "anstyle",
+    version = "1.0.13",
+    edition = "2021",
+    features = [
+        "default",
+        "std",
+    ],
+)
+
+rust_crate(
     name = "clap",
     crate = "clap",
+    version = "4.5.53",
     edition = "2021",
-    version = "4.4.9",
     features = [
-        "std",
-        "help",
+        "color",
+        "default",
         "derive",
+        "error-context",
+        "help",
+        "std",
+        "suggestions",
+        "usage",
     ],
     deps = [
         ":clap_builder",
@@ -1799,23 +1856,33 @@ rust_crate(
 rust_crate(
     name = "clap_builder",
     crate = "clap_builder",
+    version = "4.5.53",
     edition = "2021",
-    version = "4.5.21",
     features = [
+        "color",
+        "error-context",
+        "help",
         "std",
+        "suggestions",
+        "usage",
     ],
     deps = [
+        ":anstream",
         ":anstyle",
         ":clap_lex",
+        ":strsim",
     ],
 )
 
 rust_crate(
     name = "clap_derive",
     crate = "clap_derive",
-    edition = "2021",
     version = "4.5.49",
+    edition = "2021",
     crate_type = "proc-macro",
+    features = [
+        "default",
+    ],
     deps = [
         ":heck",
         ":proc_macro2",
@@ -1825,17 +1892,61 @@ rust_crate(
 )
 
 rust_crate(
-    name = "anstyle",
-    crate = "anstyle",
+    name = "clap_lex",
+    crate = "clap_lex",
+    version = "0.7.6",
     edition = "2021",
-    version = "1.0.10",
 )
 
 rust_crate(
-    name = "clap_lex",
-    crate = "clap_lex",
+    name = "colorchoice",
+    crate = "colorchoice",
+    version = "1.0.4",
     edition = "2021",
-    version = "0.7.3",
+)
+
+rust_crate(
+    name = "is_terminal_polyfill",
+    crate = "is_terminal_polyfill",
+    version = "1.70.2",
+    edition = "2021",
+    features = [
+        "default",
+    ],
+)
+
+rust_crate(
+    name = "once_cell_polyfill",
+    crate = "once_cell_polyfill",
+    version = "1.70.2",
+    edition = "2021",
+    features = [
+        "default",
+    ],
+)
+
+rust_crate(
+    name = "strsim",
+    crate = "strsim",
+    version = "0.11.1",
+    edition = "2021",
+)
+
+rust_crate(
+    name = "utf8parse",
+    crate = "utf8parse",
+    version = "0.2.2",
+    edition = "2021",
+    features = [
+        "default",
+    ],
+)
+
+rust_crate(
+    name = "zmij",
+    crate = "zmij",
+    version = "1.0.2",
+    edition = "2021",
 )
 
 rust_crate(
@@ -2028,5 +2139,17 @@ rust_crate(
         ":serde_spanned",
         ":toml_datetime",
         ":toml_edit",
+    ],
+)
+
+rust_crate(
+    name = "regex_lite",
+    crate = "regex-lite",
+    version = "0.1.8",
+    edition = "2021",
+    features = [
+        "default",
+        "std",
+        "string",
     ],
 )

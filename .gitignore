@@ -1,3 +1,7 @@
+# Cargo build artifacts
+target/
+**/target/
+Cargo.lock
 
 # Entries below this point are managed by Please (DO NOT EDIT)
 plz-out

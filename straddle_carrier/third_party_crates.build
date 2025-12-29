@@ -238,6 +238,18 @@ rust_crate(
 )
 
 rust_crate(
+    name = "regex_lite",
+    crate = "regex-lite",
+    version = "0.1.8",
+    edition = "2021",
+    features = [
+        "default",
+        "std",
+        "string",
+    ],
+)
+
+rust_crate(
     name = "serde",
     crate = "serde",
     version = "1.0.228",

@@ -1,0 +1,19 @@
+# Old BUILD file for override test
+
+rust_crate(
+    name = "serde",
+    crate = "serde",
+    version = "1.0.100",
+    edition = "2021",
+    features = [
+        "default",
+    ],
+)
+
+rust_crate(
+    name = "old_only_crate",
+    crate = "old-only",
+    version = "0.1.0",
+    edition = "2021",
+)
+
