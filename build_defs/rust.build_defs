@@ -526,4 +526,4 @@ def _construct_labels(rule_name:str, crate_name:str, crate_type:str):
     else:
         fail(f'Unsupported labels for crate type: {crate_type}')
     return labels
-    
+

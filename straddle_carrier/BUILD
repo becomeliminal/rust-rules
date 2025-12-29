@@ -38,3 +38,21 @@ sh_test(
     labels = ["merge"],
 )
 
+# Test that straddle_carrier's own deps are in sync with its Cargo.toml (compatible mode)
+rust_deps_check(
+    name = "deps_compatible_test",
+    cargo_toml = "Cargo.toml",
+    third_party_build = "third_party_crates.build",
+    mode = "compatible",
+    straddle_carrier = ":straddle_carrier_bin",
+)
+
+# Test that straddle_carrier's own deps exactly match its Cargo.toml
+rust_deps_check(
+    name = "deps_exact_test",
+    cargo_toml = "Cargo.toml",
+    third_party_build = "third_party_crates.build",
+    mode = "exact",
+    straddle_carrier = ":straddle_carrier_bin",
+)
+

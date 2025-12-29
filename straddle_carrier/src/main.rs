@@ -86,6 +86,21 @@ enum Commands {
         #[arg(short, long, value_name = "FILE")]
         output: Option<PathBuf>,
     },
+
+    /// Verify that a BUILD file satisfies Cargo.toml requirements
+    Verify {
+        /// Path to the Cargo.toml file specifying required dependencies
+        #[arg(short, long, value_name = "FILE")]
+        cargo_toml: PathBuf,
+
+        /// Path to the BUILD file containing rust_crate definitions
+        #[arg(short, long, value_name = "FILE")]
+        build_file: PathBuf,
+
+        /// Verification mode
+        #[arg(long, value_enum, default_value = "compatible")]
+        mode: VerifyMode,
+    },
 }
 
 /// Merge mode for combining crate definitions
@@ -97,6 +112,16 @@ enum MergeMode {
     UpdateOrExpandOnly,
     /// For conflicting crates, append version suffix to new ones
     Parallel,
+}
+
+/// Verification mode for checking BUILD file against Cargo.toml
+#[derive(Debug, Clone, Copy, ValueEnum, Default)]
+enum VerifyMode {
+    /// Exact match: versions and features must match exactly
+    Exact,
+    /// Compatible: all deps present, versions satisfy semver, all required features present
+    #[default]
+    Compatible,
 }
 
 /// Represents a resolved package from cargo metadata
@@ -175,6 +200,9 @@ fn main() -> Result<()> {
         }
         Some(Commands::Merge { old_source, new_source, mode, no_backup, output }) => {
             run_merge(&old_source, &new_source, mode, no_backup, output.as_ref())
+        }
+        Some(Commands::Verify { cargo_toml, build_file, mode }) => {
+            run_verify(&cargo_toml, &build_file, mode)
         }
         None => {
             // Legacy mode: use top-level arguments
@@ -508,6 +536,154 @@ fn run_merge(
         merged_crates.len(), old_crates.len(), new_crates.len());
 
     Ok(())
+}
+
+fn run_verify(
+    cargo_toml_path: &PathBuf,
+    build_file_path: &PathBuf,
+    mode: VerifyMode,
+) -> Result<()> {
+    eprintln!("Verifying {:?} against {:?} (mode: {:?})", build_file_path, cargo_toml_path, mode);
+
+    // Get required dependencies from Cargo.toml via cargo metadata
+    let resolved_packages = get_cargo_metadata(cargo_toml_path)?;
+    let cargo_toml_content = fs::read_to_string(cargo_toml_path)
+        .with_context(|| format!("Failed to read Cargo.toml at {:?}", cargo_toml_path))?;
+    let cargo_toml: CargoToml = toml::from_str(&cargo_toml_content)
+        .with_context(|| "Failed to parse Cargo.toml")?;
+
+    // Convert to CrateDefinitions for comparison
+    let required_crates: Vec<CrateDefinition> = resolved_packages
+        .iter()
+        .filter(|p| !p.is_local && p.name != cargo_toml.package.name)
+        .map(|pkg| CrateDefinition {
+            name: crate_name_to_rule_name(&pkg.name),
+            crate_name: pkg.name.clone(),
+            version: pkg.version.clone(),
+            edition: Some("2021".to_string()),
+            features: pkg.features.clone(),
+            deps: pkg.dependencies.iter().map(|d| format!(":{}", crate_name_to_rule_name(d))).collect(),
+            crate_type: None,
+            build_root: None,
+            raw_text: String::new(),
+        })
+        .collect();
+
+    // Parse existing BUILD file
+    let build_content = fs::read_to_string(build_file_path)
+        .with_context(|| format!("Failed to read BUILD file at {:?}", build_file_path))?;
+    let existing_crates = parse_build_file(&build_content)?;
+
+    // Build a map of existing crates by crate name
+    let existing_by_crate: HashMap<String, &CrateDefinition> = existing_crates
+        .iter()
+        .map(|c| (c.crate_name.clone(), c))
+        .collect();
+
+    let mut errors: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+
+    for required in &required_crates {
+        match existing_by_crate.get(&required.crate_name) {
+            None => {
+                errors.push(format!(
+                    "Missing dependency: {} v{}", 
+                    required.crate_name, required.version
+                ));
+            }
+            Some(existing) => {
+                match mode {
+                    VerifyMode::Exact => {
+                        // Exact version match
+                        if existing.version != required.version {
+                            errors.push(format!(
+                                "Version mismatch for {}: have {}, need {}",
+                                required.crate_name, existing.version, required.version
+                            ));
+                        }
+                        
+                        // Exact feature match
+                        let existing_features: HashSet<&String> = existing.features.iter().collect();
+                        let required_features: HashSet<&String> = required.features.iter().collect();
+                        
+                        if existing_features != required_features {
+                            let missing: Vec<_> = required_features.difference(&existing_features).collect();
+                            let extra: Vec<_> = existing_features.difference(&required_features).collect();
+                            
+                            if !missing.is_empty() {
+                                errors.push(format!(
+                                    "Missing features for {}: {:?}",
+                                    required.crate_name, missing
+                                ));
+                            }
+                            if !extra.is_empty() {
+                                errors.push(format!(
+                                    "Extra features for {}: {:?}",
+                                    required.crate_name, extra
+                                ));
+                            }
+                        }
+                    }
+                    VerifyMode::Compatible => {
+                        // Check semver compatibility
+                        if let (Some(existing_ver), Some(required_ver)) = 
+                            (parse_semver(&existing.version), parse_semver(&required.version)) 
+                        {
+                            // Same major version required
+                            if existing_ver.0 != required_ver.0 {
+                                errors.push(format!(
+                                    "Incompatible major version for {}: have {}, need {}",
+                                    required.crate_name, existing.version, required.version
+                                ));
+                            } else if existing_ver < required_ver {
+                                errors.push(format!(
+                                    "Version too old for {}: have {}, need at least {}",
+                                    required.crate_name, existing.version, required.version
+                                ));
+                            } else if existing_ver > required_ver {
+                                warnings.push(format!(
+                                    "Newer version for {}: have {}, required {}",
+                                    required.crate_name, existing.version, required.version
+                                ));
+                            }
+                        }
+
+                        // Check that all required features are present
+                        let existing_features: HashSet<&String> = existing.features.iter().collect();
+                        let required_features: HashSet<&String> = required.features.iter().collect();
+                        
+                        let missing: Vec<_> = required_features.difference(&existing_features).collect();
+                        if !missing.is_empty() {
+                            errors.push(format!(
+                                "Missing features for {}: {:?}",
+                                required.crate_name, missing
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Print results
+    if !warnings.is_empty() {
+        eprintln!("\nWarnings:");
+        for w in &warnings {
+            eprintln!("  - {}", w);
+        }
+    }
+
+    if errors.is_empty() {
+        println!("OK: All {} required dependencies are satisfied", required_crates.len());
+        Ok(())
+    } else {
+        eprintln!("\nErrors:");
+        for e in &errors {
+            eprintln!("  - {}", e);
+        }
+        eprintln!("\n{} error(s), {} warning(s)", errors.len(), warnings.len());
+        std::process::exit(1);
+    }
 }
 
 fn merge_crates(

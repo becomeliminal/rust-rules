@@ -1,0 +1,112 @@
+"""Build rule for checking Rust dependency synchronization.
+
+This provides a test rule that verifies third-party BUILD file dependencies
+match what's declared in a Cargo.toml file.
+"""
+
+
+def rust_deps_check(
+    name: str,
+    cargo_toml: str,
+    third_party_build: str,
+    mode: str = "compatible",
+    straddle_carrier: str = "//straddle_carrier:straddle_carrier_bin",
+    cargo: str = "//third_party/rust:toolchain_cargo",
+    rustc: str = "//third_party/rust:toolchain_rustc",
+    visibility: list = None,
+    labels: list = None,
+):
+    """Creates a test that verifies third-party dependencies are in sync with Cargo.toml.
+
+    This test uses straddle_carrier's verify command to check that the BUILD file
+    satisfies the requirements from Cargo.toml.
+
+    Args:
+        name: Name of the test rule.
+        cargo_toml: Path to the Cargo.toml file to check against.
+        third_party_build: Path to the third-party BUILD file containing rust_crate definitions.
+        mode: Verification mode - "exact" or "compatible" (default).
+              - "exact": versions and features must match exactly
+              - "compatible": all deps present, versions satisfy semver, all required features present
+        straddle_carrier: Build label for the straddle_carrier binary.
+        cargo: Build label for cargo binary (the actual cargo executable).
+        rustc: Build label for rustc binary.
+        visibility: Visibility declaration.
+        labels: Additional labels for the test.
+    """
+    if mode not in ["exact", "compatible"]:
+        fail(f"Invalid mode '{mode}'. Must be 'exact' or 'compatible'.")
+
+    test_script = f'''#!/bin/bash
+set -e
+
+STRADDLE_CARRIER="$1"
+CARGO_TOML="$2"
+THIRD_PARTY_BUILD="$3"
+CARGO_BIN="$4"
+RUSTC_BIN="$5"
+
+# Add cargo and rustc directories to PATH
+CARGO_DIR=$(dirname "$CARGO_BIN")
+RUSTC_DIR=$(dirname "$RUSTC_BIN")
+export PATH="$CARGO_DIR:$RUSTC_DIR:$PATH"
+
+# Set LD_LIBRARY_PATH for rustc's shared libraries
+# The lib files are in plz-out/bin (not copied to the test sandbox)
+# Find repo root by going up from the test directory to find plz-out
+REPO_ROOT=$(pwd | sed 's|/plz-out/tmp/.*||')
+RUSTC_LIB_DIR="$REPO_ROOT/plz-out/bin/$(dirname $(dirname $RUSTC_BIN))/lib"
+export LD_LIBRARY_PATH="$RUSTC_LIB_DIR:$LD_LIBRARY_PATH"
+
+# Cargo needs a valid project structure. Create a dummy src/lib.rs if it doesn't exist
+CARGO_TOML_DIR=$(dirname "$CARGO_TOML")
+if [[ ! -f "$CARGO_TOML_DIR/src/lib.rs" && ! -f "$CARGO_TOML_DIR/src/main.rs" ]]; then
+    mkdir -p "$CARGO_TOML_DIR/src"
+    echo "// Dummy lib for cargo metadata" > "$CARGO_TOML_DIR/src/lib.rs"
+fi
+
+echo "Verifying dependencies (mode: {mode})..."
+echo "  Cargo.toml: $CARGO_TOML"
+echo "  BUILD file: $THIRD_PARTY_BUILD"
+echo ""
+
+"$STRADDLE_CARRIER" verify \\
+    --cargo-toml "$CARGO_TOML" \\
+    --build-file "$THIRD_PARTY_BUILD" \\
+    --mode {mode}
+'''
+    
+    # Create the test script as a genrule
+    script_rule = genrule(
+        name = f"_{name}_script",
+        outs = [f"{name}.sh"],
+        cmd = f"cat > $OUT << 'SCRIPT_EOF'\n{test_script}\nSCRIPT_EOF\nchmod +x $OUT",
+    )
+
+    all_labels = ["rust_deps_check"]
+    if labels:
+        all_labels = all_labels + labels
+
+    return build_rule(
+        name = name,
+        srcs = [f":_{name}_script"],
+        data = {
+            "straddle_carrier": [straddle_carrier],
+            "cargo_toml": [cargo_toml],
+            "third_party_build": [third_party_build],
+            "cargo": [cargo],
+            "rustc": [rustc],
+        },
+        test = True,
+        binary = True,
+        no_test_output = True,
+        test_cmd = "$TEST $(location {}) $(location {}) $(location {}) $(location {}) $(location {})".format(
+            straddle_carrier, cargo_toml, third_party_build, cargo, rustc
+        ),
+        cmd = "cp $SRC $OUT && chmod +x $OUT",
+        outs = [f"{name}_test.sh"],
+        visibility = visibility,
+        labels = all_labels,
+        test_sandbox = False,  # Need network access for cargo metadata
+    )
+
