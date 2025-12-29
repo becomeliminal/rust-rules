@@ -24,7 +24,7 @@ sh_test(
 
 filegroup(
     name = "test_data",
-    srcs = glob(["test_data/**/*.build"]),
+    srcs = glob(["test_data/**/*.build"]) + glob(["test_data/**/*.toml"]),
 )
 
 sh_test(
@@ -54,5 +54,19 @@ rust_deps_check(
     third_party_build = "third_party_crates.build",
     mode = "exact",
     straddle_carrier = ":straddle_carrier_bin",
+)
+
+# Negative test: verify should fail when dependencies are missing
+sh_test(
+    name = "verify_negative_test",
+    src = "test_verify_negative.sh",
+    data = [
+        ":straddle_carrier_bin",
+        ":test_data",
+        "//third_party/rust:toolchain_cargo",
+        "//third_party/rust:toolchain_rustc",
+    ],
+    labels = ["verify", "negative"],
+    sandbox = False,
 )
 

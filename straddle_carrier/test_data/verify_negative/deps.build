@@ -1,0 +1,10 @@
+# This BUILD file is intentionally missing the 'anyhow' dependency
+# to test that verify correctly detects missing dependencies
+
+rust_crate(
+    name = "serde",
+    crate = "serde",
+    version = "1.0.215",
+    edition = "2021",
+)
+
