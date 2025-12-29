@@ -13,3 +13,11 @@ rust_binary(
     ],
 )
 
+sh_test(
+    name = "cli_test",
+    src = "test_cli.sh",
+    data = [":straddle_carrier_bin"],
+    deps = [":straddle_carrier_bin"],
+    labels = ["cli"],
+)
+

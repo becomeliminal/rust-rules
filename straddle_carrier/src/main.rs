@@ -12,18 +12,25 @@ use std::process::Command;
 /// with features, and outputs rust_crate definitions compatible with the please build system.
 #[derive(Parser, Debug)]
 #[command(name = "straddle_carrier")]
+#[command(version = "0.1.0")]
 #[command(about = "Generate rust_crate BUILD definitions from Cargo.toml")]
+#[command(long_about = "Straddle Carrier converts Cargo.toml dependencies into Please BUILD file \
+    rust_crate definitions. It uses `cargo metadata` to resolve the complete dependency tree \
+    with all activated features, ensuring compatibility with the Please build system.")]
+#[command(arg_required_else_help = true)]
 struct Args {
-    /// Path to the Cargo.toml file
-    #[arg(short, long)]
+    /// Path to the Cargo.toml file to analyze
+    #[arg(short, long, value_name = "FILE")]
     cargo_toml: PathBuf,
 
-    /// Output file for the package BUILD (binary/library rules)
-    #[arg(short, long)]
+    /// Output file for the package BUILD (binary/library rules).
+    /// If not specified, prints to stdout.
+    #[arg(short, long, value_name = "FILE")]
     output: Option<PathBuf>,
 
-    /// Output file for third-party crate definitions (defaults to stdout if not specified)
-    #[arg(long)]
+    /// Output file for third-party crate definitions.
+    /// If not specified, prints to stdout.
+    #[arg(long, value_name = "FILE")]
     third_party_output: Option<PathBuf>,
 
     /// Keep the generated Cargo.lock (don't delete it)
