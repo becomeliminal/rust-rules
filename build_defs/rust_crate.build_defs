@@ -235,7 +235,10 @@ def rust_crate(
     )
     crate_deps = deps + renamed_deps.values()
 
-    major, minor, _ = version.split('.')
+    # Safely extract major.minor from version (handles versions with build metadata like 1.0.1+wasi-0.2.4)
+    version_parts = version.split('.')
+    major = version_parts[0]
+    minor = version_parts[1] if len(version_parts) > 1 else '0'
     return build_rule(
         name = name,
         srcs = [download],
@@ -384,7 +387,10 @@ def _rust_crate_build_script(
         features=features,
         out_dir=f'{out_dir}/{base}',
     )
-    major, minor, _ = version.split('.')
+    # Safely extract major.minor from version (handles versions with build metadata like 1.0.1+wasi-0.2.4)
+    version_parts = version.split('.')
+    major = version_parts[0]
+    minor = version_parts[1] if len(version_parts) > 1 else '0'
     compilation = build_rule(
         name = base,
         tag = 'compile_build_script',
@@ -481,7 +487,14 @@ def _default_env(
     elif CONFIG.ARCH == 'x86':
         arch = 'i686'
 
-    major, minor, patch = version.split('.')
+    # Safely extract major.minor.patch from version (handles versions with build metadata like 1.0.1+wasi-0.2.4)
+    version_parts = version.split('.')
+    major = version_parts[0]
+    minor = version_parts[1] if len(version_parts) > 1 else '0'
+    # For patch, take only the numeric part (strip any pre-release/build metadata like -alpha or +build)
+    patch_raw = version_parts[2] if len(version_parts) > 2 else '0'
+    patch_no_hyphen = patch_raw.split('-')[0]
+    patch = patch_no_hyphen.split('+')[0]
     default = {
         # Target specific.
         'CARGO_CFG_TARGET_ARCH': arch,

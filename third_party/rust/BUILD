@@ -2,8 +2,7 @@ subinclude("//build_defs:rust")
 
 rust_toolchain(
     name = "toolchain",
-    hashes = ["0a4022f567602bd6e9cc35e5b0a9b1a88f3867e6"],
-    version = "1.82.0",
+    version = "1.92.0",
     visibility = ["PUBLIC"],
 )
 
@@ -223,8 +222,7 @@ rust_crate(
     name = "hashbrown",
     crate = "hashbrown",
     edition = "2021",
-    version = "0.14.5",
-    features = ["raw"],
+    version = "0.16.1",
 )
 
 rust_crate(
@@ -248,7 +246,7 @@ rust_crate(
     name = "indexmap",
     crate = "indexmap",
     edition = "2021",
-    version = "2.2.6",
+    version = "2.12.1",
     features = [
         "default",
         "std",
@@ -1790,10 +1788,12 @@ rust_crate(
     features = [
         "std",
         "help",
+        "derive",
     ],
     deps = [
         ":clap_builder",
-    ]
+        ":clap_derive",
+    ],
 )
 
 rust_crate(
@@ -1807,7 +1807,21 @@ rust_crate(
     deps = [
         ":anstyle",
         ":clap_lex",
-    ]
+    ],
+)
+
+rust_crate(
+    name = "clap_derive",
+    crate = "clap_derive",
+    edition = "2021",
+    version = "4.5.49",
+    crate_type = "proc-macro",
+    deps = [
+        ":heck",
+        ":proc_macro2",
+        ":quote",
+        ":syn",
+    ],
 )
 
 rust_crate(
@@ -1922,4 +1936,97 @@ rust_crate(
     crate = "same-file",
     edition = "2021",
     version = "1.0.6",
+)
+
+#### TOML parsing (used by straddle_carrier) ####
+
+rust_crate(
+    name = "serde_spanned",
+    crate = "serde_spanned",
+    version = "0.6.9",
+    edition = "2021",
+    features = [
+        "serde",
+    ],
+    deps = [
+        ":serde",
+    ],
+)
+
+rust_crate(
+    name = "winnow",
+    crate = "winnow",
+    version = "0.7.14",
+    edition = "2021",
+    features = [
+        "alloc",
+        "default",
+        "std",
+    ],
+    deps = [
+        ":memchr",
+    ],
+)
+
+rust_crate(
+    name = "toml_write",
+    crate = "toml_write",
+    version = "0.1.2",
+    edition = "2021",
+    features = [
+        "alloc",
+        "default",
+        "std",
+    ],
+)
+
+rust_crate(
+    name = "toml_datetime",
+    crate = "toml_datetime",
+    version = "0.6.11",
+    edition = "2021",
+    features = [
+        "serde",
+    ],
+    deps = [
+        ":serde",
+    ],
+)
+
+rust_crate(
+    name = "toml_edit",
+    crate = "toml_edit",
+    version = "0.22.27",
+    edition = "2021",
+    features = [
+        "display",
+        "parse",
+        "serde",
+    ],
+    deps = [
+        ":indexmap",
+        ":serde",
+        ":serde_spanned",
+        ":toml_datetime",
+        ":toml_write",
+        ":winnow",
+    ],
+)
+
+rust_crate(
+    name = "toml",
+    crate = "toml",
+    version = "0.8.23",
+    edition = "2021",
+    features = [
+        "default",
+        "display",
+        "parse",
+    ],
+    deps = [
+        ":serde",
+        ":serde_spanned",
+        ":toml_datetime",
+        ":toml_edit",
+    ],
 )
