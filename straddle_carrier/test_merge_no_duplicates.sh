@@ -1,5 +1,15 @@
 #!/bin/bash
-# Test that merge doesn't produce duplicate crate definitions
+# =============================================================================
+# Merge Duplicate Detection Test
+# =============================================================================
+# Verifies that the merge command never produces duplicate crate definitions.
+#
+# A duplicate would cause Please build failures like:
+#   "Duplicate build target in third_party/rust: foo-1.0.0_download"
+#
+# This test merges overlapping BUILD files and checks that each crate name
+# appears exactly once in the output.
+# =============================================================================
 
 set -e
 

@@ -1,5 +1,17 @@
 #!/bin/bash
-# Test merge with real third_party/rust/BUILD and straddle_carrier deps
+# =============================================================================
+# Real-World Merge Test
+# =============================================================================
+# Tests merge with actual third_party/rust/BUILD file structure.
+#
+# This catches edge cases that simple tests miss:
+#   - Crates with multiple versions (forks like hashbrown, indexmap)
+#   - Crates with rust_crate_download rules
+#   - Crates with special fields (src_root, crate_type, download, etc.)
+#   - Comments that might confuse the parser
+#
+# Uses copies of real files in test_data/merge_real/
+# =============================================================================
 
 set -e
 

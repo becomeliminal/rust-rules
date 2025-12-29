@@ -1,5 +1,19 @@
 #!/bin/bash
-# Test that verify correctly fails when dependencies are missing
+# =============================================================================
+# Verify Negative Test (Expected Failure)
+# =============================================================================
+# Tests that 'straddle_carrier verify' correctly FAILS when deps are missing.
+#
+# Setup:
+#   - Cargo.toml declares: serde, anyhow
+#   - BUILD file only has: serde (missing anyhow!)
+#
+# Expected behavior:
+#   - verify should exit with non-zero status
+#   - verify should report "Missing dependency: anyhow"
+#
+# This is a "negative test" - the test PASSES when verify FAILS.
+# =============================================================================
 
 set -e
 

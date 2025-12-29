@@ -1,4 +1,17 @@
 #!/bin/bash
+# =============================================================================
+# Merge Mode Tests for straddle_carrier
+# =============================================================================
+# Tests all three merge modes with predefined test cases:
+#
+#   1. override: New crates replace old ones with same crate name
+#   2. update_or_expand_only: Only bump versions within semver, add features
+#   3. parallel: Keep both versions, suffix new ones with version number
+#
+# Each test compares the merge output against an expected.build file.
+# Test data is in test_data/merge_*/  subdirectories.
+# =============================================================================
+
 set -e
 
 # In Please tests, data deps are available in the current directory

@@ -1,5 +1,18 @@
 #!/bin/bash
-# Test that merge preserves rust_crate_download rules
+# =============================================================================
+# Merge Preserves Downloads Test
+# =============================================================================
+# Verifies that merge preserves rust_crate_download rules and download= params.
+#
+# Some crates use explicit download rules to share a single download between
+# multiple rust_crate entries (e.g., protoc-gen-prost has lib and bin targets).
+#
+# The merge must:
+#   - Keep rust_crate_download rules intact
+#   - Preserve download = ":foo_dl" parameters in rust_crate rules
+#
+# If these are lost, builds fail with missing download targets.
+# =============================================================================
 
 set -e
 

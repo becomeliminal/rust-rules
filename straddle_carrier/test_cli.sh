@@ -1,4 +1,15 @@
 #!/bin/bash
+# =============================================================================
+# CLI Tests for straddle_carrier
+# =============================================================================
+# Tests the command-line interface behavior:
+#   - No arguments: displays help and exits with code 2
+#   - --help / -h: displays help and exits with code 0
+#   - --version / -V: displays version and exits with code 0
+#
+# These tests ensure the CLI is user-friendly and provides proper feedback.
+# =============================================================================
+
 set -e
 
 # In Please tests, data deps are available relative to test dir
