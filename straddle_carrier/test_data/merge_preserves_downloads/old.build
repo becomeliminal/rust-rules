@@ -1,0 +1,23 @@
+# Test that merge preserves rust_crate_download rules
+
+rust_crate_download(
+    name = "foo_dl",
+    crate = "foo",
+    version = "1.0.0",
+)
+
+rust_crate(
+    name = "foo",
+    crate = "foo",
+    version = "1.0.0",
+    edition = "2021",
+    download = ":foo_dl",
+)
+
+rust_crate(
+    name = "bar",
+    crate = "bar",
+    version = "1.0.0",
+    edition = "2021",
+)
+

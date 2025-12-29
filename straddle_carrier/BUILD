@@ -70,3 +70,36 @@ sh_test(
     sandbox = False,
 )
 
+# Test that merge doesn't produce duplicate crate definitions
+sh_test(
+    name = "merge_no_duplicates_test",
+    src = "test_merge_no_duplicates.sh",
+    data = [
+        ":straddle_carrier_bin",
+        ":test_data",
+    ],
+    labels = ["merge"],
+)
+
+# Test merge with real third_party/rust/BUILD structure
+sh_test(
+    name = "merge_real_files_test",
+    src = "test_merge_real_files.sh",
+    data = [
+        ":straddle_carrier_bin",
+        ":test_data",
+    ],
+    labels = ["merge"],
+)
+
+# Test that merge preserves rust_crate_download rules
+sh_test(
+    name = "merge_preserves_downloads_test",
+    src = "test_merge_preserves_downloads.sh",
+    data = [
+        ":straddle_carrier_bin",
+        ":test_data",
+    ],
+    labels = ["merge"],
+)
+

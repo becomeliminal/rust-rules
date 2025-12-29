@@ -1,0 +1,24 @@
+# New BUILD file with overlapping crates
+
+rust_crate(
+    name = "foo",
+    crate = "foo",
+    version = "2.0.0",
+    edition = "2021",
+)
+
+rust_crate(
+    name = "bar",
+    crate = "bar",
+    version = "1.0.0",
+    edition = "2021",
+    features = ["extra"],
+)
+
+rust_crate(
+    name = "qux",
+    crate = "qux",
+    version = "1.0.0",
+    edition = "2021",
+)
+

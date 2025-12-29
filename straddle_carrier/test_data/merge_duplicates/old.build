@@ -1,0 +1,23 @@
+# Old BUILD file with some crates
+
+rust_crate(
+    name = "foo",
+    crate = "foo",
+    version = "1.0.0",
+    edition = "2021",
+)
+
+rust_crate(
+    name = "bar",
+    crate = "bar",
+    version = "1.0.0",
+    edition = "2021",
+)
+
+rust_crate(
+    name = "baz",
+    crate = "baz",
+    version = "1.0.0",
+    edition = "2021",
+)
+

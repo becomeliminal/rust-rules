@@ -268,6 +268,12 @@ struct CrateDefinition {
     build_root: Option<String>,
     /// The raw text of the entire rust_crate(...) block
     raw_text: String,
+    /// Content before this crate (comments, rust_crate_download, etc.)
+    preceding_content: String,
+    /// Whether this crate is pinned (has # straddle_carrier:do_not_touch comment)
+    pinned: bool,
+    /// Whether this crate was modified during merge
+    modified: bool,
 }
 
 impl CrateDefinition {
@@ -295,16 +301,46 @@ fn parse_semver(version: &str) -> Option<(u64, u64, u64)> {
     }
 }
 
-/// Parse rust_crate definitions from a BUILD file
+/// Represents non-crate content in a BUILD file (downloads, comments, etc.)
+#[derive(Debug, Clone)]
+struct BuildFileContent {
+    crates: Vec<CrateDefinition>,
+    /// Content before the first crate (subinclude, rust_toolchain, etc.)
+    header: String,
+    /// Content after the last crate
+    trailer: String,
+}
+
+/// Parse rust_crate definitions from a BUILD file, preserving all content
 fn parse_build_file(content: &str) -> Result<Vec<CrateDefinition>> {
+    parse_build_file_full(content).map(|bfc| bfc.crates)
+}
+
+/// Parse BUILD file preserving full structure
+fn parse_build_file_full(content: &str) -> Result<BuildFileContent> {
     let mut crates = Vec::new();
     let mut i = 0;
     let chars: Vec<char> = content.chars().collect();
+    let mut last_crate_end = 0;
+    let mut first_crate_start: Option<usize> = None;
+    
+    // Pin comment regex: # or ; followed by optional whitespace, then straddle_carrier:do_not_touch
+    let pin_regex = regex_lite::Regex::new(r"[#;]\s*straddle_carrier:do_not_touch").unwrap();
 
     while i < chars.len() {
         // Look for "rust_crate("
         if content[i..].starts_with("rust_crate(") {
             let start = i;
+            if first_crate_start.is_none() {
+                first_crate_start = Some(start);
+            }
+
+            // Capture preceding content (from last crate end to this crate start)
+            let preceding_content = content[last_crate_end..start].to_string();
+            
+            // Check if there's a pin comment in the preceding content
+            let pinned = pin_regex.is_match(&preceding_content);
+
             i += "rust_crate(".len();
 
             // Find matching closing paren
@@ -319,15 +355,29 @@ fn parse_build_file(content: &str) -> Result<Vec<CrateDefinition>> {
             }
 
             let raw_text = content[start..i].to_string();
-            if let Some(crate_def) = parse_single_crate(&raw_text) {
+            if let Some(mut crate_def) = parse_single_crate(&raw_text) {
+                crate_def.preceding_content = preceding_content;
+                crate_def.pinned = pinned;
+                crate_def.modified = false;
                 crates.push(crate_def);
             }
+            last_crate_end = i;
         } else {
             i += 1;
         }
     }
 
-    Ok(crates)
+    let header = first_crate_start
+        .map(|pos| content[..pos].to_string())
+        .unwrap_or_else(|| content.to_string());
+    
+    let trailer = content[last_crate_end..].to_string();
+
+    Ok(BuildFileContent {
+        crates,
+        header,
+        trailer,
+    })
 }
 
 /// Parse a single rust_crate(...) block
@@ -352,6 +402,9 @@ fn parse_single_crate(text: &str) -> Option<CrateDefinition> {
         crate_type,
         build_root,
         raw_text: text.to_string(),
+        preceding_content: String::new(),
+        pinned: false,
+        modified: false,
     })
 }
 
@@ -486,6 +539,9 @@ fn run_merge(
                 crate_type: None,
                 build_root: None,
                 raw_text: String::new(),
+                preceding_content: String::new(),
+                pinned: false,
+                modified: false,
             })
             .collect()
     } else {
@@ -495,26 +551,45 @@ fn run_merge(
         parse_build_file(&new_content)?
     };
 
-    // Parse old BUILD file
-    let old_crates = parse_build_file(&old_content)?;
+    // Parse old BUILD file with full structure
+    let old_build = parse_build_file_full(&old_content)?;
+    let old_crates = old_build.crates.clone();
 
     // Merge based on mode
-    let merged_crates = merge_crates(&old_crates, &new_crates, mode)?;
+    let (merged_crates, warnings) = merge_crates(&old_crates, &new_crates, mode)?;
 
-    // Build the output content
-    // Preserve any non-rust_crate content from the old file (like subinclude, comments, etc.)
+    // Print warnings for pinned crates
+    if !warnings.is_empty() {
+        eprintln!("\n=== WARNINGS ===");
+        for warning in &warnings {
+            eprintln!("{}", warning);
+        }
+        eprintln!("================\n");
+    }
+
+    // Build the output content preserving structure
     let mut output_content = String::new();
     
-    // Extract header content (everything before first rust_crate)
-    if let Some(first_crate_pos) = old_content.find("rust_crate(") {
-        output_content.push_str(&old_content[..first_crate_pos]);
-    }
+    // Add header (subinclude, rust_toolchain, etc.)
+    output_content.push_str(&old_build.header);
 
     // Add merged crates
+    // Since we sort crates, we can't use preceding_content (it's position-dependent)
+    // For unmodified crates, use raw_text to preserve all fields (like download=, src_root=, etc.)
     for crate_def in &merged_crates {
-        output_content.push_str(&generate_crate_block(crate_def));
-        output_content.push('\n');
+        if !crate_def.modified && !crate_def.raw_text.is_empty() {
+            // Use raw_text to preserve all original fields
+            output_content.push_str(&crate_def.raw_text);
+            output_content.push_str("\n\n");
+        } else {
+            // For new or modified crates, generate fresh
+            output_content.push_str(&generate_crate_block(crate_def));
+            output_content.push_str("\n");
+        }
     }
+
+    // Add trailer (may contain rust_crate_download and other non-crate content)
+    output_content.push_str(&old_build.trailer);
 
     // Determine output path
     let output_path = output.unwrap_or(old_source);
@@ -566,6 +641,9 @@ fn run_verify(
             crate_type: None,
             build_root: None,
             raw_text: String::new(),
+            preceding_content: String::new(),
+            pinned: false,
+            modified: false,
         })
         .collect();
 
@@ -690,8 +768,9 @@ fn merge_crates(
     old_crates: &[CrateDefinition],
     new_crates: &[CrateDefinition],
     mode: MergeMode,
-) -> Result<Vec<CrateDefinition>> {
+) -> Result<(Vec<CrateDefinition>, Vec<String>)> {
     let mut result: Vec<CrateDefinition> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
     
     // Build a map of old crates by crate name (not rule name)
     let mut old_by_crate: HashMap<String, CrateDefinition> = HashMap::new();
@@ -705,20 +784,80 @@ fn merge_crates(
         new_by_crate.insert(c.crate_name.clone(), c.clone());
     }
 
+    // Count how many old crates have each crate_name (to detect forks)
+    let mut old_crate_counts: HashMap<String, usize> = HashMap::new();
+    for c in old_crates {
+        *old_crate_counts.entry(c.crate_name.clone()).or_insert(0) += 1;
+    }
+
     match mode {
         MergeMode::Override => {
             // Start with old crates, override with new ones
             let mut seen: HashSet<String> = HashSet::new();
             
-            for new_crate in new_crates {
-                result.push(new_crate.clone());
-                seen.insert(new_crate.crate_name.clone());
+            for old_crate in old_crates {
+                if let Some(new_crate) = new_by_crate.get(&old_crate.crate_name) {
+                    // Check if update is semver-compatible with the OLD crate's version
+                    let (semver_compatible, version_parse_failed) = match (old_crate.parse_semver(), new_crate.parse_semver()) {
+                        (Some(old_ver), Some(new_ver)) => {
+                            // Same major version means compatible for override
+                            (old_ver.0 == new_ver.0, false)
+                        }
+                        _ => {
+                            // Can't parse versions - not compatible, will emit warning
+                            (false, true)
+                        }
+                    };
+                    
+                    if version_parse_failed {
+                        warnings.push(format!(
+                            "WARNING: Cannot parse version for '{}' - skipping update\n\
+                             │  Current: {} v{}\n\
+                             │  New:     {} v{}\n\
+                             │  Keeping current version.",
+                            old_crate.name,
+                            old_crate.crate_name, old_crate.version,
+                            new_crate.crate_name, new_crate.version
+                        ));
+                    }
+                    
+                    if old_crate.pinned {
+                        // Emit detailed warning
+                        warnings.push(format!(
+                            "WARNING: Cannot update PINNED crate '{}' (has # straddle_carrier:do_not_touch)\n\
+                             │  Current: {} v{}\n\
+                             │  New:     {} v{}\n\
+                             │  Keeping pinned version. Remove the pin comment to allow updates.",
+                            old_crate.name,
+                            old_crate.crate_name, old_crate.version,
+                            new_crate.crate_name, new_crate.version
+                        ));
+                        result.push(old_crate.clone());
+                    } else if semver_compatible {
+                        // Replace with new, but preserve name and preceding_content from old
+                        let mut merged = new_crate.clone();
+                        merged.name = old_crate.name.clone(); // Keep old rule name
+                        merged.preceding_content = old_crate.preceding_content.clone();
+                        merged.modified = true;
+                        result.push(merged);
+                    } else {
+                        // Not semver compatible - keep old as-is (this is a fork)
+                        result.push(old_crate.clone());
+                    }
+                    seen.insert(old_crate.crate_name.clone());
+                } else {
+                    // No new version, keep old as-is
+                    result.push(old_crate.clone());
+                    seen.insert(old_crate.crate_name.clone());
+                }
             }
             
-            // Add old crates that aren't in new
-            for old_crate in old_crates {
-                if !seen.contains(&old_crate.crate_name) {
-                    result.push(old_crate.clone());
+            // Add new crates that aren't in old
+            for new_crate in new_crates {
+                if !seen.contains(&new_crate.crate_name) {
+                    let mut c = new_crate.clone();
+                    c.modified = true; // New crate needs generation
+                    result.push(c);
                 }
             }
         }
@@ -729,33 +868,68 @@ fn merge_crates(
 
             for old_crate in old_crates {
                 let mut updated = old_crate.clone();
+                let mut was_modified = false;
                 
                 if let Some(new_crate) = new_by_crate.get(&old_crate.crate_name) {
-                    // Check if we should update
-                    if let (Some(old_ver), Some(new_ver)) = (old_crate.parse_semver(), new_crate.parse_semver()) {
-                        // Only update if same major version and new is higher
-                        if old_ver.0 == new_ver.0 && new_ver > old_ver {
-                            updated.version = new_crate.version.clone();
+                    // Check if pinned
+                    if old_crate.pinned {
+                        // Check if update would be needed
+                        let needs_update = if let (Some(old_ver), Some(new_ver)) = 
+                            (old_crate.parse_semver(), new_crate.parse_semver()) 
+                        {
+                            old_ver.0 == new_ver.0 && new_ver > old_ver
+                        } else {
+                            false
+                        };
+                        
+                        let new_features: HashSet<&String> = new_crate.features.iter().collect();
+                        let old_features: HashSet<&String> = old_crate.features.iter().collect();
+                        let missing_features: Vec<_> = new_features.difference(&old_features).collect();
+                        
+                        if needs_update || !missing_features.is_empty() {
+                            warnings.push(format!(
+                                "WARNING: Cannot update PINNED crate '{}' (has # straddle_carrier:do_not_touch)\n\
+                                 │  Current version: {}\n\
+                                 │  Available version: {}\n\
+                                 │  Missing features: {:?}\n\
+                                 │  Keeping pinned version. Remove the pin comment to allow updates.",
+                                old_crate.name,
+                                old_crate.version,
+                                new_crate.version,
+                                missing_features
+                            ));
                         }
-                    }
-                    
-                    // Always expand features (add new ones, never remove)
-                    let old_features: HashSet<String> = old_crate.features.iter().cloned().collect();
-                    for f in &new_crate.features {
-                        if !old_features.contains(f) {
-                            updated.features.push(f.clone());
+                    } else {
+                        // Check if we should update version
+                        if let (Some(old_ver), Some(new_ver)) = (old_crate.parse_semver(), new_crate.parse_semver()) {
+                            // Only update if same major version and new is higher
+                            if old_ver.0 == new_ver.0 && new_ver > old_ver {
+                                updated.version = new_crate.version.clone();
+                                was_modified = true;
+                            }
                         }
-                    }
+                        
+                        // Always expand features (add new ones, never remove)
+                        let old_features: HashSet<String> = old_crate.features.iter().cloned().collect();
+                        for f in &new_crate.features {
+                            if !old_features.contains(f) {
+                                updated.features.push(f.clone());
+                                was_modified = true;
+                            }
+                        }
 
-                    // Expand deps too
-                    let old_deps: HashSet<String> = old_crate.deps.iter().cloned().collect();
-                    for d in &new_crate.deps {
-                        if !old_deps.contains(d) {
-                            updated.deps.push(d.clone());
+                        // Expand deps too
+                        let old_deps: HashSet<String> = old_crate.deps.iter().cloned().collect();
+                        for d in &new_crate.deps {
+                            if !old_deps.contains(d) {
+                                updated.deps.push(d.clone());
+                                was_modified = true;
+                            }
                         }
                     }
                 }
                 
+                updated.modified = was_modified;
                 result.push(updated);
                 seen.insert(old_crate.crate_name.clone());
             }
@@ -763,7 +937,9 @@ fn merge_crates(
             // Add new crates that aren't in old
             for new_crate in new_crates {
                 if !seen.contains(&new_crate.crate_name) {
-                    result.push(new_crate.clone());
+                    let mut c = new_crate.clone();
+                    c.modified = true;
+                    result.push(c);
                 }
             }
         }
@@ -775,14 +951,29 @@ fn merge_crates(
             }
 
             for new_crate in new_crates {
-                if old_by_crate.contains_key(&new_crate.crate_name) {
-                    // Conflict: add with version suffix
+                if let Some(old_crate) = old_by_crate.get(&new_crate.crate_name) {
+                    // Conflict: check if old is pinned and versions differ
+                    if old_crate.pinned && old_crate.version != new_crate.version {
+                        warnings.push(format!(
+                            "WARNING: Adding parallel version for PINNED crate '{}'\n\
+                             │  Pinned version: {} (kept as '{}')\n\
+                             │  New version: {} (added as '{}.{}')\n\
+                             │  Both versions will coexist.",
+                            old_crate.crate_name,
+                            old_crate.version, old_crate.name,
+                            new_crate.version, new_crate.name, new_crate.version.replace('.', "_")
+                        ));
+                    }
+                    // Add with version suffix
                     let mut suffixed = new_crate.clone();
                     let version_suffix = new_crate.version.replace('.', "_");
                     suffixed.name = format!("{}.{}", new_crate.name, version_suffix);
+                    suffixed.modified = true;
                     result.push(suffixed);
                 } else {
-                    result.push(new_crate.clone());
+                    let mut c = new_crate.clone();
+                    c.modified = true;
+                    result.push(c);
                 }
             }
         }
@@ -791,7 +982,27 @@ fn merge_crates(
     // Sort by crate name for consistent output
     result.sort_by(|a, b| a.crate_name.cmp(&b.crate_name));
 
-    Ok(result)
+    // Detect and warn about forks (multiple crates with same crate_name but different rule names)
+    let mut crate_versions: HashMap<String, Vec<&CrateDefinition>> = HashMap::new();
+    for c in &result {
+        crate_versions.entry(c.crate_name.clone()).or_default().push(c);
+    }
+    for (crate_name, versions) in &crate_versions {
+        if versions.len() > 1 {
+            let version_list: Vec<String> = versions
+                .iter()
+                .map(|v| format!("'{}' v{}", v.name, v.version))
+                .collect();
+            warnings.push(format!(
+                "INFO: Fork detected for crate '{}' - {} versions coexist:\n│  {}",
+                crate_name,
+                versions.len(),
+                version_list.join("\n│  ")
+            ));
+        }
+    }
+
+    Ok((result, warnings))
 }
 
 /// Cargo metadata JSON structures

@@ -1,0 +1,15 @@
+# New file also with hashbrown 0.16.1 (same name, same version)
+rust_crate(
+    name = "hashbrown",
+    crate = "hashbrown",
+    version = "0.16.1",
+    edition = "2021",
+)
+
+rust_crate(
+    name = "new_crate",
+    crate = "new",
+    version = "1.0.0",
+    edition = "2021",
+)
+

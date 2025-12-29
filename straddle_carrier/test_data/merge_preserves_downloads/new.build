@@ -1,0 +1,9 @@
+# New crates to merge
+
+rust_crate(
+    name = "baz",
+    crate = "baz",
+    version = "1.0.0",
+    edition = "2021",
+)
+
