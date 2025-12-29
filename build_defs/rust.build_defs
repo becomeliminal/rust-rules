@@ -299,10 +299,7 @@ def rust_test(name:str, root:str, modules:list=None, deps:list=[], edition:str="
         binary = True,
         test = True,
         no_test_output = True, # see above
-        outs = {
-            'rmeta': [f'lib{crate_name}.rmeta'],
-            'bin':[f'{crate_name}'],
-        },
+        outs = [f'{crate_name}'],
         cmd = cmd,
         deps = deps,
         visibility = visibility,
