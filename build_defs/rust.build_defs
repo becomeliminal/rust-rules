@@ -182,7 +182,7 @@ def rust_library(name:str, root:str, crate_name:str="", modules:list=None, deps:
     )
 
 
-def rust_binary(name:str, main:str, deps:list=None, edition:str='2021', features:list=None, build_root:str=None, build_deps:list|dict=None, build_compile_env:dict=None, build_run_env:dict=None, target_dir:str="target/debug/deps", visibility:list=None, _os:str=None, _arch:str=None):
+def rust_binary(name:str, main:str, deps:list=[], edition:str='2021', features:list=None, build_root:str=None, build_deps:list|dict=None, build_compile_env:dict=None, build_run_env:dict=None, target_dir:str="target/debug/deps", visibility:list=None, _os:str=None, _arch:str=None):
     """Defines a build rule for a Rust standalone binary.
 
     Args:
@@ -218,7 +218,7 @@ def rust_binary(name:str, main:str, deps:list=None, edition:str='2021', features
     
     # All this really does is ensure that rust_proto_libraries build before the pre_build function.
     # TODO: is there a better way of doing this?
-    if deps:
+    if len(deps) > 0:
         collect_deps = [genrule(
             name = f"_{name}#target_deps",
             cmd = [
