@@ -1,118 +1,181 @@
 # Rust Rules
+This repo provides Rust build rules for the [Please](https://please.build) build system.
 
-Hermetic Rust build rules for the [Please](https://please.build) build system —
-the `go_repo` experience, for Rust.
-
-Third-party crates are declared once, by name and version. Everything else —
-transitive dependency routing, feature unification, BUILD file generation,
-compilation — is computed by `please_rust`, a single tool that reimplements
-cargo's build contract offline. **Cargo is never invoked**: not at build time,
-not at resolution time, not to add a dependency.
-
+## Basic usage
+First add the plugin to your project. In `plugins/BUILD`:
 ```python
-# third_party/rust/BUILD — maintained by `please_rust sync`
+plugin_repo(
+    name = "rust",
+    owner = "becomeliminal",
+    revision = "<Some git tag, commit, or other reference>",
+)
+```
+
+Set up the Rust toolchain for your project in `third_party/rust`:
+```python
+subinclude("///rust//build_defs:rust")
+
+rust_toolchain(
+    name = "toolchain",
+    hashes = ["<hash>"],
+    version = "X.XX.X",
+    visibility = ["PUBLIC"],
+)
+```
+
+Then add the plugin config to `.plzconfig`:
+```ini
+[Plugin "rust"]
+Target = //plugins:rust
+```
+
+You can then compile and test Rust libraries like so:
+```python
+subinclude("///rust//build_defs:rust")
+
+rust_library(
+    name = "lib",
+    root = "src/lib.rs",
+    modules = [
+        "src/module_a.rs",
+        "src/module_a/sub_module_a.rs",
+        "src/module_b.rs",
+        "src/module_b/sub_module_b.rs",
+    ],
+)
+
+rust_test(
+    name = "lib",
+    root = "src/lib.rs",
+    modules = [
+        "src/module_a.rs",
+        "src/module_a/sub_module_a.rs",
+        "src/module_b.rs",
+        "src/module_b/sub_module_b.rs",
+    ],
+)
+```
+
+You can define third-party crates using `rust_repo`. Only your direct
+dependencies need declaring — versions, features and transitive dependencies
+are resolved from each crate's `Cargo.toml`, the same way Cargo would:
+```python
+subinclude("///rust//build_defs:rust")
+
 rust_repo(
     name = "serde",
     crate = "serde",
     version = "1.0.228",
-    features = ["derive", "default"],
-    hashes = ["9a8e94ea7f378bd32cbbd37198a4a91436180c5bb14e6ce8b44b779e8c1785b3"],
+    features = ["derive"],
+)
+
+rust_repo(
+    name = "rand",
+    crate = "rand",
+    version = "0.8.5",
 )
 ```
 
+To add a dependency (and everything it needs) straight from crates.io:
+```ini
+plz run //tools/please_rust -- lock --add serde@1
+```
+
+Or import an existing Cargo project wholesale from its lockfile:
+```ini
+plz run //tools/please_rust -- sync --import path/to/Cargo.lock
+```
+
+Both maintain the `rust_repo` declarations in `third_party/rust/BUILD` for
+you, including sha256 hashes so every download is verified. After editing
+declarations by hand, run `plz run //tools/please_rust -- sync` to re-resolve.
+
+To compile a binary, you can use `rust_binary`:
 ```python
-# your code
-subinclude("//build_defs:rust")
+subinclude("///rust//build_defs:rust")
 
 rust_binary(
-    name = "app",
+    name = "bin",
     main = "src/main.rs",
-    deps = ["//third_party/rust:serde", "//third_party/rust:tokio"],
+    deps = [
+        ":lib",
+        "//third_party/rust:<rust_repo_name>",
+    ],
 )
 ```
 
-## How it works
-
-The architecture mirrors [go-rules](https://github.com/please-build/go-rules),
-which exists for the same reason: the language's native tool is not hermetic,
-so its *contract* is reimplemented under the build system's control.
-
-| Layer | What happens | Network |
-|---|---|---|
-| `rust_toolchain` | rustc/cargo/stdlib fetched from static.rust-lang.org, sha256-pinned | fetch rule only |
-| `rust_repo` | crate tarball fetched from static.crates.io via `remote_file`, sha256-verified | fetch rule only |
-| `please_rust generate` | parses the crate's Cargo.toml, emits BUILD rules into a Please subrepo | none |
-| `please_rust resolve` | semver version routing + cargo resolver-v2 feature unification across the declared graph → checked-in `rust.lock` | none |
-| `please_rust compile` / `build-script` | drives rustc with cargo's full env contract (`CARGO_PKG_*`, `OUT_DIR`, feature cfgs, proc-macro externs, build script directives) | none |
-| `please_rust sync` | maintains the `rust_repo` list: naming, hashes, lock regeneration; imports a cargo `Cargo.lock` wholesale | none |
-| `please_rust lock --add crate@req` | resolves new deps against the crates.io sparse index (cached, `--offline` supported), hashes from index checksums | dev-time only |
-
-The `rust_repo` declarations play the role `go.mod` plays for go-rules: the
-committed, deterministic resolution artifact. `rust.lock` (checked in next to
-the BUILD file) carries the computed feature sets and dependency routing, so
-builds are reproducible byte-for-byte with no resolver in the loop.
-
-Multiple versions of a crate coexist: the newest declared version owns the
-plain name (`indexmap`), older duplicates are suffixed (`indexmap-1.9.3`),
-and every compile gets cargo-style `-C metadata`/`-C extra-filename`
-disambiguation. Renamed deps (`package = "..."`), build scripts (with real
-`OUT_DIR` handling), proc-macros, and platform-specific `[target.'cfg(...)']`
-dependencies (evaluated with `cfg-expr`) are all supported.
-
-## Adding a dependency
-
-```sh
-# From the crates.io index (no cargo required anywhere):
-plz run //tools/please_rust -- lock --add axum@0.7
-
-# Or import an existing cargo project's entire lockfile:
-plz run //tools/please_rust -- sync --import path/to/Cargo.lock
-
-# After hand-editing rust_repo declarations, re-resolve:
-plz run //tools/please_rust -- sync
-```
-
-All three rewrite `third_party/rust/BUILD` and regenerate `rust.lock`.
-Feature requests live on the `rust_repo` entries you name; everything
-transitive is derived.
-
-## First-party rules
-
-`rust_library`, `rust_binary`, `rust_test`, and `rust_benchmark` (criterion)
-compile through the same `please_rust compile` driver and interoperate with
-`rust_repo` crates in both directions. See `examples/`.
-
+To benchmark your code with [Criterion](https://crates.io/crates/criterion), you can use `rust_benchmark`:
 ```python
-rust_library(
-    name = "lib",
-    root = "src/lib.rs",
-    modules = ["src/module_a.rs"],
-    deps = ["//third_party/rust:serde"],
-)
+subinclude("///rust//build_defs:rust")
 
-rust_test(
-    name = "test",
-    root = "src/lib.rs",
+rust_benchmark(
+    name = "your_benchmark",
+    main = "src/main.rs",
+    deps = [
+        "//your/lib/to/benchmark",
+    ],
 )
 ```
 
-## Bootstrap
+You can use criterion directly in your `src/main.rs`:
+```rust
+use criterion::{criterion_group, criterion_main, Criterion, measurement::WallTime};
+use fibonacci::{fibonacci};
 
-`//tools/please_rust:please_rust` is self-hosted: built by these rules from
-the `rust_repo` graph. The `:bootstrap` genrule builds it once with cargo to
-break the egg (exactly as go-rules bootstraps please_go); nothing else ever
-runs cargo.
+fn benchmark_fibonacci(c: &mut Criterion<WallTime>) {
+    c.bench_function("fibonacci 20", |b| b.iter(|| fibonacci(20)));
+}
 
-## Status / known gaps
+criterion_group!(
+    name = benches;
+    config = Criterion::default().with_measurement(WallTime);
+    targets = benchmark_fibonacci
+);
+criterion_main!(benches);
+```
 
-- Build scripts that invoke a C compiler (`cc` crate, `-sys` crates) need a
-  host cc; a declared hermetic C toolchain is future work (blake3 is built
-  with its `pure` feature for this reason). go-rules has the same frontier
-  with cgo.
-- `rust_proto` and the protoc/prost/tonic codegen toolchain are pending a
-  port to `rust_repo` (the tonic runtime itself builds). The proto preload is
-  disabled in `.plzconfig` until then.
-- `lock` uses greedy max-satisfying resolution with clear conflict errors;
-  a backtracking (PubGrub) solver can replace its `select()` seam.
-- Resolution currently targets one platform (`x86_64-unknown-linux-gnu` by
-  default; `--target` on resolve/sync/lock).
+And run the benchmark with Please:
+```ini
+plz run //path/to/your_benchmark -- --bench
+```
+
+## Configuration
+Plugins are configured through the Plugin section like so:
+```ini
+[Plugin "rust"]
+SomeConfig = some-value
+```
+The available configuration options are:
+
+### Rustc
+The path to the `rustc` compiler to use. Defaults to the toolchain's rustc.
+```ini
+[Plugin "rust"]
+Rustc = //third_party/rust:toolchain_rustc
+```
+
+### StdLib
+The path to the `stdlib` to be linked by the compiler. Defaults to the toolchain's stdlib.
+```ini
+[Plugin "rust"]
+StdLib = //third_party/rust:toolchain_stdlib
+```
+
+## General notes
+Rust Rules replicates Cargo's build contract without ever invoking Cargo:
+crate tarballs are fetched as verified downloads, `Cargo.toml` files are
+parsed to infer dependencies, features, editions and build scripts, and
+resolution happens deterministically inside the build graph. See
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how this works internally.
+
+## Contributing
+Contributions are welcome! Please open or submit a pull request with your changes. Ensure that your code follows the existing style and includes tests where applicable.
+
+### Extra Features for Contribution
+Here are some extra features that would be valuable additions to this project:
+
+- **Crate Types**: `lib`, `rlib`, `proc-macro` and `bin` crates are supported. Adding support for `staticlib`, `dylib` and `cdylib` would be useful.
+
+- **C toolchain**: Build scripts that invoke a C compiler (the `cc` crate, `-sys` crates) currently rely on the host compiler. A declared, hermetic C toolchain would close this gap.
+
+- **Target (OS and Architecture) Compatibility**: This project has primarily been tested on unknown-linux-gnu x86_64 architecture. It would be nice to test and support other targets to ensure cross-platform compatibility.

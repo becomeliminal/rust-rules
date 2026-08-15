@@ -40,6 +40,8 @@ def rust_repo(
     labels: list = [],
     dep_overrides: dict = {},
     lock: str = "//third_party/rust:rust_lock",
+    indirect: bool = False,
+    default_features: bool = True,
 ):
     """Downloads a crate and generates BUILD files as a subrepo.
 
@@ -64,9 +66,14 @@ def rust_repo(
                        {"hashbrown": "hashbrown_0_12_3"}. Keys are real crate
                        (package) names, values are subrepo names. Interim
                        mechanism; superseded by the resolved lock file.
-        lock: Label of the lock file produced by `please_rust resolve`. When
-              it contains an entry for this subrepo, features and dependency
+        lock: Label of the resolved lock (the rust_resolve rule). When it
+              contains an entry for this subrepo, features and dependency
               routing come from it. Pass None to use heuristic resolution.
+        indirect: True for machine-added transitive dependencies (maintained
+                  by `please_rust sync`); their features are derived, never
+                  user requests, and sync may prune them when unused.
+        default_features: Cargo semantics for direct deps: default features
+                          are enabled unless this is False.
     """
     if not crate:
         fail("crate is required for rust_repo")
@@ -91,6 +98,14 @@ def rust_repo(
         crate = crate,
         version = version,
         hashes = hashes,
+    )
+
+    # The crate's manifest, staged for the package-level rust_resolve rule
+    build_rule(
+        name = tag(name, "manifest"),
+        srcs = [download],
+        cmd = "cp $SRCS/Cargo.toml $OUT",
+        outs = [f"{subrepo_name}.manifest.toml"],
     )
 
     # Build feature args
@@ -151,4 +166,36 @@ def rust_repo(
         visibility = visibility,
         exported_deps = [f"///{pkg_name}/{subrepo_name}//:{crate_normalized}"],
         labels = labels,
+    )
+
+
+def rust_resolve(name:str, entries:list, target:str="x86_64-unknown-linux-gnu", visibility:list=["PUBLIC"]):
+    """Resolves versions and features across the declared crate graph.
+
+    Maintained by `please_rust sync`. Each entry is
+    "subrepo|crate|version|features|root|default_features"; the rule consumes
+    every crate's Cargo.toml (staged by rust_repo) and produces the resolved
+    lock consumed by each subrepo's BUILD generation. Resolution is fully
+    deterministic and runs inside the build graph - there is no committed
+    lock file and no network access.
+
+    Args:
+        name: Name of the rule (rust_repo's lock arg points at it).
+        entries: Declared crate graph, one string per rust_repo entry.
+        target: Target triple to resolve for.
+        visibility: Visibility specification.
+    """
+    pkg = package_name()
+    entry_flags = " ".join([f"--entry '{e}'" for e in entries])
+    manifest_srcs = []
+    for e in entries:
+        subrepo = e.split('|')[0]
+        manifest_srcs += [f":_{subrepo}#manifest"]
+    return build_rule(
+        name = name,
+        srcs = manifest_srcs,
+        outs = ["rust.lock"],
+        cmd = f"$TOOL resolve {entry_flags} --manifest-dir {pkg} --target {target} --output $OUT",
+        tools = ["//tools/please_rust:bootstrap"],
+        visibility = visibility,
     )

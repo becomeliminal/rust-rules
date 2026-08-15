@@ -22,7 +22,17 @@ pub struct ResolveArgs {
     /// JSON file describing the declared crates:
     /// [{subrepo, crate_name, version, manifest, features, root}]
     #[arg(long)]
-    pub entries: PathBuf,
+    pub entries: Option<PathBuf>,
+
+    /// Inline entry: subrepo|crate|version|feat1,feat2|root|default_features
+    /// (manifests are read from --manifest-dir/<subrepo>.manifest.toml).
+    /// This is how the generated rust_resolve build rule invokes resolution.
+    #[arg(long = "entry")]
+    pub inline_entries: Vec<String>,
+
+    /// Directory holding <subrepo>.manifest.toml files for --entry mode
+    #[arg(long, default_value = ".")]
+    pub manifest_dir: PathBuf,
 
     /// Target triple to resolve for
     #[arg(long, default_value = "x86_64-unknown-linux-gnu")]
@@ -43,6 +53,14 @@ pub struct EntryInput {
     pub features: Vec<String>,
     #[serde(default)]
     pub root: bool,
+    /// Cargo semantics for a direct dependency: default features are enabled
+    /// unless explicitly opted out.
+    #[serde(default = "entry_default_true")]
+    pub default_features: bool,
+}
+
+fn entry_default_true() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -120,11 +138,18 @@ struct CrateNode {
 }
 
 pub fn run(args: ResolveArgs) -> Result<()> {
-    let entries: Vec<EntryInput> = serde_json::from_str(
-        &fs::read_to_string(&args.entries)
-            .with_context(|| format!("Failed to read {}", args.entries.display()))?,
-    )
-    .context("Failed to parse entries JSON")?;
+    let entries: Vec<EntryInput> = if let Some(path) = &args.entries {
+        serde_json::from_str(
+            &fs::read_to_string(path)
+                .with_context(|| format!("Failed to read {}", path.display()))?,
+        )
+        .context("Failed to parse entries JSON")?
+    } else {
+        args.inline_entries
+            .iter()
+            .map(|e| parse_inline_entry(e, &args.manifest_dir))
+            .collect::<Result<Vec<_>>>()?
+    };
 
     let lock = resolve_entries(&entries, &args.target)?;
     fs::write(&args.output, serde_json::to_string_pretty(&lock)? + "\n")
@@ -135,6 +160,26 @@ pub fn run(args: ResolveArgs) -> Result<()> {
         args.target
     );
     Ok(())
+}
+
+fn parse_inline_entry(entry: &str, manifest_dir: &std::path::Path) -> Result<EntryInput> {
+    let parts: Vec<&str> = entry.split('|').collect();
+    if parts.len() != 6 {
+        bail!("bad --entry (want subrepo|crate|version|features|root|default_features): {}", entry);
+    }
+    Ok(EntryInput {
+        subrepo: parts[0].to_string(),
+        crate_name: parts[1].to_string(),
+        version: parts[2].to_string(),
+        manifest: manifest_dir.join(format!("{}.manifest.toml", parts[0])),
+        features: if parts[3].is_empty() {
+            vec![]
+        } else {
+            parts[3].split(',').map(|s| s.trim().to_string()).collect()
+        },
+        root: parts[4] == "true",
+        default_features: parts[5] != "false",
+    })
 }
 
 /// Resolve the declared crate graph; shared by the resolve and sync commands.
@@ -177,26 +222,17 @@ pub fn resolve_entries(entries: &[EntryInput], target: &str) -> Result<LockFile>
 
     let resolver = Resolver { index };
 
-    // Seed: every entry with requested features (or a root marker) is a root.
-    // Requested features seed exactly (the BUILD declaration is the request);
-    // roots without features still get activated so their mandatory deps flow.
+    // Seed roots with cargo's direct-dependency semantics: the requested
+    // feature list plus default features, unless the entry opts out with
+    // default_features = False. Indirect entries never seed — their features
+    // are derived from their dependents.
     let mut work: Vec<Work> = Vec::new();
-    for (i, n) in nodes.iter().enumerate() {
-        if n.root_like() {
-            work.push(Work::ActivateCrate {
-                idx: i,
-                default_features: false,
-                features: n.requested_features.clone(),
-            });
-        }
-    }
-    // Entries explicitly marked root but with no features also activate
     for (i, e) in entries.iter().enumerate() {
-        if e.root && !nodes[i].root_like() {
+        if e.root {
             work.push(Work::ActivateCrate {
                 idx: i,
-                default_features: false,
-                features: vec![],
+                default_features: e.default_features,
+                features: nodes[i].requested_features.clone(),
             });
         }
     }
@@ -226,12 +262,6 @@ pub fn resolve_entries(entries: &[EntryInput], target: &str) -> Result<LockFile>
         target: target.to_string(),
         crates,
     })
-}
-
-impl CrateNode {
-    fn root_like(&self) -> bool {
-        !self.requested_features.is_empty()
-    }
 }
 
 struct Resolver {

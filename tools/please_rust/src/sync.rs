@@ -53,6 +53,10 @@ pub struct SyncArgs {
     #[arg(long)]
     pub no_rename: bool,
 
+    /// Drop indirect declarations that no direct dependency activates
+    #[arg(long)]
+    pub prune: bool,
+
     /// Report what would change without writing anything
     #[arg(long)]
     pub dry_run: bool,
@@ -76,6 +80,8 @@ struct Decl {
     imported: bool,
     /// True if this crate is a direct dependency (its features seed resolution)
     root: bool,
+    /// Cargo semantics: roots enable default features unless opted out
+    default_features: bool,
 }
 
 impl Decl {
@@ -130,14 +136,33 @@ pub fn run(args: SyncArgs) -> Result<()> {
                 .join("Cargo.toml"),
             features: d.features.clone(),
             root: d.root,
+            default_features: d.default_features,
         })
         .collect();
     let mut lock = resolve_entries(&entries, &args.target)?;
 
     // Crates imported this run that did not activate for this target (e.g.
-    // windows-only) are dropped again rather than declared dead weight.
+    // windows-only) are dropped again rather than declared dead weight; with
+    // --prune, ALL inactive indirect declarations go.
     let before = decls.len();
-    decls.retain(|d| !d.imported || lock.crates.contains_key(&d.subrepo()));
+    let mut deleted_spans: Vec<(usize, usize)> = Vec::new();
+    decls.retain(|d| {
+        let active = lock.crates.contains_key(&d.subrepo());
+        let keep = if d.imported {
+            active
+        } else if args.prune && !d.root {
+            active
+        } else {
+            true
+        };
+        if !keep {
+            if let Some(span) = d.span {
+                deleted_spans.push(span);
+            }
+            eprintln!("sync: - {} {}@{}", d.subrepo(), d.crate_name, d.version);
+        }
+        keep
+    });
     if decls.len() != before {
         eprintln!(
             "sync: dropped {} imported crates that are unused on {}",
@@ -155,19 +180,17 @@ pub fn run(args: SyncArgs) -> Result<()> {
                     .join("Cargo.toml"),
                 features: d.features.clone(),
                 root: d.root,
+                default_features: d.default_features,
             })
             .collect();
         lock = resolve_entries(&entries, &args.target)?;
     }
 
-    let lock_output = args.lock_output.clone().unwrap_or_else(|| {
-        args.build_file
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join("rust.lock")
-    });
-
-    let new_build = rewrite_build(&lines, &decls);
+    // Resolution lives in the build graph: sync maintains a rust_resolve
+    // rule (same //third_party/rust:rust_lock label) instead of committing a
+    // derived lock file. In-process resolution above exists only to validate
+    // the graph and drive pruning.
+    let new_build = write_resolve_block(&rewrite_build(&lines, &decls, &deleted_spans), &decls, &args.target);
 
     if args.dry_run {
         eprintln!(
@@ -180,16 +203,78 @@ pub fn run(args: SyncArgs) -> Result<()> {
 
     fs::write(&args.build_file, new_build)
         .with_context(|| format!("Failed to write {}", args.build_file.display()))?;
-    fs::write(&lock_output, serde_json::to_string_pretty(&lock)? + "\n")
-        .with_context(|| format!("Failed to write {}", lock_output.display()))?;
+    // A stale committed lock file from older revisions is superseded
+    let old_lock = args.build_file.parent().unwrap_or(Path::new(".")).join("rust.lock");
+    if old_lock.exists() {
+        let _ = fs::remove_file(&old_lock);
+        eprintln!("sync: removed stale {} (resolution now happens in the build graph)", old_lock.display());
+    }
     eprintln!(
-        "sync: wrote {} declarations to {} and {} resolved crates to {}",
+        "sync: wrote {} declarations to {} ({} crates resolve)",
         decls.len(),
         args.build_file.display(),
         lock.crates.len(),
-        lock_output.display()
     );
     Ok(())
+}
+
+/// Rewrite (or append) the rust_resolve block encoding the declared graph.
+fn write_resolve_block(build: &str, decls: &[Decl], target: &str) -> String {
+    let mut block = String::new();
+    block.push_str("# Machine-maintained by please_rust sync; resolution runs in the build graph.\n");
+    block.push_str("rust_resolve(\n    name = \"rust_lock\",\n");
+    block.push_str(&format!("    target = \"{}\",\n", target));
+    block.push_str("    entries = [\n");
+    for d in decls {
+        let features = if d.root { d.features.join(",") } else { String::new() };
+        block.push_str(&format!(
+            "        \"{}|{}|{}|{}|{}|{}\",\n",
+            d.subrepo(),
+            d.crate_name,
+            d.version,
+            features,
+            d.root,
+            d.default_features,
+        ));
+    }
+    block.push_str("    ],\n)\n");
+
+    // Replace an existing block (from "rust_resolve(" to its closing line) or append.
+    let lines: Vec<&str> = build.lines().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    let mut replaced = false;
+    while i < lines.len() {
+        let t = lines[i].trim_start();
+        if !replaced && (t.starts_with("rust_resolve(") || (t.starts_with('#') && t.contains("Machine-maintained by please_rust sync"))) {
+            // Skip the marker comment plus the block
+            let mut j = i;
+            while j < lines.len() && lines[j].trim_start().starts_with('#') {
+                j += 1;
+            }
+            let mut depth = 0i32;
+            loop {
+                depth += lines[j].matches('(').count() as i32;
+                depth -= lines[j].matches(')').count() as i32;
+                j += 1;
+                if depth == 0 || j >= lines.len() {
+                    break;
+                }
+            }
+            out.push_str(&block);
+            i = j;
+            replaced = true;
+        } else {
+            out.push_str(lines[i]);
+            out.push('\n');
+            i += 1;
+        }
+    }
+    if !replaced {
+        out.push('\n');
+        out.push_str(&block);
+    }
+    out
 }
 
 /// Walk up from the BUILD file to the directory containing .plzconfig.
@@ -208,7 +293,7 @@ fn repo_root(build_file: &Path) -> PathBuf {
     }
 }
 
-const MANAGED_KEYS: &[&str] = &["name", "crate", "version", "features", "hashes", "dep_overrides"];
+const MANAGED_KEYS: &[&str] = &["name", "crate", "version", "features", "hashes", "dep_overrides", "indirect", "default_features"];
 
 fn parse_build(lines: &[String]) -> Result<Vec<Decl>> {
     let mut decls = Vec::new();
@@ -300,9 +385,12 @@ fn parse_build(lines: &[String]) -> Result<Vec<Decl>> {
             }
         }
 
+        let indirect = body.contains("indirect = True");
+        let no_default = body.contains("default_features = False");
         let name = get("name");
         decls.push(Decl {
-            root: name.is_some(),
+            root: !indirect,
+            default_features: !no_default,
             name,
             crate_name,
             version,
@@ -375,6 +463,7 @@ fn import_cargo_lock(path: &Path, decls: &mut Vec<Decl>) -> Result<()> {
             span: None,
             imported: true,
             root: false,
+            default_features: true,
         });
         added += 1;
     }
@@ -480,7 +569,7 @@ fn ensure_manifests(args: &SyncArgs, crate_store: &Path, decls: &[Decl]) -> Resu
     // them, so write an interim BUILD including the new declarations first.
     let build_text = fs::read_to_string(&args.build_file)?;
     let lines: Vec<String> = build_text.lines().map(|s| s.to_string()).collect();
-    fs::write(&args.build_file, rewrite_build(&lines, decls))?;
+    fs::write(&args.build_file, rewrite_build(&lines, decls, &[]))?;
 
     let targets: Vec<String> = missing
         .iter()
@@ -500,12 +589,15 @@ fn ensure_manifests(args: &SyncArgs, crate_store: &Path, decls: &[Decl]) -> Resu
 }
 
 /// Replace every parsed block with its canonical form in place; append
-/// imported entries at the end.
-fn rewrite_build(lines: &[String], decls: &[Decl]) -> String {
+/// imported entries at the end; drop blocks whose declarations were removed.
+fn rewrite_build(lines: &[String], decls: &[Decl], deleted: &[(usize, usize)]) -> String {
     // Map from original start line -> canonical replacement text
     let mut replacements: BTreeMap<usize, (usize, String)> = BTreeMap::new();
     let mut appended = String::new();
 
+    for &(start, end) in deleted {
+        replacements.insert(start, (end, String::new()));
+    }
     for d in decls {
         match d.span {
             Some((start, end)) => {
@@ -552,13 +644,19 @@ fn emit_decl(d: &Decl) -> String {
     s.push_str(&format!("    name = \"{}\",\n", d.subrepo()));
     s.push_str(&format!("    crate = \"{}\",\n", d.crate_name));
     s.push_str(&format!("    version = \"{}\",\n", d.version));
-    if !d.features.is_empty() {
+    if d.root && !d.features.is_empty() {
         let feats: Vec<String> = d.features.iter().map(|f| format!("\"{}\"", f)).collect();
         s.push_str(&format!("    features = [{}],\n", feats.join(", ")));
     }
     if !d.hashes.is_empty() {
         let hs: Vec<String> = d.hashes.iter().map(|h| format!("\"{}\"", h)).collect();
         s.push_str(&format!("    hashes = [{}],\n", hs.join(", ")));
+    }
+    if !d.root {
+        s.push_str("    indirect = True,\n");
+    }
+    if !d.default_features {
+        s.push_str("    default_features = False,\n");
     }
     for p in &d.passthrough {
         s.push_str(&format!("    {},\n", p.trim()));
@@ -874,12 +972,13 @@ pub fn lock(args: LockCmdArgs) -> Result<()> {
             span: None,
             imported: !root,
             root,
+            default_features: true,
         });
     }
 
     // Hand over to sync for naming, downloads, feature resolution & writing.
     let _ = normalize_names(&mut decls)?;
-    fs::write(&args.build_file, rewrite_build(&lines, &decls))?;
+    fs::write(&args.build_file, rewrite_build(&lines, &decls, &[]))?;
     run(SyncArgs {
         build_file: args.build_file.clone(),
         third_party_folder: args.third_party_folder.clone(),
@@ -889,6 +988,7 @@ pub fn lock(args: LockCmdArgs) -> Result<()> {
         lock_output: None,
         plz: args.plz.clone(),
         no_rename: false,
+        prune: false,
         dry_run: false,
     })
 }
