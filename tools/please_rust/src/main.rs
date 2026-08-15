@@ -16,6 +16,7 @@ mod build_script;
 mod compile;
 mod filter;
 mod generate;
+mod resolve;
 mod starlark;
 
 #[derive(Parser)]
@@ -40,6 +41,9 @@ enum Commands {
 
     /// Filter source files by cfg/features
     Filter(filter::FilterArgs),
+
+    /// Resolve versions and features across the declared crate graph
+    Resolve(resolve::ResolveArgs),
 }
 
 fn main() -> Result<()> {
@@ -50,5 +54,6 @@ fn main() -> Result<()> {
         Commands::BuildScript(args) => build_script::run(args),
         Commands::Generate(args) => generate::run(args),
         Commands::Filter(args) => filter::run(args),
+        Commands::Resolve(args) => resolve::run(args),
     }
 }

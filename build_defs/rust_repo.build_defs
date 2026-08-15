@@ -39,6 +39,7 @@ def rust_repo(
     third_party_path: str = "third_party/rust",
     labels: list = [],
     dep_overrides: dict = {},
+    lock: str = "//third_party/rust:rust_lock",
 ):
     """Downloads a crate and generates BUILD files as a subrepo.
 
@@ -61,7 +62,11 @@ def rust_repo(
         labels: Labels for the rule.
         dep_overrides: Routes named deps to versioned subrepos, e.g.
                        {"hashbrown": "hashbrown_0_12_3"}. Keys are real crate
-                       (package) names, values are subrepo names.
+                       (package) names, values are subrepo names. Interim
+                       mechanism; superseded by the resolved lock file.
+        lock: Label of the lock file produced by `please_rust resolve`. When
+              it contains an entry for this subrepo, features and dependency
+              routing come from it. Pass None to use heuristic resolution.
     """
     if not crate:
         fail("crate is required for rust_repo")
@@ -100,21 +105,28 @@ def rust_repo(
 
     # Generate BUILD files
     # Note: remote_file with extract=True extracts contents into a directory named after the crate
+    lock_flag = "--lock $SRCS_LOCK " if lock else ""
     cmds = [
         # Remove any existing BUILD files or plzconfig
-        "rm -rf $SRCS/.plzconfig",
-        "find $SRCS -name BUILD -delete",
-        # Run please_rust generate (SRCS points directly to the extracted directory)
-        f"$TOOL generate --crate-name {crate} --version {version} --src-root $SRCS --subrepo {pkg_name}/{subrepo_name} --features '{features_arg}' --install '{install_arg}' --third-party-folder {third_party_path}" + "".join([f" --override {k}={v}" for k, v in sorted(dep_overrides.items())]),
+        "rm -rf $SRCS_CRATE/.plzconfig",
+        "find $SRCS_CRATE -name BUILD -delete",
+        # Run please_rust generate (SRCS_CRATE points directly to the extracted directory)
+        f"$TOOL generate --crate-name {crate} --version {version} --src-root $SRCS_CRATE --subrepo {pkg_name}/{subrepo_name} --features '{features_arg}' --install '{install_arg}' --third-party-folder {third_party_path} {lock_flag}" + " ".join([f"--override {k}={v}" for k, v in sorted(dep_overrides.items())]),
         # Move to output
-        "mv $SRCS $OUT",
+        "mv $SRCS_CRATE $OUT",
     ]
     cmd = " && ".join(cmds)
+
+    srcs = {
+        "crate": [download],
+    }
+    if lock:
+        srcs["lock"] = [lock]
 
     # Always use a tagged name for the build_rule since we need to create an alias
     repo = build_rule(
         name = tag(name, "repo"),
-        srcs = [download],
+        srcs = srcs,
         cmd = cmd,
         outs = [subrepo_name],
         tools = ["//tools/please_rust:bootstrap"],

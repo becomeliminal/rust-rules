@@ -17,6 +17,11 @@ clap = { version = "4", features = ["derive"] }
 cargo_toml = "0.20"
 toml = "0.8"
 
+# Dependency resolution (versions pinned so the Rust 1.82 bootstrap cargo
+# can still parse them - newer releases may require edition2024)
+semver = "=1.0.23"
+cfg-expr = "=0.15.8"
+
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

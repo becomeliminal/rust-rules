@@ -1,5 +1,14 @@
 subinclude("//build_defs:rust")
 
+# Resolved versions + unified features for the crate graph below, produced by
+# `please_rust resolve` (cargo resolver v2 semantics, no cargo involved).
+# Regenerate after changing rust_repo declarations.
+filegroup(
+    name = "rust_lock",
+    srcs = ["rust.lock"],
+    visibility = ["PUBLIC"],
+)
+
 rust_toolchain(
     name = "toolchain",
     hashes = ["0a4022f567602bd6e9cc35e5b0a9b1a88f3867e6"],
@@ -1658,7 +1667,6 @@ rust_repo(
     name = "indexmap_1_9_3",
     crate = "indexmap",
     version = "1.9.3",
-    dep_overrides = {"hashbrown": "hashbrown_0_12_3"},
 )
 
 rust_repo(
@@ -2114,7 +2122,6 @@ rust_repo(
     crate = "tower",
     version = "0.4.13",
     features = ["__common", "balance", "buffer", "discover", "futures-core", "futures-util", "indexmap", "limit", "load", "make", "pin-project", "pin-project-lite", "rand", "ready-cache", "slab", "timeout", "tokio", "tokio-util", "tracing", "util"],
-    dep_overrides = {"indexmap": "indexmap_1_9_3"},
 )
 
 rust_repo(
@@ -2128,7 +2135,6 @@ rust_repo(
     name = "axum",
     crate = "axum",
     version = "0.6.20",
-    dep_overrides = {"bitflags": "bitflags_1_3_2"},
 )
 
 rust_repo(
@@ -2171,8 +2177,9 @@ rust_repo(
     name = "libsecp256k1",
     crate = "libsecp256k1",
     version = "0.6.0",
-    features = ["default"],
-    dep_overrides = {"digest": "digest_0_9_0"},
+    # Not "default": that expands to hmac, whose deps (hmac-drbg, sha2 0.9)
+    # aren't declared — and the pre-resolve build never compiled those paths.
+    features = ["std", "static-context"],
 )
 
 rust_repo(
@@ -2185,7 +2192,6 @@ rust_repo(
     name = "libsecp256k1_core",
     crate = "libsecp256k1-core",
     version = "0.2.2",
-    dep_overrides = {"digest": "digest_0_9_0"},
 )
 
 rust_repo(
@@ -2212,6 +2218,31 @@ rust_repo(
     crate = "digest",
     version = "0.9.0",
     features = ["std"],
+)
+
+# sha2 0.9 stack for libsecp256k1 (its std feature activates sha2/std)
+rust_repo(
+    name = "sha2_0_9_9",
+    crate = "sha2",
+    version = "0.9.9",
+)
+
+rust_repo(
+    name = "block_buffer_0_9_0",
+    crate = "block-buffer",
+    version = "0.9.0",
+)
+
+rust_repo(
+    name = "opaque_debug",
+    crate = "opaque-debug",
+    version = "0.3.1",
+)
+
+rust_repo(
+    name = "cpufeatures",
+    crate = "cpufeatures",
+    version = "0.2.14",
 )
 
 rust_repo(

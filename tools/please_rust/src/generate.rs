@@ -43,6 +43,12 @@ pub struct GenerateArgs {
     /// versioned subrepo (e.g. hashbrown=hashbrown_0_12_3)
     #[arg(long = "override")]
     pub overrides: Vec<String>,
+
+    /// Lock file produced by `please_rust resolve`; when it has an entry for
+    /// this subrepo, features and dependency routing come from it and the
+    /// heuristic per-manifest resolution below is skipped entirely.
+    #[arg(long)]
+    pub lock: Option<PathBuf>,
 }
 
 pub fn run(args: GenerateArgs) -> Result<()> {
@@ -87,25 +93,72 @@ pub fn run(args: GenerateArgs) -> Result<()> {
     // Determine crate type
     let crate_type = determine_crate_type(&manifest);
 
-    // Parse requested features
-    let requested_features: Vec<String> = if args.features.is_empty() {
-        Vec::new()
+    // Prefer the resolved lock entry for this subrepo when available
+    let subrepo_key = args
+        .subrepo
+        .rsplit('/')
+        .next()
+        .unwrap_or(&args.subrepo)
+        .to_string();
+    let lock_entry = args.lock.as_ref().and_then(|p| {
+        if !p.exists() {
+            return None;
+        }
+        match crate::resolve::LockFile::load(p) {
+            Ok(lock) => {
+                let entry = lock.crates.get(&subrepo_key).cloned();
+                if entry.is_none() {
+                    eprintln!(
+                        "warning: {} not in lock file, falling back to heuristic resolution",
+                        subrepo_key
+                    );
+                }
+                entry
+            }
+            Err(e) => {
+                eprintln!("warning: {:#}", e);
+                None
+            }
+        }
+    });
+
+    let (requested_features, deps, build_deps) = if let Some(entry) = &lock_entry {
+        let mk = |d: &crate::resolve::LockDep| {
+            (
+                d.name.clone(),
+                format!(
+                    "///{}/{}//:{}",
+                    args.third_party_folder,
+                    d.subrepo,
+                    d.crate_name.replace('-', "_")
+                ),
+            )
+        };
+        (
+            entry.features.clone(),
+            entry.deps.iter().map(mk).collect::<Vec<_>>(),
+            entry.build_deps.iter().map(mk).collect::<Vec<_>>(),
+        )
     } else {
-        args.features.split(',').map(|s| s.trim().to_string()).collect()
+        // Heuristic path: requested features + name-based dep routing
+        let requested_features: Vec<String> = if args.features.is_empty() {
+            Vec::new()
+        } else {
+            args.features.split(',').map(|s| s.trim().to_string()).collect()
+        };
+
+        // Dependency overrides (package -> subrepo name)
+        let overrides: std::collections::HashMap<String, String> = args
+            .overrides
+            .iter()
+            .filter_map(|o| o.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
+            .collect();
+
+        let deps =
+            resolve_dependencies(&manifest, &args.third_party_folder, &requested_features, &overrides);
+        let build_deps = resolve_build_dependencies(&manifest, &args.third_party_folder);
+        (requested_features, deps, build_deps)
     };
-
-    // Dependency overrides (package -> subrepo name)
-    let overrides: std::collections::HashMap<String, String> = args
-        .overrides
-        .iter()
-        .filter_map(|o| o.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
-        .collect();
-
-    // Resolve dependencies to subrepo targets
-    let deps = resolve_dependencies(&manifest, &args.third_party_folder, &requested_features, &overrides);
-
-    // Resolve build-dependencies (for build.rs compilation)
-    let build_deps = resolve_build_dependencies(&manifest, &args.third_party_folder);
 
     // Generate BUILD file content
     let build_content = generate_build_file(
