@@ -630,12 +630,14 @@ rust_repo(
     name = "protoc_gen_prost",
     crate = "protoc-gen-prost",
     version = "0.3.1",
+    bin = True,
 )
 
 rust_repo(
     name = "protoc_gen_tonic",
     crate = "protoc-gen-tonic",
     version = "0.4.0",
+    bin = True,
 )
 
 # Test build scripts with external deps

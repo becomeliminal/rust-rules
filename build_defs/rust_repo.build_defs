@@ -42,6 +42,7 @@ def rust_repo(
     lock: str = "//third_party/rust:rust_lock",
     indirect: bool = False,
     default_features: bool = True,
+    bin: bool = False,
 ):
     """Downloads a crate and generates BUILD files as a subrepo.
 
@@ -74,6 +75,8 @@ def rust_repo(
                   user requests, and sync may prune them when unused.
         default_features: Cargo semantics for direct deps: default features
                           are enabled unless this is False.
+        bin: True to alias the crate's binary target (<crate>_bin) instead of
+             its library, for crates used as tools (e.g. protoc plugins).
     """
     if not crate:
         fail("crate is required for rust_repo")
@@ -161,6 +164,15 @@ def rust_repo(
     # This allows `:name` to resolve to the rlib, not the directory
     # The target inside the subrepo is named after the crate (crate_normalized),
     # while the subrepo itself may have a different name (subrepo_name) for versioned crates
+    if bin:
+        # Alias the runnable binary target from the subrepo
+        return filegroup(
+            name = name,
+            binary = True,
+            exported_deps = [f"///{pkg_name}/{subrepo_name}//:{crate_normalized}_bin"],
+            visibility = visibility,
+            labels = labels,
+        )
     return filegroup(
         name = name,
         visibility = visibility,

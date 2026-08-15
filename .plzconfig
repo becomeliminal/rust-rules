@@ -12,8 +12,7 @@ StdLib = //third_party/rust:toolchain_stdlib
 RepoRoot = //third_party/rust:toolchain_target
 
 [Parse]
-# Temporarily disabled for testing rust_repo
-#preloadsubincludes = ///proto//build_defs:proto
+preloadsubincludes = ///proto//build_defs:proto
 preloadsubincludes = ///shell//build_defs:shell
 preloadsubincludes = ///python//build_defs:python
 preloadbuilddefs = build_defs/rust_toolchain.build_defs
@@ -27,14 +26,7 @@ Target = //plugins:shell
 [Plugin "proto"]
 Target = //plugins:proto
 ProtocTool = //third_party/proto:protoc
-LanguageDef = ///rust_proto//build_defs:rust_proto
-
-[Plugin "rust_proto"]
-Target = //plugins:rust_proto
-ProtoPlugin = //third_party/rust:protoc_gen_prost
-ProtoDep = //third_party/rust:prost
-GrpcPlugin = //third_party/rust:protoc_gen_tonic
-GrpcDep = //third_party/rust:tonic
+LanguageDef = //build_defs:rust_proto_lang
 
 [Plugin "python"]
 Target = //plugins:python
@@ -78,3 +70,23 @@ Cmd = run //scripts:cargo_nightly
 Subcommand = ["build", "test", "run", "clean", "check", "new", "rustc"]
 Flag = ["--release", "--verbose", "--manifest-path", "-Z"]
 PositionalLabels = true
+
+[PluginConfig "proto_plugin"]
+ConfigKey = ProtoPlugin
+DefaultValue = ///third_party/rust/protoc_gen_prost//:protoc_gen_prost_bin
+Inherit = true
+
+[PluginConfig "grpc_plugin"]
+ConfigKey = GrpcPlugin
+DefaultValue = ///third_party/rust/protoc_gen_tonic//:protoc_gen_tonic_bin
+Inherit = true
+
+[PluginConfig "proto_dep"]
+ConfigKey = ProtoDep
+DefaultValue = //third_party/rust:prost
+Inherit = true
+
+[PluginConfig "grpc_dep"]
+ConfigKey = GrpcDep
+DefaultValue = //third_party/rust:tonic
+Inherit = true

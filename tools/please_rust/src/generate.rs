@@ -91,6 +91,20 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         .as_ref()
         .and_then(|l| l.path.clone())
         .unwrap_or_else(|| "src/lib.rs".to_string());
+    let has_lib = manifest.lib.is_some() || args.src_root.join(&lib_path).exists();
+
+    // Binaries: explicit [[bin]] entries plus cargo's auto-discovered src/main.rs
+    let mut bins: Vec<(String, String)> = Vec::new();
+    for b in &manifest.bin {
+        let bname = b.name.clone().unwrap_or_else(|| crate_name.clone());
+        let bpath = b.path.clone().unwrap_or_else(|| "src/main.rs".to_string());
+        if args.src_root.join(&bpath).exists() {
+            bins.push((bname, bpath));
+        }
+    }
+    if bins.is_empty() && args.src_root.join("src/main.rs").exists() {
+        bins.push((crate_name.clone(), "src/main.rs".to_string()));
+    }
 
     // Determine crate type
     let crate_type = determine_crate_type(&manifest);
@@ -174,6 +188,25 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         &lib_path,
         "",
     );
+
+    // Binary targets (e.g. protoc plugins). Named <crate>_bin; they link the
+    // crate's own lib (when present) plus the same resolved dependencies.
+    if !bins.is_empty() {
+        let crate_ident = crate_name.replace('-', "_");
+        for (bin_name, bin_path) in &bins {
+            build_content.push('\n');
+            build_content.push_str(&generate_bin_rule(
+                &crate_ident,
+                bin_name,
+                bin_path,
+                &args.version,
+                edition,
+                &requested_features,
+                &deps,
+                has_lib,
+            ));
+        }
+    }
 
     // Host-unit variant for dual crates (proc-macro/build-script consumers
     // with a different unified feature set than the target unit)
@@ -487,6 +520,76 @@ fn generate_build_file(
         ));
     }
 
+    content
+}
+
+/// Generate a binary target for a crate's [[bin]] (or src/main.rs).
+fn generate_bin_rule(
+    crate_ident: &str,
+    bin_name: &str,
+    bin_path: &str,
+    version: &str,
+    edition: &cargo_toml::Edition,
+    features: &[String],
+    deps: &[(String, String)],
+    has_lib: bool,
+) -> String {
+    let edition_str = match edition {
+        cargo_toml::Edition::E2015 => "2015",
+        cargo_toml::Edition::E2018 => "2018",
+        cargo_toml::Edition::E2021 => "2021",
+        _ => "2024",
+    };
+    let bin_ident = bin_name.replace('-', "_");
+    let rule_name = format!("{}_bin", bin_ident);
+    let feature_str: String = features
+        .iter()
+        .map(|f| format!("--feature {} ", f))
+        .collect();
+    let version_tag = version.replace(['.', '+'], "_");
+
+    let mut content = String::new();
+    content.push_str(&format!("# Binary target for {}\n", bin_name));
+    content.push_str("build_rule(\n");
+    content.push_str(&format!("    name = \"{}\",\n", rule_name));
+    content.push_str("    srcs = {\n");
+    content.push_str(&format!("        \"main\": [\"{}\"],\n", bin_path));
+    content.push_str(&format!("        \"mods\": glob([\"src/**\"], exclude=[\"{}\", \"src/lib.rs\", \"build.rs\"], allow_empty=True),\n", bin_path));
+    content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
+    content.push_str("        \"externconfigs\": [\n");
+    if has_lib {
+        content.push_str(&format!("            \":{}|externconfig\",\n", crate_ident));
+    }
+    for (_name, target) in deps {
+        content.push_str(&format!("            \"{}|externconfig\",\n", target));
+    }
+    content.push_str("        ],\n");
+    content.push_str("    },\n");
+    let compile = format!(
+        "cat $SRCS_EXTERNCONFIGS > externconfig && $TOOLS_PLEASE_RUST compile --externconfig externconfig --manifest-path $SRCS_MANIFEST --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cap-lints allow --crate-name {} --edition {} --crate-type bin --emit dep-info,link {}-C metadata={}-bin-{} -O $SRCS_MAIN",
+        bin_ident, edition_str, feature_str, bin_ident, version_tag
+    );
+    content.push_str(&format!("    cmd = \"{}\",\n", compile));
+    content.push_str(&format!("    outs = [\"{}\"],\n", bin_ident));
+    content.push_str("    binary = True,\n");
+    if has_lib || !deps.is_empty() {
+        content.push_str("    deps = [\n");
+        if has_lib {
+            content.push_str(&format!("        \":{}\",\n", crate_ident));
+        }
+        for (_name, target) in deps {
+            content.push_str(&format!("        \"{}\",\n", target));
+        }
+        content.push_str("    ],\n");
+    }
+    content.push_str("    tools = {\n");
+    content.push_str("        \"please_rust\": [\"@//tools/please_rust:bootstrap\"],\n");
+    content.push_str("        \"rustc\": [\"@//third_party/rust:toolchain_rustc\"],\n");
+    content.push_str("        \"sysroot\": [\"@//third_party/rust:toolchain_sysroot\"],\n");
+    content.push_str("    },\n");
+    content.push_str("    needs_transitive_deps = True,\n");
+    content.push_str("    visibility = [\"PUBLIC\"],\n");
+    content.push_str(")\n");
     content
 }
 

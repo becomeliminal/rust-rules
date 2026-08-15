@@ -1,0 +1,181 @@
+"""Build rules for compiling protocol buffers & gRPC service stubs.
+
+Vendored from odonate/rust-proto and adapted to these rules: rust_library
+comes from the preloaded build defs (the plugin's copy subincluded a remote
+revision of this repo, which would drift from the local rules).
+"""
+subinclude("///proto//build_defs/sdk")
+
+def _text_file(name:str, filename:str, content:str, replace:dict={}):
+    """Creates a file with the given content, applying substitutions."""
+    cmd = f"echo -e '{content}'"
+    for key, value in replace.items():
+        cmd += f" | sed 's@{key}@{value}@g'"
+    cmd += " | sed '/^$/d' > $OUTS"
+    return genrule(
+        name = name,
+        cmd = cmd,
+        outs = [filename],
+    )
+
+_rust_proto_root = """
+pub mod __MODULE__ {
+        __INCLUDES__
+}
+"""
+
+def rust_proto_library(name:str, srcs:list, deps:list=[], visibility:list=None, labels:list&features&tags=[],
+                       test_only:bool&testonly=False, root_dir:str='', protoc_flags:list=[], additional_context:dict=None):
+    """Compile a .proto file to generate code for rust.
+
+    Args:
+      name (str): Name of the rule
+      srcs (list): Input .proto files.
+      deps (list): Dependencies (other grpc_library or proto_library rules)
+      visibility (list): Visibility specification for the rule.
+      labels (list): List of labels to apply to this rule.
+      test_only (bool): If True, this rule can only be used by test rules.
+      root_dir (str): The directory that the protos are compiled relative to. Useful if your
+                      proto files have import statements that are not relative to the repo root.
+      protoc_flags (list): Additional flags to pass to protoc.
+      additional_context (dict): This is unused. It will error if set
+    """
+    if additional_context:
+        fail("additional_context is not used in this rule")
+
+    deps += [CONFIG.RUST.PROTO_DEP]
+    protoc = protoc_rule(
+        name = name,
+        srcs = srcs,
+        language = "rust",
+        tools = {"rust": [CONFIG.RUST.PROTO_PLUGIN]},
+        protoc_flags = protoc_flags,
+        plugin_flags = [
+            '--plugin=protoc-gen-prost="`readlink -f $TOOLS_RUST`"',
+            '--prost_out="$OUT_DIR"',
+        ],
+        labels = labels,
+        test_only = test_only,
+        root_dir = root_dir,
+        deps = deps,
+        visibility = visibility,
+    )
+    includes = []
+    for src in srcs:
+        p = src.split(".")[0]
+        includes.append(f'include!("{p}.rs");')
+    rust_proto_root = _text_file(
+        name = f'_{name}#mod.rs',
+        filename = 'mod.rs',
+        content = _rust_proto_root,
+        replace = {
+            '__MODULE__': name,
+            '__INCLUDES__': '\\n\\t'.join(includes),
+        },
+    )
+    return rust_library(
+        name = f'_{name}#rust',
+        root = rust_proto_root,
+        crate_name = name,
+        modules = [protoc],
+        deps = deps,
+        edition = "2021",
+        visibility = visibility,
+    )
+
+
+_rust_grpc_root = """
+pub mod __MODULE__ {
+        __INCLUDES__
+}
+"""
+
+def rust_grpc_library(name:str, srcs:list, deps:list=[], visibility:list=None, labels:list&features&tags=[],
+                      test_only:bool&testonly=False, root_dir:str='', protoc_flags:list=[], additional_context:dict=None):
+    """Defines a rule for a rust grpc library.
+
+    Args:
+      name (str): Name of the rule
+      srcs (list): Input .proto files.
+      deps (list): Dependencies (other grpc_library or proto_library rules)
+      visibility (list): Visibility specification for the rule.
+      labels (list): List of labels to apply to this rule.
+      test_only (bool): If True, this rule can only be used by test rules.
+      root_dir (str): The directory that the protos are compiled relative to. Useful if your
+                      proto files have import statements that are not relative to the repo root.
+      protoc_flags (list): Additional flags to pass to protoc.
+      additional_context (dict): This is unused. It will error if set
+    """
+    if additional_context:
+        fail("additional_context is not used in this rule")
+
+    deps += [
+        CONFIG.RUST.PROTO_DEP,
+        CONFIG.RUST.GRPC_DEP,
+    ]
+    protoc = protoc_rule(
+        name = name,
+        srcs = srcs,
+        language = "rust",
+        tools = {
+            "rust": [CONFIG.RUST.PROTO_PLUGIN],
+            "grpc_rust": [CONFIG.RUST.GRPC_PLUGIN],
+        },
+        protoc_flags = protoc_flags,
+        plugin_flags = [
+            '--plugin=protoc-gen-prost="`readlink -f $TOOLS_RUST`"',
+            '--prost_out="$OUT_DIR"',
+            '--plugin=protoc-gen-tonic="`readlink -f $TOOLS_GRPC_RUST`"',
+            '--tonic_out="$OUT_DIR"',
+            '--tonic_opt=no_include',
+        ],
+        labels = labels,
+        test_only = test_only,
+        root_dir = root_dir,
+        deps = deps,
+        visibility = visibility,
+    )
+
+    includes = []
+    for src in srcs:
+        p = src.split(".")[0]
+        includes.append(f'include!("{p}.rs");')
+        includes.append(f'include!("{p}.tonic.rs");')
+    rust_grpc_root = _text_file(
+        name = f'_{name}#mod_rs',
+        filename = 'mod.rs',
+        content = _rust_grpc_root,
+        replace = {
+            '__MODULE__': name,
+            '__INCLUDES__': '\\n\\t'.join(includes),
+        },
+    )
+    return rust_library(
+        name = f'_{name}#rust',
+        root = rust_grpc_root,
+        crate_name = name,
+        modules = [protoc],
+        deps = deps,
+        edition = "2021",
+        visibility = visibility,
+    )
+
+def rust_proto_language():
+    """A rule for a proto language for rust
+    see https://github.com/please-build/proto-rules/blob/master/build_defs/sdk/sdk.build_defs for more info
+    """
+    return proto_language(
+        language = "rust",
+        build_def = rust_proto_library,
+        additional_provides = {"rust": "rust"},
+    )
+
+def rust_grpc_language():
+    """A rule for a grpc language for rust
+    see https://github.com/please-build/proto-rules/blob/master/build_defs/sdk/sdk.build_defs for more info
+    """
+    return proto_language(
+        language = "rust",
+        build_def = rust_grpc_library,
+        additional_provides = {"rust": "rust"},
+    )

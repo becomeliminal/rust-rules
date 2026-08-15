@@ -14,3 +14,15 @@ filegroup(
     srcs = ["rust_repo.build_defs"],
     visibility = ["PUBLIC"],
 )
+
+subinclude("///proto//build_defs/sdk")
+
+proto_build_defs(
+    name = "rust_proto_lang",
+    srcs = ["rust_proto.build_defs"],
+    proto_languages = {
+        "proto_language": ["rust_proto_language"],
+        "grpc_language": ["rust_grpc_language"],
+    },
+    visibility = ["PUBLIC"],
+)
