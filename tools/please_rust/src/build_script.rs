@@ -66,6 +66,10 @@ pub struct BuildScriptArgs {
     /// Externconfig file for build script dependencies
     #[arg(long)]
     pub externconfig: Option<PathBuf>,
+
+    /// C toolchain: either a cc binary or a directory containing cc/c++/ar/ranlib
+    #[arg(long)]
+    pub cc: Option<PathBuf>,
 }
 
 /// Parsed build script directives
@@ -264,6 +268,14 @@ fn build_environment(
     env.insert("NUM_JOBS".to_string(), "1".to_string());
     env.insert("RUSTC".to_string(), args.rustc.display().to_string());
     env.insert("RUSTDOC".to_string(), "rustdoc".to_string());
+
+    // Hermetic C toolchain for cc-crate build scripts
+    if let Some((cc, cxx, ar, ranlib)) = resolve_cc(&args.cc) {
+        env.insert("CC".to_string(), cc);
+        env.insert("CXX".to_string(), cxx);
+        env.insert("AR".to_string(), ar);
+        env.insert("RANLIB".to_string(), ranlib);
+    }
 
     // Probing build scripts (autocfg etc.) invoke $RUSTC themselves and honor
     // RUSTFLAGS; without the sysroot every probe fails as "can't find core"
@@ -542,6 +554,40 @@ fn write_directives(output: &Path, directives: &Directives, out_dir: &Path) -> R
         .with_context(|| format!("Failed to write directives to {}", output.display()))?;
 
     Ok(())
+}
+
+/// Resolve a C toolchain path (cc binary or directory of wrappers) to
+/// absolute cc/c++/ar/ranlib paths.
+pub fn resolve_cc(cc: &Option<PathBuf>) -> Option<(String, String, String, String)> {
+    let cc = cc.as_ref()?;
+    let abs = match cc.canonicalize() {
+        Ok(p) => p,
+        // A bare command name (e.g. "cc"): pass through for PATH resolution
+        Err(_) => {
+            let name = cc.display().to_string();
+            return Some((name, "c++".to_string(), "ar".to_string(), "ranlib".to_string()));
+        }
+    };
+    if abs.is_dir() {
+        Some((
+            abs.join("cc").display().to_string(),
+            abs.join("c++").display().to_string(),
+            abs.join("ar").display().to_string(),
+            abs.join("ranlib").display().to_string(),
+        ))
+    } else {
+        let dir = abs.parent()?;
+        let sibling = |n: &str, fallback: &str| {
+            let p = dir.join(n);
+            if p.exists() { p.display().to_string() } else { fallback.to_string() }
+        };
+        Some((
+            abs.display().to_string(),
+            sibling("c++", "c++"),
+            sibling("ar", "ar"),
+            sibling("ranlib", "ranlib"),
+        ))
+    }
 }
 
 /// Recursively search for a file with the given name in the directory tree

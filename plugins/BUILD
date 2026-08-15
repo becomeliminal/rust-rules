@@ -25,3 +25,8 @@ plugin_repo(
     name = "python",
     revision = "v1.6.0",
 )
+
+plugin_repo(
+    name = "cc",
+    revision = "v0.7.1",
+)

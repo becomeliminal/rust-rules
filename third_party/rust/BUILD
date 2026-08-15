@@ -755,7 +755,7 @@ rust_repo(
     name = "blake3",
     crate = "blake3",
     version = "1.5.4",
-    features = ["default", "std", "pure"],
+    features = ["default", "std"],
 )
 
 rust_repo(
@@ -1320,7 +1320,7 @@ rust_resolve(
         "typenum|typenum|1.17.0||false|true",
         "libsecp256k1_gen_ecmult|libsecp256k1-gen-ecmult|0.3.0||false|true",
         "libsecp256k1_gen_genmult|libsecp256k1-gen-genmult|0.3.0||false|true",
-        "blake3|blake3|1.5.4|default,std,pure|true|true",
+        "blake3|blake3|1.5.4|default,std|true|true",
         "arrayvec|arrayvec|0.7.6||false|true",
         "constant_time_eq|constant_time_eq|0.3.1||false|true",
         "cc|cc|1.2.0||false|true",

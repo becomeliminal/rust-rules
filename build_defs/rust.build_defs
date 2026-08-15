@@ -9,14 +9,17 @@ an on-disk path and passes `--extern name=path` to rustc. This makes first-party
 rules and rust_repo subrepo crates freely interoperable in either direction.
 """
 
-def _rust_tools():
+def _rust_tools(link:bool=False):
     # Evaluated at rule-call time; plugin config is not available when the
     # build defs are preloaded.
-    return {
+    tools = {
         "please_rust": [CONFIG.RUST.PLEASE_RUST_TOOL],
         "rustc": [CONFIG.RUST.RUSTC],
         "sysroot": [CONFIG.RUST.SYSROOT],
     }
+    if link and CONFIG.RUST.CC_TOOL:
+        tools["cc"] = [CONFIG.RUST.CC_TOOL]
+    return tools
 
 # Collects externconfig files from all transitive inputs into one file for
 # please_rust compile. The aggregate is named `externconfig` (no extension) so
@@ -43,7 +46,9 @@ def _compile_cmds(crate_name:str, edition:str, crate_type:str, emit:str, feature
     test_arg = '--test ' if test else ''
     manifest_arg = '--manifest-path $SRCS_MANIFEST ' if manifest else ''
     dep_args = ' '.join([f'--dep {d}' for d in _dep_names(deps)]) + ' ' if deps else ''
-    base = f'{_AGGREGATE_EXTERNCONFIGS} && $TOOLS_PLEASE_RUST compile --externconfig externconfig {manifest_arg}{dep_args}--rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --crate-name {crate_name} --edition {edition} --crate-type {crate_type} --emit {emit} {test_arg}{feature_args}'
+    links = crate_type == 'bin' or test
+    cc_arg = '--cc $TOOLS_CC ' if links and CONFIG.RUST.CC_TOOL else ''
+    base = f'{_AGGREGATE_EXTERNCONFIGS} && $TOOLS_PLEASE_RUST compile --externconfig externconfig {manifest_arg}{dep_args}{cc_arg}--rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --crate-name {crate_name} --edition {edition} --crate-type {crate_type} --emit {emit} {test_arg}{feature_args}'
     suffix = f" && echo '{crate_name}=lib{crate_name}.rlib' > $OUTS_EXTERNCONFIG" if write_externconfig else ''
     return {
         'dbg': f'{base} -g $SRCS_MAIN{suffix}',
@@ -137,7 +142,7 @@ def rust_binary(name:str, main:str, modules:list=None, deps:list=[], edition:str
             deps = deps,
         ),
         deps = deps,
-        tools = _rust_tools(),
+        tools = _rust_tools(link = True),
         needs_transitive_deps = True,
         visibility = visibility,
         labels = ['rust'],
@@ -182,7 +187,7 @@ def rust_test(name:str, root:str, modules:list=None, deps:list=[], edition:str="
             deps = deps,
         ),
         deps = deps,
-        tools = _rust_tools(),
+        tools = _rust_tools(link = True),
         needs_transitive_deps = True,
         visibility = visibility,
         labels = ['rust'],
@@ -224,7 +229,7 @@ def rust_benchmark(name:str, root:str, modules:list=None, deps:list=[], edition:
             deps = deps,
         ),
         deps = deps,
-        tools = _rust_tools(),
+        tools = _rust_tools(link = True),
         needs_transitive_deps = True,
         visibility = visibility,
         labels = ['rust'],

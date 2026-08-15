@@ -23,6 +23,9 @@ preloadbuilddefs = build_defs/rust_repo.build_defs
 [Plugin "shell"]
 Target = //plugins:shell
 
+[Plugin "cc"]
+Target = //plugins:cc
+
 [Plugin "proto"]
 Target = //plugins:proto
 ProtocTool = //third_party/proto:protoc
@@ -101,4 +104,11 @@ Inherit = true
 ConfigKey = Sysroot
 DefaultValue = //third_party/rust:toolchain_sysroot
 Help = A build label for the Rust sysroot (contains lib/rustlib/...).
+Inherit = true
+
+[PluginConfig "cc_tool"]
+ConfigKey = CCTool
+DefaultValue = 
+Optional = true
+Help = Optional build label of a C compiler used by crate build scripts and as rustc's linker (the go-rules CC_TOOL pattern). Empty uses the host cc via PATH, matching the cc plugin's default.
 Inherit = true

@@ -108,11 +108,14 @@ runs cargo.
 Audited against cargo's documented build-script and feature contracts and
 against go-rules' architecture. What remains open, deliberately:
 
-- **Hermetic C toolchain**: build scripts that invoke a C compiler (`cc`
-  crate, `-sys` crates) use the host cc found on PATH; a declared toolchain
-  (CC/AR/CFLAGS into the build-script env — the C sources are already staged)
-  is future work. blake3 is built with its `pure` feature for this reason.
-  go-rules has the same frontier with cgo.
+- **C compiler comes from the cc plugin's configuration**: build scripts
+  (`cc` crate) and rustc's linker use the toolchain the cc plugin is
+  configured with — the host cc by default, following cc-rules' and
+  go-rules' convention. The rust plugin's optional `CCTool` knob (the
+  go-rules `CC_TOOL` pattern) accepts a build label, so a downloaded
+  hermetic toolchain target can be swapped in without changing any rules;
+  such a toolchain is not shipped here. C sources are staged and compile
+  (blake3 builds its real asm implementations).
 - **`links` / `DEP_<LINKS>_<KEY>` propagation**: metadata directives are
   parsed and `CARGO_MANIFEST_LINKS` is set, but a linked crate's metadata is
   not yet exported to its dependents' build scripts. This only matters for

@@ -124,12 +124,14 @@ def rust_repo(
     # Generate BUILD files
     # Note: remote_file with extract=True extracts contents into a directory named after the crate
     lock_flag = "--lock $SRCS_LOCK " if lock else ""
+    cc_is_label = CONFIG.RUST.CC_TOOL and (CONFIG.RUST.CC_TOOL.startswith("//") or CONFIG.RUST.CC_TOOL.startswith(":"))
+    cc_flag = f"--cc-label @{CONFIG.RUST.CC_TOOL} " if cc_is_label else ""
     cmds = [
         # Remove any existing BUILD files or plzconfig
         "rm -rf $SRCS_CRATE/.plzconfig",
         "find $SRCS_CRATE -name BUILD -delete",
         # Run please_rust generate (SRCS_CRATE points directly to the extracted directory)
-        f"$TOOL generate --crate-name {crate} --version {version} --src-root $SRCS_CRATE --subrepo {pkg_name}/{subrepo_name} --features '{features_arg}' --install '{install_arg}' --third-party-folder {third_party_path} --tool-label @{CONFIG.RUST.PLEASE_RUST_TOOL} --rustc-label @{CONFIG.RUST.RUSTC} --sysroot-label @{CONFIG.RUST.SYSROOT} {lock_flag}" + " ".join([f"--override {k}={v}" for k, v in sorted(dep_overrides.items())]),
+        f"$TOOL generate --crate-name {crate} --version {version} --src-root $SRCS_CRATE --subrepo {pkg_name}/{subrepo_name} --features '{features_arg}' --install '{install_arg}' --third-party-folder {third_party_path} --tool-label @{CONFIG.RUST.PLEASE_RUST_TOOL} --rustc-label @{CONFIG.RUST.RUSTC} --sysroot-label @{CONFIG.RUST.SYSROOT} {cc_flag}{lock_flag}" + " ".join([f"--override {k}={v}" for k, v in sorted(dep_overrides.items())]),
         # Move to output
         "mv $SRCS_CRATE $OUT",
     ]

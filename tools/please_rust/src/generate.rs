@@ -61,6 +61,10 @@ pub struct GenerateArgs {
     /// Build label of the sysroot, as seen from inside the subrepo
     #[arg(long, default_value = "@//third_party/rust:toolchain_sysroot")]
     pub sysroot_label: String,
+
+    /// Build label of a C toolchain (cc_toolchain rule); empty disables
+    #[arg(long, default_value = "")]
+    pub cc_label: String,
 }
 
 pub fn run(args: GenerateArgs) -> Result<()> {
@@ -242,10 +246,17 @@ pub fn run(args: GenerateArgs) -> Result<()> {
 
     // Tool labels are configurable (CONFIG.RUST.*); the emitters use the
     // defaults, substituted here so every rule points at the configured ones.
-    let build_content = build_content
+    let mut build_content = build_content
         .replace("@//tools/please_rust:bootstrap", &args.tool_label)
         .replace("@//third_party/rust:toolchain_rustc", &args.rustc_label)
         .replace("@//third_party/rust:toolchain_sysroot", &args.sysroot_label);
+    if args.cc_label.is_empty() {
+        build_content = build_content
+            .replace("--cc $TOOLS_CC ", "")
+            .replace("        \"cc\": [\"__CC_LABEL__\"],\n", "");
+    } else {
+        build_content = build_content.replace("__CC_LABEL__", &args.cc_label);
+    }
 
     // Write BUILD file
     let build_path = args.src_root.join("BUILD");
@@ -585,7 +596,7 @@ fn generate_bin_rule(
     content.push_str("        ],\n");
     content.push_str("    },\n");
     let compile = format!(
-        "cat $SRCS_EXTERNCONFIGS > externconfig && $TOOLS_PLEASE_RUST compile --externconfig externconfig --manifest-path $SRCS_MANIFEST --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cap-lints allow --crate-name {} --edition {} --crate-type bin --emit dep-info,link {}-C metadata={}-bin-{} -O $SRCS_MAIN",
+        "cat $SRCS_EXTERNCONFIGS > externconfig && $TOOLS_PLEASE_RUST compile --externconfig externconfig --manifest-path $SRCS_MANIFEST --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cc $TOOLS_CC --cap-lints allow --crate-name {} --edition {} --crate-type bin --emit dep-info,link {}-C metadata={}-bin-{} -O $SRCS_MAIN",
         bin_ident, edition_str, feature_str, bin_ident, version_tag
     );
     content.push_str(&format!("    cmd = \"{}\",\n", compile));
@@ -605,6 +616,7 @@ fn generate_bin_rule(
     content.push_str("        \"please_rust\": [\"@//tools/please_rust:bootstrap\"],\n");
     content.push_str("        \"rustc\": [\"@//third_party/rust:toolchain_rustc\"],\n");
     content.push_str("        \"sysroot\": [\"@//third_party/rust:toolchain_sysroot\"],\n");
+    content.push_str("        \"cc\": [\"__CC_LABEL__\"],\n");
     content.push_str("    },\n");
     content.push_str("    needs_transitive_deps = True,\n");
     content.push_str("    visibility = [\"PUBLIC\"],\n");
@@ -647,7 +659,7 @@ fn generate_build_script_rule(
     // compile action (the directives file records it by name; compile
     // resolves it as a sibling of the directives file).
     let build_script_cmd = format!(
-        "mkdir -p out && {}$TOOLS_PLEASE_RUST build-script --manifest-path $SRCS_MANIFEST --build-script $SRCS_SCRIPT --out-dir out --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT {}--output $OUTS_BUILDSCRIPT {}",
+        "mkdir -p out && {}$TOOLS_PLEASE_RUST build-script --manifest-path $SRCS_MANIFEST --build-script $SRCS_SCRIPT --out-dir out --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cc $TOOLS_CC {}--output $OUTS_BUILDSCRIPT {}",
         aggregate_cmd, externconfig_arg, feature_str
     );
 
@@ -687,6 +699,7 @@ fn generate_build_script_rule(
     content.push_str("        \"please_rust\": [\"@//tools/please_rust:bootstrap\"],\n");
     content.push_str("        \"rustc\": [\"@//third_party/rust:toolchain_rustc\"],\n");
     content.push_str("        \"sysroot\": [\"@//third_party/rust:toolchain_sysroot\"],\n");
+    content.push_str("        \"cc\": [\"__CC_LABEL__\"],\n");
     content.push_str("    },\n");
 
     // Need transitive deps if we have build-deps to get their externconfigs
@@ -724,7 +737,7 @@ fn generate_compile_rule_with_buildscript(
 
     // Compile command with --buildscript flag
     let compile_base = format!(
-        "$TOOLS_PLEASE_RUST compile --externconfig externconfig --buildscript $SRCS_BUILDSCRIPT --manifest-path $SRCS_MANIFEST --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cap-lints allow --crate-name {} --edition {} --crate-type {} --emit {} {}",
+        "$TOOLS_PLEASE_RUST compile --externconfig externconfig --buildscript $SRCS_BUILDSCRIPT --manifest-path $SRCS_MANIFEST --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cc $TOOLS_CC --cap-lints allow --crate-name {} --edition {} --crate-type {} --emit {} {}",
         crate_ident, edition_str, crate_type, emit, feature_str
     );
 
@@ -779,6 +792,7 @@ fn generate_compile_rule_with_buildscript(
     content.push_str("        \"please_rust\": [\"@//tools/please_rust:bootstrap\"],\n");
     content.push_str("        \"rustc\": [\"@//third_party/rust:toolchain_rustc\"],\n");
     content.push_str("        \"sysroot\": [\"@//third_party/rust:toolchain_sysroot\"],\n");
+    content.push_str("        \"cc\": [\"__CC_LABEL__\"],\n");
     content.push_str("    },\n");
     content.push_str("    needs_transitive_deps = True,\n");
     content.push_str("    visibility = [\"PUBLIC\"],\n");
@@ -811,7 +825,7 @@ fn generate_compile_rule(
     };
 
     let compile_base = format!(
-        "$TOOLS_PLEASE_RUST compile --externconfig externconfig --manifest-path $SRCS_MANIFEST --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cap-lints allow --crate-name {} --edition {} --crate-type {} --emit {} {}",
+        "$TOOLS_PLEASE_RUST compile --externconfig externconfig --manifest-path $SRCS_MANIFEST --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cc $TOOLS_CC --cap-lints allow --crate-name {} --edition {} --crate-type {} --emit {} {}",
         crate_ident, edition_str, crate_type, emit, feature_str
     );
 
@@ -863,6 +877,7 @@ fn generate_compile_rule(
     content.push_str("        \"please_rust\": [\"@//tools/please_rust:bootstrap\"],\n");
     content.push_str("        \"rustc\": [\"@//third_party/rust:toolchain_rustc\"],\n");
     content.push_str("        \"sysroot\": [\"@//third_party/rust:toolchain_sysroot\"],\n");
+    content.push_str("        \"cc\": [\"__CC_LABEL__\"],\n");
     content.push_str("    },\n");
     content.push_str("    needs_transitive_deps = True,\n");
     content.push_str("    visibility = [\"PUBLIC\"],\n");

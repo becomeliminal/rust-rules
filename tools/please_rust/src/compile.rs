@@ -106,6 +106,11 @@ pub struct CompileArgs {
     #[arg(long)]
     pub cap_lints: Option<String>,
 
+    /// C toolchain (cc binary or wrapper directory); used as rustc's linker
+    /// for crate types that produce linked artifacts
+    #[arg(long)]
+    pub cc: Option<PathBuf>,
+
     /// Direct dependency crate names. When given, --extern is added only for
     /// externconfig entries matching these; everything else in the sandbox
     /// stays reachable via -L only (transitive deps, as cargo does).
@@ -370,6 +375,13 @@ pub fn run(args: CompileArgs) -> Result<()> {
         // Set environment variables from build script
         for (key, value) in &directives.rustc_envs {
             cmd.env(key, value);
+        }
+    }
+
+    // Hermetic linker for artifacts that link (bins, proc-macro dylibs)
+    if args.crate_type == "bin" || args.crate_type == "proc-macro" || args.test {
+        if let Some((cc, _, _, _)) = crate::build_script::resolve_cc(&args.cc) {
+            cmd.arg("-C").arg(format!("linker={}", cc));
         }
     }
 

@@ -5,6 +5,7 @@ filegroup(
         "rust.build_defs",
         "rust_crate.build_defs",
         "rust_repo.build_defs",
+        "rust_proto.build_defs",
     ],
     visibility = ["PUBLIC"],
 )
@@ -14,6 +15,7 @@ filegroup(
     srcs = ["rust_repo.build_defs"],
     visibility = ["PUBLIC"],
 )
+
 
 subinclude("///proto//build_defs/sdk")
 
