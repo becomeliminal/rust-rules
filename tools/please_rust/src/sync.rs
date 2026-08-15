@@ -566,3 +566,385 @@ fn emit_decl(d: &Decl) -> String {
     s.push_str(")\n");
     s
 }
+
+// ---------------------------------------------------------------------------
+// please_rust lock: hermetic version resolution over the crates.io sparse
+// index. Network happens only here, at lock time (the `go mod tidy` moment);
+// index fetches shell out to curl so the tool itself needs no TLS stack
+// (ureq/reqwest would pull in ring's C build scripts). Resolution is greedy
+// max-satisfying with a preference for already-declared versions, erroring
+// clearly on conflicts; a backtracking (PubGrub) solver can replace select()
+// without changing anything else.
+// ---------------------------------------------------------------------------
+
+#[derive(Args)]
+pub struct LockCmdArgs {
+    /// The third-party BUILD file containing rust_repo declarations
+    #[arg(long, default_value = "third_party/rust/BUILD")]
+    pub build_file: PathBuf,
+
+    /// Third-party folder (package path of the BUILD file)
+    #[arg(long, default_value = "third_party/rust")]
+    pub third_party_folder: String,
+
+    /// Add a direct dependency: crate@req (e.g. serde@1, hex@0.4.3)
+    #[arg(long = "add")]
+    pub add: Vec<String>,
+
+    /// Sparse index URL
+    #[arg(long, default_value = "https://index.crates.io")]
+    pub index_url: String,
+
+    /// Index cache directory (default ~/.cache/please_rust/index)
+    #[arg(long)]
+    pub cache_dir: Option<PathBuf>,
+
+    /// Only use the index cache, never the network
+    #[arg(long)]
+    pub offline: bool,
+
+    /// Target triple
+    #[arg(long, default_value = "x86_64-unknown-linux-gnu")]
+    pub target: String,
+
+    /// curl binary for index fetches
+    #[arg(long, default_value = "curl")]
+    pub curl: String,
+
+    /// plz binary used to fetch missing crate downloads ("" disables)
+    #[arg(long, default_value = "plz")]
+    pub plz: String,
+}
+
+#[derive(serde::Deserialize, Clone)]
+struct IndexDep {
+    name: String,
+    req: String,
+    #[serde(default)]
+    features: Vec<String>,
+    #[serde(default)]
+    optional: bool,
+    #[serde(default = "default_true")]
+    default_features: bool,
+    #[serde(default)]
+    target: Option<String>,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    package: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(serde::Deserialize, Clone)]
+struct IndexVersion {
+    vers: String,
+    #[serde(default)]
+    deps: Vec<IndexDep>,
+    cksum: String,
+    #[serde(default)]
+    features: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    features2: Option<BTreeMap<String, Vec<String>>>,
+    #[serde(default)]
+    yanked: bool,
+}
+
+impl IndexVersion {
+    fn all_features(&self) -> BTreeMap<String, Vec<String>> {
+        let mut f = self.features.clone();
+        if let Some(f2) = &self.features2 {
+            for (k, v) in f2 {
+                f.entry(k.clone()).or_default().extend(v.iter().cloned());
+            }
+        }
+        f
+    }
+}
+
+struct Index {
+    url: String,
+    cache_dir: PathBuf,
+    offline: bool,
+    curl: String,
+    cache: std::cell::RefCell<BTreeMap<String, Vec<IndexVersion>>>,
+}
+
+impl Index {
+    fn path_for(name: &str) -> String {
+        let n = name.to_lowercase();
+        match n.len() {
+            1 => format!("1/{}", n),
+            2 => format!("2/{}", n),
+            3 => format!("3/{}/{}", &n[..1], n),
+            _ => format!("{}/{}/{}", &n[..2], &n[2..4], n),
+        }
+    }
+
+    fn versions(&self, name: &str) -> Result<Vec<IndexVersion>> {
+        if let Some(v) = self.cache.borrow().get(name) {
+            return Ok(v.clone());
+        }
+        let rel = Self::path_for(name);
+        let cache_file = self.cache_dir.join(&rel);
+        let content = if cache_file.exists() {
+            fs::read_to_string(&cache_file)?
+        } else if self.offline {
+            bail!("{} not in index cache and --offline is set", name)
+        } else {
+            let url = format!("{}/{}", self.url, rel);
+            let out = Command::new(&self.curl)
+                .args(["--fail", "--silent", "--show-error", "--location", &url])
+                .output()
+                .with_context(|| format!("Failed to run {}", self.curl))?;
+            if !out.status.success() {
+                bail!(
+                    "index fetch of {} failed: {}",
+                    url,
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            }
+            let text = String::from_utf8(out.stdout).context("index response not utf-8")?;
+            if let Some(parent) = cache_file.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&cache_file, &text)?;
+            text
+        };
+        let mut versions = Vec::new();
+        for line in content.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<IndexVersion>(line) {
+                Ok(v) => versions.push(v),
+                Err(e) => eprintln!("warning: bad index line for {}: {}", name, e),
+            }
+        }
+        self.cache.borrow_mut().insert(name.to_string(), versions.clone());
+        Ok(versions)
+    }
+}
+
+pub fn lock(args: LockCmdArgs) -> Result<()> {
+    let build_text = fs::read_to_string(&args.build_file)
+        .with_context(|| format!("Failed to read {}", args.build_file.display()))?;
+    let lines: Vec<String> = build_text.lines().map(|s| s.to_string()).collect();
+    let mut decls = parse_build(&lines)?;
+
+    let cache_dir = args.cache_dir.clone().unwrap_or_else(|| {
+        dirs_cache().join("please_rust").join("index")
+    });
+    let index = Index {
+        url: args.index_url.trim_end_matches('/').to_string(),
+        cache_dir,
+        offline: args.offline,
+        curl: args.curl.clone(),
+        cache: std::cell::RefCell::new(BTreeMap::new()),
+    };
+
+    // Already-pinned versions are preferred by selection.
+    let mut chosen: BTreeMap<String, Version> = BTreeMap::new();
+    for d in &decls {
+        let v = Version::parse(&d.version)
+            .with_context(|| format!("Bad version {} for {}", d.version, d.crate_name))?;
+        // Highest pinned version of each crate is the preferred pick
+        let e = chosen.entry(d.crate_name.clone()).or_insert_with(|| v.clone());
+        if v > *e {
+            *e = v;
+        }
+    }
+
+    // Worklist of (package, req, requirer)
+    let mut work: Vec<(String, String, String)> = Vec::new();
+    let mut added_roots: Vec<(String, Version)> = Vec::new();
+    for add in &args.add {
+        let (name, req) = add
+            .split_once('@')
+            .with_context(|| format!("--add takes crate@req, got {}", add))?;
+        work.push((name.to_string(), req.to_string(), "--add".to_string()));
+    }
+
+    let mut newly: BTreeMap<String, (Version, String)> = BTreeMap::new(); // crate -> (version, cksum)
+    let mut visited: BTreeSet<(String, String)> = BTreeSet::new();
+    while let Some((package, req_str, requirer)) = work.pop() {
+        if !visited.insert((package.clone(), req_str.clone())) {
+            continue;
+        }
+        let req = semver::VersionReq::parse(&req_str)
+            .with_context(|| format!("Bad requirement {} on {} (from {})", req_str, package, requirer))?;
+
+        // Prefer an already-chosen version
+        if let Some(v) = chosen.get(&package) {
+            if req.matches(v) {
+                continue;
+            }
+            // A second major version is legitimate; only bail if we cannot
+            // find any distinct satisfying version below.
+        }
+
+        let versions = index.versions(&package)?;
+        let mut best: Option<&IndexVersion> = None;
+        for iv in &versions {
+            if iv.yanked {
+                continue;
+            }
+            if let Ok(v) = Version::parse(&iv.vers) {
+                if req.matches(&v) {
+                    match &best {
+                        Some(b) => {
+                            if v > Version::parse(&b.vers).unwrap() {
+                                best = Some(iv);
+                            }
+                        }
+                        None => best = Some(iv),
+                    }
+                }
+            }
+        }
+        let best = best.with_context(|| {
+            format!(
+                "no version of {} satisfies {} (required by {})",
+                package, req_str, requirer
+            )
+        })?;
+        let version = Version::parse(&best.vers).unwrap();
+
+        let is_new = !chosen
+            .get(&package)
+            .map(|v| *v == version)
+            .unwrap_or(false)
+            && !newly.contains_key(&package);
+        if requirer == "--add" {
+            added_roots.push((package.clone(), version.clone()));
+        }
+        if chosen.get(&package).map(|v| req.matches(v)).unwrap_or(false) {
+            continue;
+        }
+        newly.insert(package.clone(), (version.clone(), best.cksum.clone()));
+
+        if is_new {
+            // Recurse: mandatory deps plus optionals activated by default
+            // features (what a plain --add requests).
+            let activated = default_activated_deps(best);
+            for dep in &best.deps {
+                let kind = dep.kind.as_deref().unwrap_or("normal");
+                if kind == "dev" {
+                    continue;
+                }
+                if let Some(t) = &dep.target {
+                    if !target_applies(t, &args.target) {
+                        continue;
+                    }
+                }
+                let dep_package = dep.package.clone().unwrap_or_else(|| dep.name.clone());
+                if dep_package.starts_with("rustc-std-workspace") {
+                    continue;
+                }
+                if dep.optional && !activated.contains(&dep.name) {
+                    continue;
+                }
+                work.push((
+                    dep_package,
+                    dep.req.clone(),
+                    format!("{}@{}", package, version),
+                ));
+            }
+        }
+    }
+
+    if newly.is_empty() {
+        eprintln!("lock: nothing to do");
+        return Ok(());
+    }
+
+    for (package, (version, cksum)) in &newly {
+        let root = added_roots.iter().any(|(p, _)| p == package);
+        eprintln!("lock: + {}@{}{}", package, version, if root { " (root)" } else { "" });
+        decls.push(Decl {
+            name: None,
+            crate_name: package.clone(),
+            version: version.to_string(),
+            features: vec![],
+            hashes: vec![cksum.clone()],
+            passthrough: vec![],
+            leading_comments: vec![],
+            span: None,
+            imported: !root,
+            root,
+        });
+    }
+
+    // Hand over to sync for naming, downloads, feature resolution & writing.
+    let _ = normalize_names(&mut decls)?;
+    fs::write(&args.build_file, rewrite_build(&lines, &decls))?;
+    run(SyncArgs {
+        build_file: args.build_file.clone(),
+        third_party_folder: args.third_party_folder.clone(),
+        crate_store: None,
+        import: None,
+        target: args.target.clone(),
+        lock_output: None,
+        plz: args.plz.clone(),
+        no_rename: false,
+        dry_run: false,
+    })
+}
+
+fn dirs_cache() -> PathBuf {
+    std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::var_os("HOME")
+                .map(|h| PathBuf::from(h).join(".cache"))
+                .unwrap_or_else(|| PathBuf::from(".cache"))
+        })
+}
+
+/// Dep names activated by the crate's default features (index metadata).
+fn default_activated_deps(iv: &IndexVersion) -> BTreeSet<String> {
+    let features = iv.all_features();
+    let mut activated = BTreeSet::new();
+    let mut seen = BTreeSet::new();
+    let mut stack = vec!["default".to_string()];
+    while let Some(f) = stack.pop() {
+        if !seen.insert(f.clone()) {
+            continue;
+        }
+        if let Some(items) = features.get(&f) {
+            for item in items {
+                if let Some(dep) = item.strip_prefix("dep:") {
+                    activated.insert(dep.to_string());
+                } else if let Some((dep, _)) = item.split_once("?/") {
+                    let _ = dep; // weak: does not activate
+                } else if let Some((dep, _)) = item.split_once('/') {
+                    activated.insert(dep.to_string());
+                } else {
+                    stack.push(item.clone());
+                }
+            }
+        } else {
+            // Implicit optional-dep feature
+            activated.insert(f);
+        }
+    }
+    activated
+}
+
+fn target_applies(target_cfg: &str, triple: &str) -> bool {
+    if target_cfg.starts_with("cfg(") {
+        if let Some(info) = cfg_expr::targets::get_builtin_target_by_triple(triple) {
+            if let Ok(expr) = cfg_expr::Expression::parse(target_cfg) {
+                return expr.eval(|pred| match pred {
+                    cfg_expr::expr::Predicate::Target(tp) => tp.matches(info),
+                    _ => false,
+                });
+            }
+        }
+        false
+    } else {
+        target_cfg == triple
+    }
+}

@@ -2753,3 +2753,6 @@ rust_repo(
     version = "0.1.9",
     hashes = ["d0095ecd462946aa3927d9297b63ef82fb9a5316d7a37d134eeb36e58228615a"],
 )
+
+# Added by please_rust sync
+# Added by please_rust sync

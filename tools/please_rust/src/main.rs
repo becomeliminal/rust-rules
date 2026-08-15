@@ -48,6 +48,9 @@ enum Commands {
 
     /// Maintain the rust_repo declarations and regenerate the lock file
     Sync(sync::SyncArgs),
+
+    /// Resolve new dependency versions from the crates.io sparse index
+    Lock(sync::LockCmdArgs),
 }
 
 fn main() -> Result<()> {
@@ -60,5 +63,6 @@ fn main() -> Result<()> {
         Commands::Filter(args) => filter::run(args),
         Commands::Resolve(args) => resolve::run(args),
         Commands::Sync(args) => sync::run(args),
+        Commands::Lock(args) => sync::lock(args),
     }
 }
