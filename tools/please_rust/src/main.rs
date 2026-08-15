@@ -18,6 +18,7 @@ mod filter;
 mod generate;
 mod resolve;
 mod starlark;
+mod sync;
 
 #[derive(Parser)]
 #[command(name = "please_rust")]
@@ -44,6 +45,9 @@ enum Commands {
 
     /// Resolve versions and features across the declared crate graph
     Resolve(resolve::ResolveArgs),
+
+    /// Maintain the rust_repo declarations and regenerate the lock file
+    Sync(sync::SyncArgs),
 }
 
 fn main() -> Result<()> {
@@ -55,5 +59,6 @@ fn main() -> Result<()> {
         Commands::Generate(args) => generate::run(args),
         Commands::Filter(args) => filter::run(args),
         Commands::Resolve(args) => resolve::run(args),
+        Commands::Sync(args) => sync::run(args),
     }
 }

@@ -33,7 +33,7 @@ pub struct ResolveArgs {
     pub output: PathBuf,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct EntryInput {
     pub subrepo: String,
     pub crate_name: String,
@@ -115,12 +115,25 @@ pub fn run(args: ResolveArgs) -> Result<()> {
     )
     .context("Failed to parse entries JSON")?;
 
-    let target_info = cfg_expr::targets::get_builtin_target_by_triple(&args.target)
-        .with_context(|| format!("Unknown target triple {}", args.target))?;
+    let lock = resolve_entries(&entries, &args.target)?;
+    fs::write(&args.output, serde_json::to_string_pretty(&lock)? + "\n")
+        .with_context(|| format!("Failed to write {}", args.output.display()))?;
+    eprintln!(
+        "please_rust resolve: {} crates resolved for {}",
+        lock.crates.len(),
+        args.target
+    );
+    Ok(())
+}
+
+/// Resolve the declared crate graph; shared by the resolve and sync commands.
+pub fn resolve_entries(entries: &[EntryInput], target: &str) -> Result<LockFile> {
+    let target_info = cfg_expr::targets::get_builtin_target_by_triple(target)
+        .with_context(|| format!("Unknown target triple {}", target))?;
 
     // Build nodes
     let mut nodes: Vec<CrateNode> = Vec::new();
-    for e in &entries {
+    for e in entries {
         let content = fs::read(&e.manifest)
             .with_context(|| format!("Failed to read {}", e.manifest.display()))?;
         let manifest = Manifest::from_slice(&content)
@@ -198,18 +211,10 @@ pub fn run(args: ResolveArgs) -> Result<()> {
         );
     }
 
-    let lock = LockFile {
-        target: args.target.clone(),
+    Ok(LockFile {
+        target: target.to_string(),
         crates,
-    };
-    fs::write(&args.output, serde_json::to_string_pretty(&lock)? + "\n")
-        .with_context(|| format!("Failed to write {}", args.output.display()))?;
-    eprintln!(
-        "please_rust resolve: {} crates resolved for {}",
-        lock.crates.len(),
-        args.target
-    );
-    Ok(())
+    })
 }
 
 impl CrateNode {

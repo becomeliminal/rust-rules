@@ -10,9 +10,51 @@
       "deps": [],
       "build_deps": []
     },
+    "anstream": {
+      "crate_name": "anstream",
+      "version": "0.6.21",
+      "features": [
+        "auto",
+        "default",
+        "wincon"
+      ],
+      "deps": [
+        {
+          "name": "anstyle",
+          "crate_name": "anstyle",
+          "subrepo": "anstyle"
+        },
+        {
+          "name": "anstyle-parse",
+          "crate_name": "anstyle-parse",
+          "subrepo": "anstyle_parse"
+        },
+        {
+          "name": "anstyle-query",
+          "crate_name": "anstyle-query",
+          "subrepo": "anstyle_query"
+        },
+        {
+          "name": "colorchoice",
+          "crate_name": "colorchoice",
+          "subrepo": "colorchoice"
+        },
+        {
+          "name": "is_terminal_polyfill",
+          "crate_name": "is_terminal_polyfill",
+          "subrepo": "is_terminal_polyfill"
+        },
+        {
+          "name": "utf8parse",
+          "crate_name": "utf8parse",
+          "subrepo": "utf8parse"
+        }
+      ],
+      "build_deps": []
+    },
     "anstyle": {
       "crate_name": "anstyle",
-      "version": "1.0.10",
+      "version": "1.0.13",
       "features": [
         "default",
         "std"
@@ -20,7 +62,60 @@
       "deps": [],
       "build_deps": []
     },
+    "anstyle-1.0.10": {
+      "crate_name": "anstyle",
+      "version": "1.0.10",
+      "features": [],
+      "deps": [],
+      "build_deps": []
+    },
+    "anstyle_parse": {
+      "crate_name": "anstyle-parse",
+      "version": "0.2.7",
+      "features": [
+        "default",
+        "utf8"
+      ],
+      "deps": [
+        {
+          "name": "utf8parse",
+          "crate_name": "utf8parse",
+          "subrepo": "utf8parse"
+        }
+      ],
+      "build_deps": []
+    },
+    "anstyle_query": {
+      "crate_name": "anstyle-query",
+      "version": "1.1.5",
+      "features": [],
+      "deps": [],
+      "build_deps": []
+    },
+    "anstyle_wincon": {
+      "crate_name": "anstyle-wincon",
+      "version": "3.0.11",
+      "features": [],
+      "deps": [
+        {
+          "name": "anstyle",
+          "crate_name": "anstyle",
+          "subrepo": "anstyle"
+        }
+      ],
+      "build_deps": []
+    },
     "anyhow": {
+      "crate_name": "anyhow",
+      "version": "1.0.100",
+      "features": [
+        "default",
+        "std"
+      ],
+      "deps": [],
+      "build_deps": []
+    },
+    "anyhow-1.0.86": {
       "crate_name": "anyhow",
       "version": "1.0.86",
       "features": [
@@ -138,7 +233,7 @@
         {
           "name": "bitflags",
           "crate_name": "bitflags",
-          "subrepo": "bitflags_1_3_2"
+          "subrepo": "bitflags-1.3.2"
         },
         {
           "name": "bytes",
@@ -303,7 +398,7 @@
       "deps": [],
       "build_deps": []
     },
-    "bitflags_1_3_2": {
+    "bitflags-1.3.2": {
       "crate_name": "bitflags",
       "version": "1.3.2",
       "features": [
@@ -363,7 +458,7 @@
       ],
       "build_deps": []
     },
-    "block_buffer_0_9_0": {
+    "block_buffer-0.9.0": {
       "crate_name": "block-buffer",
       "version": "0.9.0",
       "features": [],
@@ -386,6 +481,26 @@
       "deps": [],
       "build_deps": []
     },
+    "cargo_toml": {
+      "crate_name": "cargo_toml",
+      "version": "0.20.5",
+      "features": [
+        "default"
+      ],
+      "deps": [
+        {
+          "name": "serde",
+          "crate_name": "serde",
+          "subrepo": "serde"
+        },
+        {
+          "name": "toml",
+          "crate_name": "toml",
+          "subrepo": "toml"
+        }
+      ],
+      "build_deps": []
+    },
     "cast": {
       "crate_name": "cast",
       "version": "0.3.0",
@@ -402,6 +517,21 @@
           "name": "shlex",
           "crate_name": "shlex",
           "subrepo": "shlex"
+        }
+      ],
+      "build_deps": []
+    },
+    "cfg_expr": {
+      "crate_name": "cfg-expr",
+      "version": "0.15.8",
+      "features": [
+        "default"
+      ],
+      "deps": [
+        {
+          "name": "smallvec",
+          "crate_name": "smallvec",
+          "subrepo": "smallvec"
         }
       ],
       "build_deps": []
@@ -470,28 +600,48 @@
     },
     "clap": {
       "crate_name": "clap",
-      "version": "4.4.9",
+      "version": "4.5.53",
       "features": [
+        "color",
+        "default",
+        "derive",
+        "error-context",
         "help",
-        "std"
+        "std",
+        "suggestions",
+        "usage"
       ],
       "deps": [
         {
           "name": "clap_builder",
           "crate_name": "clap_builder",
           "subrepo": "clap_builder"
+        },
+        {
+          "name": "clap_derive",
+          "crate_name": "clap_derive",
+          "subrepo": "clap_derive"
         }
       ],
       "build_deps": []
     },
     "clap_builder": {
       "crate_name": "clap_builder",
-      "version": "4.5.21",
+      "version": "4.5.53",
       "features": [
+        "color",
+        "error-context",
         "help",
-        "std"
+        "std",
+        "suggestions",
+        "usage"
       ],
       "deps": [
+        {
+          "name": "anstream",
+          "crate_name": "anstream",
+          "subrepo": "anstream"
+        },
         {
           "name": "anstyle",
           "crate_name": "anstyle",
@@ -501,13 +651,55 @@
           "name": "clap_lex",
           "crate_name": "clap_lex",
           "subrepo": "clap_lex"
+        },
+        {
+          "name": "strsim",
+          "crate_name": "strsim",
+          "subrepo": "strsim"
+        }
+      ],
+      "build_deps": []
+    },
+    "clap_derive": {
+      "crate_name": "clap_derive",
+      "version": "4.5.49",
+      "features": [
+        "default"
+      ],
+      "deps": [
+        {
+          "name": "heck",
+          "crate_name": "heck",
+          "subrepo": "heck"
+        },
+        {
+          "name": "proc-macro2",
+          "crate_name": "proc-macro2",
+          "subrepo": "proc_macro2"
+        },
+        {
+          "name": "quote",
+          "crate_name": "quote",
+          "subrepo": "quote"
+        },
+        {
+          "name": "syn",
+          "crate_name": "syn",
+          "subrepo": "syn"
         }
       ],
       "build_deps": []
     },
     "clap_lex": {
       "crate_name": "clap_lex",
-      "version": "0.7.3",
+      "version": "0.7.6",
+      "features": [],
+      "deps": [],
+      "build_deps": []
+    },
+    "colorchoice": {
+      "crate_name": "colorchoice",
+      "version": "1.0.4",
       "features": [],
       "deps": [],
       "build_deps": []
@@ -685,7 +877,7 @@
       ],
       "build_deps": []
     },
-    "digest_0_9_0": {
+    "digest-0.9.0": {
       "crate_name": "digest",
       "version": "0.9.0",
       "features": [
@@ -711,6 +903,13 @@
       "build_deps": []
     },
     "equivalent": {
+      "crate_name": "equivalent",
+      "version": "1.0.2",
+      "features": [],
+      "deps": [],
+      "build_deps": []
+    },
+    "equivalent-1.0.1": {
       "crate_name": "equivalent",
       "version": "1.0.1",
       "features": [],
@@ -955,16 +1154,23 @@
     },
     "hashbrown": {
       "crate_name": "hashbrown",
-      "version": "0.14.5",
+      "version": "0.16.1",
+      "features": [],
+      "deps": [],
+      "build_deps": []
+    },
+    "hashbrown-0.12.3": {
+      "crate_name": "hashbrown",
+      "version": "0.12.3",
       "features": [
         "raw"
       ],
       "deps": [],
       "build_deps": []
     },
-    "hashbrown_0_12_3": {
+    "hashbrown-0.14.5": {
       "crate_name": "hashbrown",
-      "version": "0.12.3",
+      "version": "0.14.5",
       "features": [
         "raw"
       ],
@@ -1178,7 +1384,7 @@
     },
     "indexmap": {
       "crate_name": "indexmap",
-      "version": "2.2.6",
+      "version": "2.12.1",
       "features": [
         "default",
         "std"
@@ -1197,14 +1403,14 @@
       ],
       "build_deps": []
     },
-    "indexmap_1_2_0": {
+    "indexmap-1.2.0": {
       "crate_name": "indexmap",
       "version": "1.2.0",
       "features": [],
       "deps": [],
       "build_deps": []
     },
-    "indexmap_1_9_3": {
+    "indexmap-1.9.3": {
       "crate_name": "indexmap",
       "version": "1.9.3",
       "features": [],
@@ -1212,7 +1418,7 @@
         {
           "name": "hashbrown",
           "crate_name": "hashbrown",
-          "subrepo": "hashbrown_0_12_3"
+          "subrepo": "hashbrown-0.12.3"
         }
       ],
       "build_deps": [
@@ -1222,6 +1428,27 @@
           "subrepo": "autocfg"
         }
       ]
+    },
+    "indexmap-2.2.6": {
+      "crate_name": "indexmap",
+      "version": "2.2.6",
+      "features": [
+        "default",
+        "std"
+      ],
+      "deps": [
+        {
+          "name": "equivalent",
+          "crate_name": "equivalent",
+          "subrepo": "equivalent"
+        },
+        {
+          "name": "hashbrown",
+          "crate_name": "hashbrown",
+          "subrepo": "hashbrown-0.14.5"
+        }
+      ],
+      "build_deps": []
     },
     "is_terminal": {
       "crate_name": "is-terminal",
@@ -1234,6 +1461,15 @@
           "subrepo": "libc"
         }
       ],
+      "build_deps": []
+    },
+    "is_terminal_polyfill": {
+      "crate_name": "is_terminal_polyfill",
+      "version": "1.70.2",
+      "features": [
+        "default"
+      ],
+      "deps": [],
       "build_deps": []
     },
     "itertools": {
@@ -1254,6 +1490,13 @@
       "build_deps": []
     },
     "itoa": {
+      "crate_name": "itoa",
+      "version": "1.0.16",
+      "features": [],
+      "deps": [],
+      "build_deps": []
+    },
+    "itoa-1.0.11": {
       "crate_name": "itoa",
       "version": "1.0.11",
       "features": [],
@@ -1291,7 +1534,7 @@
         {
           "name": "digest",
           "crate_name": "digest",
-          "subrepo": "digest_0_9_0"
+          "subrepo": "digest-0.9.0"
         },
         {
           "name": "libsecp256k1-core",
@@ -1311,7 +1554,7 @@
         {
           "name": "sha2",
           "crate_name": "sha2",
-          "subrepo": "sha2_0_9_9"
+          "subrepo": "sha2"
         }
       ],
       "build_deps": [
@@ -1343,7 +1586,7 @@
         {
           "name": "digest",
           "crate_name": "digest",
-          "subrepo": "digest_0_9_0"
+          "subrepo": "digest-0.9.0"
         },
         {
           "name": "subtle",
@@ -1435,6 +1678,17 @@
     },
     "memchr": {
       "crate_name": "memchr",
+      "version": "2.7.6",
+      "features": [
+        "alloc",
+        "default",
+        "std"
+      ],
+      "deps": [],
+      "build_deps": []
+    },
+    "memchr-2.7.4": {
+      "crate_name": "memchr",
       "version": "2.7.4",
       "features": [
         "alloc",
@@ -1517,9 +1771,16 @@
       "deps": [],
       "build_deps": []
     },
-    "once_cell_1_10_0": {
+    "once_cell-1.10.0": {
       "crate_name": "once_cell",
       "version": "1.10.0",
+      "features": [],
+      "deps": [],
+      "build_deps": []
+    },
+    "once_cell_polyfill": {
+      "crate_name": "once_cell_polyfill",
+      "version": "1.70.2",
       "features": [],
       "deps": [],
       "build_deps": []
@@ -1689,6 +1950,22 @@
       "build_deps": []
     },
     "proc_macro2": {
+      "crate_name": "proc-macro2",
+      "version": "1.0.103",
+      "features": [
+        "default",
+        "proc-macro"
+      ],
+      "deps": [
+        {
+          "name": "unicode-ident",
+          "crate_name": "unicode-ident",
+          "subrepo": "unicode_ident"
+        }
+      ],
+      "build_deps": []
+    },
+    "proc_macro2-1.0.85": {
       "crate_name": "proc-macro2",
       "version": "1.0.85",
       "features": [
@@ -1936,6 +2213,22 @@
     },
     "quote": {
       "crate_name": "quote",
+      "version": "1.0.42",
+      "features": [
+        "default",
+        "proc-macro"
+      ],
+      "deps": [
+        {
+          "name": "proc-macro2",
+          "crate_name": "proc-macro2",
+          "subrepo": "proc_macro2"
+        }
+      ],
+      "build_deps": []
+    },
+    "quote-1.0.36": {
+      "crate_name": "quote",
       "version": "1.0.36",
       "features": [
         "default",
@@ -2124,11 +2417,44 @@
       "deps": [],
       "build_deps": []
     },
+    "semver": {
+      "crate_name": "semver",
+      "version": "1.0.23",
+      "features": [
+        "default",
+        "std"
+      ],
+      "deps": [],
+      "build_deps": []
+    },
     "serde": {
+      "crate_name": "serde",
+      "version": "1.0.228",
+      "features": [
+        "alloc",
+        "default",
+        "derive",
+        "serde_derive",
+        "std"
+      ],
+      "deps": [
+        {
+          "name": "serde_core",
+          "crate_name": "serde_core",
+          "subrepo": "serde_core"
+        },
+        {
+          "name": "serde_derive",
+          "crate_name": "serde_derive",
+          "subrepo": "serde_derive"
+        }
+      ],
+      "build_deps": []
+    },
+    "serde-1.0.215": {
       "crate_name": "serde",
       "version": "1.0.215",
       "features": [
-        "alloc",
         "default",
         "derive",
         "serde_derive",
@@ -2143,7 +2469,43 @@
       ],
       "build_deps": []
     },
+    "serde_core": {
+      "crate_name": "serde_core",
+      "version": "1.0.228",
+      "features": [
+        "alloc",
+        "result",
+        "std"
+      ],
+      "deps": [],
+      "build_deps": []
+    },
     "serde_derive": {
+      "crate_name": "serde_derive",
+      "version": "1.0.228",
+      "features": [
+        "default"
+      ],
+      "deps": [
+        {
+          "name": "proc-macro2",
+          "crate_name": "proc-macro2",
+          "subrepo": "proc_macro2"
+        },
+        {
+          "name": "quote",
+          "crate_name": "quote",
+          "subrepo": "quote"
+        },
+        {
+          "name": "syn",
+          "crate_name": "syn",
+          "subrepo": "syn"
+        }
+      ],
+      "build_deps": []
+    },
+    "serde_derive-1.0.215": {
       "crate_name": "serde_derive",
       "version": "1.0.215",
       "features": [
@@ -2170,9 +2532,39 @@
     },
     "serde_json": {
       "crate_name": "serde_json",
-      "version": "1.0.133",
+      "version": "1.0.147",
       "features": [
         "default",
+        "std"
+      ],
+      "deps": [
+        {
+          "name": "itoa",
+          "crate_name": "itoa",
+          "subrepo": "itoa"
+        },
+        {
+          "name": "memchr",
+          "crate_name": "memchr",
+          "subrepo": "memchr"
+        },
+        {
+          "name": "serde_core",
+          "crate_name": "serde_core",
+          "subrepo": "serde_core"
+        },
+        {
+          "name": "zmij",
+          "crate_name": "zmij",
+          "subrepo": "zmij"
+        }
+      ],
+      "build_deps": []
+    },
+    "serde_json-1.0.133": {
+      "crate_name": "serde_json",
+      "version": "1.0.133",
+      "features": [
         "std"
       ],
       "deps": [
@@ -2199,7 +2591,22 @@
       ],
       "build_deps": []
     },
-    "sha2_0_9_9": {
+    "serde_spanned": {
+      "crate_name": "serde_spanned",
+      "version": "0.6.9",
+      "features": [
+        "serde"
+      ],
+      "deps": [
+        {
+          "name": "serde",
+          "crate_name": "serde",
+          "subrepo": "serde"
+        }
+      ],
+      "build_deps": []
+    },
+    "sha2": {
       "crate_name": "sha2",
       "version": "0.9.9",
       "features": [
@@ -2209,7 +2616,7 @@
         {
           "name": "block-buffer",
           "crate_name": "block-buffer",
-          "subrepo": "block_buffer_0_9_0"
+          "subrepo": "block_buffer-0.9.0"
         },
         {
           "name": "cfg-if",
@@ -2219,7 +2626,7 @@
         {
           "name": "digest",
           "crate_name": "digest",
-          "subrepo": "digest_0_9_0"
+          "subrepo": "digest-0.9.0"
         },
         {
           "name": "opaque-debug",
@@ -2275,6 +2682,13 @@
     },
     "smallvec": {
       "crate_name": "smallvec",
+      "version": "1.15.2",
+      "features": [],
+      "deps": [],
+      "build_deps": []
+    },
+    "smallvec-1.13.2": {
+      "crate_name": "smallvec",
       "version": "1.13.2",
       "features": [],
       "deps": [],
@@ -2295,6 +2709,13 @@
       ],
       "build_deps": []
     },
+    "strsim": {
+      "crate_name": "strsim",
+      "version": "0.11.1",
+      "features": [],
+      "deps": [],
+      "build_deps": []
+    },
     "subtle": {
       "crate_name": "subtle",
       "version": "2.6.1",
@@ -2305,6 +2726,39 @@
       "build_deps": []
     },
     "syn": {
+      "crate_name": "syn",
+      "version": "2.0.111",
+      "features": [
+        "clone-impls",
+        "default",
+        "derive",
+        "extra-traits",
+        "full",
+        "parsing",
+        "printing",
+        "proc-macro",
+        "visit-mut"
+      ],
+      "deps": [
+        {
+          "name": "proc-macro2",
+          "crate_name": "proc-macro2",
+          "subrepo": "proc_macro2"
+        },
+        {
+          "name": "quote",
+          "crate_name": "quote",
+          "subrepo": "quote"
+        },
+        {
+          "name": "unicode-ident",
+          "crate_name": "unicode-ident",
+          "subrepo": "unicode_ident"
+        }
+      ],
+      "build_deps": []
+    },
+    "syn-2.0.87": {
       "crate_name": "syn",
       "version": "2.0.87",
       "features": [
@@ -2363,6 +2817,44 @@
           "name": "rustix",
           "crate_name": "rustix",
           "subrepo": "rustix"
+        }
+      ],
+      "build_deps": []
+    },
+    "thiserror": {
+      "crate_name": "thiserror",
+      "version": "1.0.69",
+      "features": [
+        "default"
+      ],
+      "deps": [
+        {
+          "name": "thiserror-impl",
+          "crate_name": "thiserror-impl",
+          "subrepo": "thiserror_impl"
+        }
+      ],
+      "build_deps": []
+    },
+    "thiserror_impl": {
+      "crate_name": "thiserror-impl",
+      "version": "1.0.69",
+      "features": [],
+      "deps": [
+        {
+          "name": "proc-macro2",
+          "crate_name": "proc-macro2",
+          "subrepo": "proc_macro2"
+        },
+        {
+          "name": "quote",
+          "crate_name": "quote",
+          "subrepo": "quote"
+        },
+        {
+          "name": "syn",
+          "crate_name": "syn",
+          "subrepo": "syn"
         }
       ],
       "build_deps": []
@@ -2564,6 +3056,106 @@
       ],
       "build_deps": []
     },
+    "toml": {
+      "crate_name": "toml",
+      "version": "0.8.23",
+      "features": [
+        "default",
+        "display",
+        "parse"
+      ],
+      "deps": [
+        {
+          "name": "serde",
+          "crate_name": "serde",
+          "subrepo": "serde"
+        },
+        {
+          "name": "serde_spanned",
+          "crate_name": "serde_spanned",
+          "subrepo": "serde_spanned"
+        },
+        {
+          "name": "toml_datetime",
+          "crate_name": "toml_datetime",
+          "subrepo": "toml_datetime"
+        },
+        {
+          "name": "toml_edit",
+          "crate_name": "toml_edit",
+          "subrepo": "toml_edit"
+        }
+      ],
+      "build_deps": []
+    },
+    "toml_datetime": {
+      "crate_name": "toml_datetime",
+      "version": "0.6.11",
+      "features": [
+        "serde"
+      ],
+      "deps": [
+        {
+          "name": "serde",
+          "crate_name": "serde",
+          "subrepo": "serde"
+        }
+      ],
+      "build_deps": []
+    },
+    "toml_edit": {
+      "crate_name": "toml_edit",
+      "version": "0.22.27",
+      "features": [
+        "display",
+        "parse",
+        "serde"
+      ],
+      "deps": [
+        {
+          "name": "indexmap",
+          "crate_name": "indexmap",
+          "subrepo": "indexmap"
+        },
+        {
+          "name": "serde",
+          "crate_name": "serde",
+          "subrepo": "serde"
+        },
+        {
+          "name": "serde_spanned",
+          "crate_name": "serde_spanned",
+          "subrepo": "serde_spanned"
+        },
+        {
+          "name": "toml_datetime",
+          "crate_name": "toml_datetime",
+          "subrepo": "toml_datetime"
+        },
+        {
+          "name": "toml_write",
+          "crate_name": "toml_write",
+          "subrepo": "toml_write"
+        },
+        {
+          "name": "winnow",
+          "crate_name": "winnow",
+          "subrepo": "winnow"
+        }
+      ],
+      "build_deps": []
+    },
+    "toml_write": {
+      "crate_name": "toml_write",
+      "version": "0.1.2",
+      "features": [
+        "alloc",
+        "default",
+        "std"
+      ],
+      "deps": [],
+      "build_deps": []
+    },
     "tonic_build": {
       "crate_name": "tonic-build",
       "version": "0.11.0",
@@ -2641,7 +3233,7 @@
         {
           "name": "indexmap",
           "crate_name": "indexmap",
-          "subrepo": "indexmap_1_9_3"
+          "subrepo": "indexmap-1.9.3"
         },
         {
           "name": "pin-project",
@@ -2788,8 +3380,24 @@
     },
     "unicode_ident": {
       "crate_name": "unicode-ident",
+      "version": "1.0.22",
+      "features": [],
+      "deps": [],
+      "build_deps": []
+    },
+    "unicode_ident-1.0.12": {
+      "crate_name": "unicode-ident",
       "version": "1.0.12",
       "features": [],
+      "deps": [],
+      "build_deps": []
+    },
+    "utf8parse": {
+      "crate_name": "utf8parse",
+      "version": "0.2.2",
+      "features": [
+        "default"
+      ],
       "deps": [],
       "build_deps": []
     },
@@ -2824,6 +3432,51 @@
           "subrepo": "try_lock"
         }
       ],
+      "build_deps": []
+    },
+    "winapi_util": {
+      "crate_name": "winapi-util",
+      "version": "0.1.11",
+      "features": [],
+      "deps": [],
+      "build_deps": []
+    },
+    "windows_link": {
+      "crate_name": "windows-link",
+      "version": "0.2.1",
+      "features": [],
+      "deps": [],
+      "build_deps": []
+    },
+    "windows_sys": {
+      "crate_name": "windows-sys",
+      "version": "0.61.2",
+      "features": [],
+      "deps": [
+        {
+          "name": "windows-link",
+          "crate_name": "windows-link",
+          "subrepo": "windows_link"
+        }
+      ],
+      "build_deps": []
+    },
+    "winnow": {
+      "crate_name": "winnow",
+      "version": "0.7.14",
+      "features": [
+        "alloc",
+        "default",
+        "std"
+      ],
+      "deps": [],
+      "build_deps": []
+    },
+    "zmij": {
+      "crate_name": "zmij",
+      "version": "0.1.9",
+      "features": [],
+      "deps": [],
       "build_deps": []
     }
   }

@@ -81,9 +81,9 @@ def rust_repo(
         name = crate_normalized
         subrepo_name = crate_normalized
     else:
-        # Use the provided name for the subrepo to avoid conflicts
-        # (e.g., hashbrown and hashbrown_0_12_3 need different subrepos)
-        subrepo_name = name.replace("-", "_")
+        # The provided name is the subrepo name, verbatim. Versioned
+        # duplicates use the `crate-x.y.z` convention (written by sync).
+        subrepo_name = name
 
     # Download the crate
     download = rust_crate_download(
