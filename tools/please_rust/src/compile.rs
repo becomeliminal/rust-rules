@@ -334,6 +334,10 @@ pub fn run(args: CompileArgs) -> Result<()> {
             cmd.env("CARGO", "/bin/false");
         }
     }
+    cmd.env("CARGO_CRATE_NAME", &args.crate_name);
+    if args.crate_type == "bin" {
+        cmd.env("CARGO_BIN_NAME", &args.crate_name);
+    }
 
     // Features from command line
     for feature in &args.features {

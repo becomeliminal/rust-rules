@@ -49,6 +49,18 @@ pub struct GenerateArgs {
     /// heuristic per-manifest resolution below is skipped entirely.
     #[arg(long)]
     pub lock: Option<PathBuf>,
+
+    /// Build label of the please_rust tool, as seen from inside the subrepo
+    #[arg(long, default_value = "@//tools/please_rust:bootstrap")]
+    pub tool_label: String,
+
+    /// Build label of rustc, as seen from inside the subrepo
+    #[arg(long, default_value = "@//third_party/rust:toolchain_rustc")]
+    pub rustc_label: String,
+
+    /// Build label of the sysroot, as seen from inside the subrepo
+    #[arg(long, default_value = "@//third_party/rust:toolchain_sysroot")]
+    pub sysroot_label: String,
 }
 
 pub fn run(args: GenerateArgs) -> Result<()> {
@@ -227,6 +239,13 @@ pub fn run(args: GenerateArgs) -> Result<()> {
             "_host",
         ));
     }
+
+    // Tool labels are configurable (CONFIG.RUST.*); the emitters use the
+    // defaults, substituted here so every rule points at the configured ones.
+    let build_content = build_content
+        .replace("@//tools/please_rust:bootstrap", &args.tool_label)
+        .replace("@//third_party/rust:toolchain_rustc", &args.rustc_label)
+        .replace("@//third_party/rust:toolchain_sysroot", &args.sysroot_label);
 
     // Write BUILD file
     let build_path = args.src_root.join("BUILD");

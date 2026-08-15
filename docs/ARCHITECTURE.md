@@ -105,14 +105,26 @@ runs cargo.
 
 ## Status / known gaps
 
-- Build scripts that invoke a C compiler (`cc` crate, `-sys` crates) need a
-  host cc; a declared hermetic C toolchain is future work (blake3 is built
-  with its `pure` feature for this reason). go-rules has the same frontier
-  with cgo.
-- `rust_proto` and the protoc/prost/tonic codegen toolchain are pending a
-  port to `rust_repo` (the tonic runtime itself builds). The proto preload is
-  disabled in `.plzconfig` until then.
-- `lock` uses greedy max-satisfying resolution with clear conflict errors;
-  a backtracking (PubGrub) solver can replace its `select()` seam.
-- Resolution currently targets one platform (`x86_64-unknown-linux-gnu` by
-  default; `--target` on resolve/sync/lock).
+Audited against cargo's documented build-script and feature contracts and
+against go-rules' architecture. What remains open, deliberately:
+
+- **Hermetic C toolchain**: build scripts that invoke a C compiler (`cc`
+  crate, `-sys` crates) use the host cc found on PATH; a declared toolchain
+  (CC/AR/CFLAGS into the build-script env — the C sources are already staged)
+  is future work. blake3 is built with its `pure` feature for this reason.
+  go-rules has the same frontier with cgo.
+- **`links` / `DEP_<LINKS>_<KEY>` propagation**: metadata directives are
+  parsed and `CARGO_MANIFEST_LINKS` is set, but a linked crate's metadata is
+  not yet exported to its dependents' build scripts. This only matters for
+  native-library ecosystems (libz-sys and friends), so it lands together
+  with the C toolchain.
+- **`lock` resolution is greedy** max-satisfying with pin preference and
+  clear conflict errors; a backtracking (PubGrub) solver can replace its
+  `select()` seam without touching anything else.
+- **Single-platform resolution**: one target triple per resolve
+  (`x86_64-unknown-linux-gnu` by default; `--target` on resolve/sync/lock).
+  The host/target unit split is in place, so cross-compilation needs only a
+  second triple threaded through, not a redesign.
+- **Not enforced**: `rust-version` (MSRV) checks; `CARGO_CFG_TARGET_FEATURE`
+  is approximated for x86_64/aarch64; dev-dependencies are ignored (nothing
+  builds third-party crates' own tests).

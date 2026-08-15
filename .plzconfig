@@ -90,3 +90,15 @@ Inherit = true
 ConfigKey = GrpcDep
 DefaultValue = //third_party/rust:tonic
 Inherit = true
+
+[PluginConfig "please_rust_tool"]
+ConfigKey = PleaseRustTool
+DefaultValue = //tools/please_rust:bootstrap
+Help = Build label of the please_rust tool used to generate and compile crates.
+Inherit = true
+
+[PluginConfig "sysroot"]
+ConfigKey = Sysroot
+DefaultValue = //third_party/rust:toolchain_sysroot
+Help = A build label for the Rust sysroot (contains lib/rustlib/...).
+Inherit = true

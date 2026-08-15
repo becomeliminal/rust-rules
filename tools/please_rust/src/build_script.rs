@@ -78,6 +78,7 @@ struct Directives {
     rustc_link_args: Vec<String>,
     metadata: Vec<(String, String)>,
     warnings: Vec<String>,
+    errors: Vec<String>,
 }
 
 pub fn run(args: BuildScriptArgs) -> Result<()> {
@@ -119,9 +120,15 @@ pub fn run(args: BuildScriptArgs) -> Result<()> {
     let manifest_dir = PathBuf::from(env.get("CARGO_MANIFEST_DIR").cloned().unwrap_or_else(|| ".".to_string()));
     let directives = execute_build_script(&build_script_binary, &env, &manifest_dir)?;
 
-    // 6. Print warnings
+    // 6. Print warnings; error directives fail the build (cargo semantics)
     for warning in &directives.warnings {
         eprintln!("warning: {}", warning);
+    }
+    if !directives.errors.is_empty() {
+        for e in &directives.errors {
+            eprintln!("error: {}", e);
+        }
+        anyhow::bail!("build script of {} reported errors", pkg.name);
     }
 
     // 7. Write directives to output file
@@ -247,6 +254,10 @@ fn build_environment(
     // Core variables
     env.insert("CARGO".to_string(), "/bin/false".to_string()); // Fake cargo
     env.insert("CARGO_MANIFEST_DIR".to_string(), manifest_dir.display().to_string());
+    env.insert(
+        "CARGO_MANIFEST_PATH".to_string(),
+        manifest_dir.join("Cargo.toml").display().to_string(),
+    );
     env.insert("OUT_DIR".to_string(), out_dir.display().to_string());
     env.insert("TARGET".to_string(), args.target.clone());
     env.insert("HOST".to_string(), args.host.clone());
@@ -288,40 +299,48 @@ fn build_environment(
         env.insert(format!("CARGO_FEATURE_{}", feature_upper), "1".to_string());
     }
 
-    // Target cfg variables (for x86_64-unknown-linux-gnu)
-    // These are the most common ones; we can expand this based on the target triple
-    if args.target.contains("linux") {
-        env.insert("CARGO_CFG_TARGET_OS".to_string(), "linux".to_string());
-        env.insert("CARGO_CFG_TARGET_FAMILY".to_string(), "unix".to_string());
-        env.insert("CARGO_CFG_UNIX".to_string(), "".to_string());
-    } else if args.target.contains("windows") {
-        env.insert("CARGO_CFG_TARGET_OS".to_string(), "windows".to_string());
-        env.insert("CARGO_CFG_TARGET_FAMILY".to_string(), "windows".to_string());
-        env.insert("CARGO_CFG_WINDOWS".to_string(), "".to_string());
-    } else if args.target.contains("darwin") || args.target.contains("macos") {
-        env.insert("CARGO_CFG_TARGET_OS".to_string(), "macos".to_string());
-        env.insert("CARGO_CFG_TARGET_FAMILY".to_string(), "unix".to_string());
-        env.insert("CARGO_CFG_UNIX".to_string(), "".to_string());
+    // Target cfg variables, derived from the triple's real target info
+    if let Some(info) = cfg_expr::targets::get_builtin_target_by_triple(&args.target) {
+        if let Some(os) = &info.os {
+            env.insert("CARGO_CFG_TARGET_OS".to_string(), os.as_str().to_string());
+        }
+        env.insert("CARGO_CFG_TARGET_ARCH".to_string(), info.arch.as_str().to_string());
+        env.insert(
+            "CARGO_CFG_TARGET_VENDOR".to_string(),
+            info.vendor.as_ref().map(|v| v.as_str()).unwrap_or("").to_string(),
+        );
+        env.insert(
+            "CARGO_CFG_TARGET_ENV".to_string(),
+            info.env.as_ref().map(|e| e.as_str()).unwrap_or("").to_string(),
+        );
+        env.insert(
+            "CARGO_CFG_TARGET_POINTER_WIDTH".to_string(),
+            info.pointer_width.to_string(),
+        );
+        env.insert(
+            "CARGO_CFG_TARGET_ENDIAN".to_string(),
+            format!("{:?}", info.endian).to_lowercase(),
+        );
+        let families: Vec<&str> = info.families.iter().map(|f| f.as_str()).collect();
+        env.insert("CARGO_CFG_TARGET_FAMILY".to_string(), families.join(","));
+        for f in &families {
+            if *f == "unix" {
+                env.insert("CARGO_CFG_UNIX".to_string(), "".to_string());
+            } else if *f == "windows" {
+                env.insert("CARGO_CFG_WINDOWS".to_string(), "".to_string());
+            }
+        }
+        if args.target.contains("x86_64") {
+            env.insert("CARGO_CFG_TARGET_FEATURE".to_string(), "fxsr,sse,sse2".to_string());
+            env.insert("CARGO_CFG_TARGET_HAS_ATOMIC".to_string(), "8,16,32,64,ptr".to_string());
+        } else if args.target.contains("aarch64") {
+            env.insert("CARGO_CFG_TARGET_HAS_ATOMIC".to_string(), "8,16,32,64,128,ptr".to_string());
+        }
     }
 
-    if args.target.contains("x86_64") {
-        env.insert("CARGO_CFG_TARGET_ARCH".to_string(), "x86_64".to_string());
-        env.insert("CARGO_CFG_TARGET_POINTER_WIDTH".to_string(), "64".to_string());
-        env.insert("CARGO_CFG_TARGET_ENDIAN".to_string(), "little".to_string());
-        env.insert("CARGO_CFG_TARGET_HAS_ATOMIC".to_string(), "8,16,32,64,ptr".to_string());
-        env.insert("CARGO_CFG_TARGET_FEATURE".to_string(), "fxsr,sse,sse2".to_string());
-    } else if args.target.contains("aarch64") {
-        env.insert("CARGO_CFG_TARGET_ARCH".to_string(), "aarch64".to_string());
-        env.insert("CARGO_CFG_TARGET_POINTER_WIDTH".to_string(), "64".to_string());
-        env.insert("CARGO_CFG_TARGET_ENDIAN".to_string(), "little".to_string());
-        env.insert("CARGO_CFG_TARGET_HAS_ATOMIC".to_string(), "8,16,32,64,128,ptr".to_string());
-    }
-
-    // Extract vendor and env from target triple (x86_64-unknown-linux-gnu)
-    let parts: Vec<&str> = args.target.split('-').collect();
-    if parts.len() >= 4 {
-        env.insert("CARGO_CFG_TARGET_VENDOR".to_string(), parts[1].to_string());
-        env.insert("CARGO_CFG_TARGET_ENV".to_string(), parts[3].to_string());
+    // The links key, when present, is exposed to the build script
+    if let Some(links) = &pkg.links {
+        env.insert("CARGO_MANIFEST_LINKS".to_string(), links.clone());
     }
 
     Ok(env)
@@ -463,8 +482,23 @@ fn parse_directive(line: &str, directives: &mut Directives) {
     } else if let Some(value) = directive.strip_prefix("warning=") {
         directives.warnings.push(value.to_string());
     } else if let Some(value) = directive.strip_prefix("error=") {
-        // Immediately fail on error directive
-        eprintln!("error: {}", value);
+        directives.errors.push(value.to_string());
+    } else if let Some(value) = directive.strip_prefix("rustc-flags=") {
+        // Legacy directive: whitespace-separated -l / -L flags
+        let mut it = value.split_whitespace().peekable();
+        while let Some(tok) = it.next() {
+            if let Some(rest) = tok.strip_prefix("-l") {
+                let v = if rest.is_empty() { it.next().unwrap_or("") } else { rest };
+                if !v.is_empty() {
+                    directives.rustc_link_libs.push(v.to_string());
+                }
+            } else if let Some(rest) = tok.strip_prefix("-L") {
+                let v = if rest.is_empty() { it.next().unwrap_or("") } else { rest };
+                if !v.is_empty() {
+                    directives.rustc_link_searches.push(v.to_string());
+                }
+            }
+        }
     }
     // Ignore rerun-if-changed and rerun-if-env-changed (not relevant for Please)
 }

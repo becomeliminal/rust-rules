@@ -9,11 +9,14 @@ an on-disk path and passes `--extern name=path` to rustc. This makes first-party
 rules and rust_repo subrepo crates freely interoperable in either direction.
 """
 
-_RUST_TOOLS = {
-    "please_rust": ["//tools/please_rust:bootstrap"],
-    "rustc": ["//third_party/rust:toolchain_rustc"],
-    "sysroot": ["//third_party/rust:toolchain_sysroot"],
-}
+def _rust_tools():
+    # Evaluated at rule-call time; plugin config is not available when the
+    # build defs are preloaded.
+    return {
+        "please_rust": [CONFIG.RUST.PLEASE_RUST_TOOL],
+        "rustc": [CONFIG.RUST.RUSTC],
+        "sysroot": [CONFIG.RUST.SYSROOT],
+    }
 
 # Collects externconfig files from all transitive inputs into one file for
 # please_rust compile. The aggregate is named `externconfig` (no extension) so
@@ -88,7 +91,7 @@ def rust_library(name:str, root:str, crate_name:str="", modules:list=None, deps:
             deps = deps,
         ),
         deps = deps,
-        tools = _RUST_TOOLS,
+        tools = _rust_tools(),
         needs_transitive_deps = True,
         visibility = visibility,
         labels = ['rust'],
@@ -134,7 +137,7 @@ def rust_binary(name:str, main:str, modules:list=None, deps:list=[], edition:str
             deps = deps,
         ),
         deps = deps,
-        tools = _RUST_TOOLS,
+        tools = _rust_tools(),
         needs_transitive_deps = True,
         visibility = visibility,
         labels = ['rust'],
@@ -179,7 +182,7 @@ def rust_test(name:str, root:str, modules:list=None, deps:list=[], edition:str="
             deps = deps,
         ),
         deps = deps,
-        tools = _RUST_TOOLS,
+        tools = _rust_tools(),
         needs_transitive_deps = True,
         visibility = visibility,
         labels = ['rust'],
@@ -221,7 +224,7 @@ def rust_benchmark(name:str, root:str, modules:list=None, deps:list=[], edition:
             deps = deps,
         ),
         deps = deps,
-        tools = _RUST_TOOLS,
+        tools = _rust_tools(),
         needs_transitive_deps = True,
         visibility = visibility,
         labels = ['rust'],

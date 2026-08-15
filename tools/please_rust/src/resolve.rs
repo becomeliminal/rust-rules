@@ -507,16 +507,26 @@ fn enable_feature(
     }
 
     // Not a named feature: an implicit optional-dep feature, or an unknown
-    // cfg the crate checks. Both become an enabled feature cfg; the former
-    // also activates the dep.
-    nodes[idx]
-        .unit_mut(unit)
-        .enabled_features
-        .insert(feature.to_string());
+    // cfg the crate checks. Cargo's namespaced-features rule: once any
+    // feature uses dep:x, the implicit feature x no longer exists — the dep
+    // can be activated but no feature cfg is set for it.
     let is_optional_dep = nodes[idx]
         .deps
         .iter()
         .any(|d| d.name == feature && d.optional);
+    let namespaced = is_optional_dep
+        && nodes[idx]
+            .manifest
+            .features
+            .values()
+            .flatten()
+            .any(|item| item.strip_prefix("dep:") == Some(feature));
+    if !namespaced {
+        nodes[idx]
+            .unit_mut(unit)
+            .enabled_features
+            .insert(feature.to_string());
+    }
     if is_optional_dep {
         activate_dep(nodes, resolver, idx, unit, feature, work)?;
     }

@@ -129,7 +129,7 @@ def rust_repo(
         "rm -rf $SRCS_CRATE/.plzconfig",
         "find $SRCS_CRATE -name BUILD -delete",
         # Run please_rust generate (SRCS_CRATE points directly to the extracted directory)
-        f"$TOOL generate --crate-name {crate} --version {version} --src-root $SRCS_CRATE --subrepo {pkg_name}/{subrepo_name} --features '{features_arg}' --install '{install_arg}' --third-party-folder {third_party_path} {lock_flag}" + " ".join([f"--override {k}={v}" for k, v in sorted(dep_overrides.items())]),
+        f"$TOOL generate --crate-name {crate} --version {version} --src-root $SRCS_CRATE --subrepo {pkg_name}/{subrepo_name} --features '{features_arg}' --install '{install_arg}' --third-party-folder {third_party_path} --tool-label @{CONFIG.RUST.PLEASE_RUST_TOOL} --rustc-label @{CONFIG.RUST.RUSTC} --sysroot-label @{CONFIG.RUST.SYSROOT} {lock_flag}" + " ".join([f"--override {k}={v}" for k, v in sorted(dep_overrides.items())]),
         # Move to output
         "mv $SRCS_CRATE $OUT",
     ]
@@ -147,7 +147,7 @@ def rust_repo(
         srcs = srcs,
         cmd = cmd,
         outs = [subrepo_name],
-        tools = ["//tools/please_rust:bootstrap"],
+        tools = [CONFIG.RUST.PLEASE_RUST_TOOL],
         deps = deps,
         output_is_complete = True,
         labels = labels + [f"rust_crate:{crate}@{version}"],
@@ -208,6 +208,6 @@ def rust_resolve(name:str, entries:list, target:str="x86_64-unknown-linux-gnu", 
         srcs = manifest_srcs,
         outs = ["rust.lock"],
         cmd = f"$TOOL resolve {entry_flags} --manifest-dir {pkg} --target {target} --output $OUT",
-        tools = ["//tools/please_rust:bootstrap"],
+        tools = [CONFIG.RUST.PLEASE_RUST_TOOL],
         visibility = visibility,
     )
