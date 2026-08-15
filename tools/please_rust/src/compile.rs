@@ -102,6 +102,10 @@ pub struct CompileArgs {
     #[arg(short = 'C', long = "codegen")]
     pub codegen: Vec<String>,
 
+    /// Cap lints at this level (cargo passes allow for registry crates)
+    #[arg(long)]
+    pub cap_lints: Option<String>,
+
     /// Features to enable
     #[arg(long = "feature")]
     pub features: Vec<String>,
@@ -263,6 +267,9 @@ pub fn run(args: CompileArgs) -> Result<()> {
     }
     cmd.arg(format!("--emit={}", args.emit));
     cmd.arg("--error-format=human");
+    if let Some(level) = &args.cap_lints {
+        cmd.arg(format!("--cap-lints={}", level));
+    }
     cmd.arg("-C").arg("embed-bitcode=no");
     for opt in &args.codegen {
         cmd.arg("-C").arg(opt);

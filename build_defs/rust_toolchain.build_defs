@@ -54,7 +54,6 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
             'rustc_lib': [base + '/rustc/lib'],
             'cargo_bin': [base + '/cargo/bin/cargo'],
             'sysroot': [base + sysroot_path],
-            'stdlib': [base + sysroot_path + '/lib/rustlib/%s-%s/lib' % (arch, os)],
         },
         cmd = 'tar -xzf $SRCS',
         building_description = 'Extracting...',
@@ -81,10 +80,13 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
         srcs = [extract_rule + '|sysroot'],
         visibility = visibility,
     )
-    # For backwards compatibility, stdlib points to the lib subdirectory of sysroot
-    stdlib_rule = filegroup(
+    # For backwards compatibility, stdlib is the lib subdirectory of the
+    # sysroot (copied out - it cannot be a nested output of the extract rule).
+    stdlib_rule = build_rule(
         name = name + '_stdlib',
-        srcs = [extract_rule + '|stdlib'],
+        srcs = [extract_rule + '|sysroot'],
+        outs = [name + '_stdlib'],
+        cmd = 'cp -r $SRCS/lib/rustlib/%s-%s/lib $OUT' % (arch, os),
         visibility = visibility,
     )
     cargo_rule = filegroup(

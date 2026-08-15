@@ -11,8 +11,8 @@ filegroup(
 
 rust_toolchain(
     name = "toolchain",
-    hashes = ["0a4022f567602bd6e9cc35e5b0a9b1a88f3867e6"],
-    version = "1.82.0",
+    hashes = ["b4cdbc7cc6b0ee0a2666b1872769fdb2ad8393b28b63952f6493b4b400e4832b"],
+    version = "1.97.1",
     visibility = ["PUBLIC"],
 )
 

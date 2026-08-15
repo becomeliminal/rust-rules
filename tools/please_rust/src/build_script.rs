@@ -110,6 +110,7 @@ pub fn run(args: BuildScriptArgs) -> Result<()> {
     let edition = match pkg.edition.get() {
         Ok(cargo_toml::Edition::E2015) => "2015",
         Ok(cargo_toml::Edition::E2018) => "2018",
+        Ok(cargo_toml::Edition::E2024) => "2024",
         _ => "2021",
     };
     let build_script_binary = compile_build_script(&args, &out_dir, edition, &env)?;
@@ -150,7 +151,8 @@ fn compile_build_script(
         .arg("--crate-type=bin")
         .arg(format!("--edition={}", edition))
         .arg("-o")
-        .arg(&binary_path);
+        .arg(&binary_path)
+        .arg("--cap-lints=allow");
 
     // Cargo exposes the package env vars at compile time as well as run time
     // (build scripts may use env!("CARGO_PKG_VERSION") etc.)

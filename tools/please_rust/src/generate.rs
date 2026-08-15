@@ -575,7 +575,7 @@ fn generate_compile_rule_with_buildscript(
 
     // Compile command with --buildscript flag
     let compile_base = format!(
-        "$TOOLS_PLEASE_RUST compile --externconfig externconfig --buildscript $SRCS_BUILDSCRIPT --manifest-path $SRCS_MANIFEST --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --crate-name {} --edition {} --crate-type {} --emit {} {}",
+        "$TOOLS_PLEASE_RUST compile --externconfig externconfig --buildscript $SRCS_BUILDSCRIPT --manifest-path $SRCS_MANIFEST --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cap-lints allow --crate-name {} --edition {} --crate-type {} --emit {} {}",
         normalized_name, edition_str, crate_type, emit, feature_str
     );
 
@@ -661,7 +661,7 @@ fn generate_compile_rule(
     };
 
     let compile_base = format!(
-        "$TOOLS_PLEASE_RUST compile --externconfig externconfig --manifest-path $SRCS_MANIFEST --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --crate-name {} --edition {} --crate-type {} --emit {} {}",
+        "$TOOLS_PLEASE_RUST compile --externconfig externconfig --manifest-path $SRCS_MANIFEST --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cap-lints allow --crate-name {} --edition {} --crate-type {} --emit {} {}",
         normalized_name, edition_str, crate_type, emit, feature_str
     );
 

@@ -21,11 +21,12 @@ _RUST_TOOLS = {
 _AGGREGATE_EXTERNCONFIGS = "find . -name '*.externconfig' -type f 2>/dev/null | xargs cat >> externconfig 2>/dev/null || true"
 
 
-def _compile_cmds(crate_name:str, edition:str, crate_type:str, emit:str, features:list=None, test:bool=False, write_externconfig:bool=False):
+def _compile_cmds(crate_name:str, edition:str, crate_type:str, emit:str, features:list=None, test:bool=False, write_externconfig:bool=False, manifest:str=None):
     """Returns the {dbg, opt} command dict for compiling a crate via please_rust."""
     feature_args = ' '.join([f'--feature {f}' for f in features]) if features else ''
     test_arg = '--test ' if test else ''
-    base = f'{_AGGREGATE_EXTERNCONFIGS} && $TOOLS_PLEASE_RUST compile --externconfig externconfig --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --crate-name {crate_name} --edition {edition} --crate-type {crate_type} --emit {emit} {test_arg}{feature_args}'
+    manifest_arg = '--manifest-path $SRCS_MANIFEST ' if manifest else ''
+    base = f'{_AGGREGATE_EXTERNCONFIGS} && $TOOLS_PLEASE_RUST compile --externconfig externconfig {manifest_arg}--rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --crate-name {crate_name} --edition {edition} --crate-type {crate_type} --emit {emit} {test_arg}{feature_args}'
     suffix = f" && echo '{crate_name}=lib{crate_name}.rlib' > $OUTS_EXTERNCONFIG" if write_externconfig else ''
     return {
         'dbg': f'{base} -g $SRCS_MAIN{suffix}',
@@ -79,13 +80,14 @@ def rust_library(name:str, root:str, crate_name:str="", modules:list=None, deps:
     )
 
 
-def rust_binary(name:str, main:str, deps:list=[], edition:str='2021', features:list=None, build_root:str=None, build_deps:list|dict=None, build_compile_env:dict=None, build_run_env:dict=None, target_dir:str=None, visibility:list=None):
+def rust_binary(name:str, main:str, modules:list=None, deps:list=[], edition:str='2021', features:list=None, manifest:str=None, build_root:str=None, build_deps:list|dict=None, build_compile_env:dict=None, build_run_env:dict=None, target_dir:str=None, visibility:list=None):
     """Defines a build rule for a Rust standalone binary.
 
     Args:
         name (str): Name of the binary.
         main (str): Source file containing the `main()` function that the `rustc` compiler starts
                   from. Typically, `src/main.rs`.
+        modules (list): Local modules that make up the crate.
         deps (list): Dependencies of this crate (first-party rust_library or third-party rust_repo).
         edition (str): Rust edition to compile with (2015, 2018, 2021, 2024).
         features (list): Feature cfgs to enable.
@@ -95,11 +97,16 @@ def rust_binary(name:str, main:str, deps:list=[], edition:str='2021', features:l
         fail(f"rust_binary {name}: build scripts are only supported for third-party crates via rust_repo")
     crate_name = name.replace('-', '_')
 
+    srcs = {
+        'main': [main],
+        'mods': modules or [],
+    }
+    if manifest:
+        srcs['manifest'] = [manifest]
+
     return build_rule(
         name = name,
-        srcs = {
-            'main': [main],
-        },
+        srcs = srcs,
         outs = [crate_name],
         binary = True,
         cmd = _compile_cmds(
@@ -108,6 +115,7 @@ def rust_binary(name:str, main:str, deps:list=[], edition:str='2021', features:l
             crate_type = 'bin',
             emit = 'dep-info,link',
             features = features,
+            manifest = manifest,
         ),
         deps = deps,
         tools = _RUST_TOOLS,
