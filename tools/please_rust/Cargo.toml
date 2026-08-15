@@ -1,0 +1,37 @@
+[package]
+name = "please_rust"
+version = "0.1.0"
+edition = "2021"
+description = "Rust tooling for the Please build system"
+license = "Apache-2.0"
+
+[[bin]]
+name = "please_rust"
+path = "src/main.rs"
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Cargo.toml parsing
+cargo_toml = "0.20"
+toml = "0.8"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# File system
+walkdir = "2"
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# Rust source parsing (for cfg attributes)
+syn = { version = "2", features = ["full", "parsing"] }
+proc-macro2 = "1"
+
+[profile.release]
+lto = true
+strip = true

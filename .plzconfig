@@ -1,23 +1,25 @@
 [Please]
-version = 17.8.7
+version = 17.27.0
 
 [Build]
 path = /opt/rust-rules/toolchain/1.0/bin/:/bin:/usr/bin:/usr/local/bin
 timeout = 2000
 
 [Plugin "rust"]
-Target = //build_defs:rust
+Target = //plugins:rust
 Rustc = //third_party/rust:toolchain_rustc
 StdLib = //third_party/rust:toolchain_stdlib
 RepoRoot = //third_party/rust:toolchain_target
 
 [Parse]
-preloadsubincludes = ///proto//build_defs:proto
+# Temporarily disabled for testing rust_repo
+#preloadsubincludes = ///proto//build_defs:proto
 preloadsubincludes = ///shell//build_defs:shell
 preloadsubincludes = ///python//build_defs:python
 preloadbuilddefs = build_defs/rust_toolchain.build_defs
 preloadbuilddefs = build_defs/rust.build_defs
 preloadbuilddefs = build_defs/rust_crate.build_defs
+preloadbuilddefs = build_defs/rust_repo.build_defs
 
 [Plugin "shell"]
 Target = //plugins:shell
@@ -39,7 +41,7 @@ Target = //plugins:python
 DefaultInterpreter = python3
 
 [PluginDefinition]
-name = rust
+Name = rust
 
 [PluginConfig "rustc"]
 DefaultValue = //third_party/rust:toolchain_rustc

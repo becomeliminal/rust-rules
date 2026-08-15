@@ -1,0 +1,138 @@
+"""Build rules for downloading Rust crates and generating BUILD files as subrepos.
+
+This implements the subrepo architecture for Rust, similar to go_repo in go-rules.
+"""
+
+def rust_crate_download(name:str, crate:str, version:str, hashes:list=None, labels:list=[], visibility:list=None):
+    """Downloads a crate from crates.io.
+
+    Args:
+        name: Name of the rule.
+        crate: Crate name on crates.io.
+        version: Version to download.
+        hashes: Optional hashes to verify the download.
+        labels: Labels for the rule.
+        visibility: Visibility specification.
+    """
+    url = f"https://static.crates.io/crates/{crate}/{crate}-{version}.crate"
+
+    return remote_file(
+        name = name,
+        url = url,
+        hashes = hashes,
+        extract = True,
+        labels = labels,
+        visibility = visibility,
+    )
+
+
+def rust_repo(
+    name: str = None,
+    crate: str = "",
+    version: str = "",
+    features: list = [],
+    install: list = [],
+    deps: list = [],
+    hashes: list = None,
+    patch: list = None,
+    visibility: list = ["PUBLIC"],
+    third_party_path: str = "third_party/rust",
+    labels: list = [],
+):
+    """Downloads a crate and generates BUILD files as a subrepo.
+
+    This rule downloads a crate from crates.io, invokes please_rust generate to
+    create BUILD files, and registers the result as a subrepo. This is the Rust
+    equivalent of go_repo from go-rules.
+
+    Args:
+        name: Rule name. If provided, creates an install alias. If omitted, the
+              crate is an indirect dependency (transitive dep).
+        crate: Crate name on crates.io.
+        version: Exact version to fetch.
+        features: Features to enable for this crate.
+        install: Targets to export (defaults to [crate]). Only used if name is set.
+        deps: Additional dependencies not in Cargo.toml.
+        hashes: Optional hashes to verify the download.
+        patch: Patch files to apply.
+        visibility: Visibility for the install target.
+        third_party_path: Where subrepos are placed.
+        labels: Labels for the rule.
+    """
+    if not crate:
+        fail("crate is required for rust_repo")
+    if not version:
+        fail("version is required for rust_repo")
+
+    # Normalize crate name for subrepo (replace - with _)
+    crate_normalized = crate.replace("-", "_")
+
+    # If no name provided, this is an indirect dep - just use crate_normalized
+    if not name:
+        name = crate_normalized
+        subrepo_name = crate_normalized
+    else:
+        # Use the provided name for the subrepo to avoid conflicts
+        # (e.g., hashbrown and hashbrown_0_12_3 need different subrepos)
+        subrepo_name = name.replace("-", "_")
+
+    # Download the crate
+    download = rust_crate_download(
+        name = tag(name, "download"),
+        crate = crate,
+        version = version,
+        hashes = hashes,
+    )
+
+    # Build feature args
+    features_arg = ",".join(features) if features else ""
+
+    # Build install args - use the actual crate name (normalized), not subrepo_name
+    install_targets = install if install else [crate_normalized]
+    install_arg = ",".join(install_targets)
+
+    pkg_name = package_name()
+    pkg_root = f"{crate}-{version}"
+
+    # Generate BUILD files
+    # Note: remote_file with extract=True extracts contents into a directory named after the crate
+    cmds = [
+        # Remove any existing BUILD files or plzconfig
+        "rm -rf $SRCS/.plzconfig",
+        "find $SRCS -name BUILD -delete",
+        # Run please_rust generate (SRCS points directly to the extracted directory)
+        f"$TOOL generate --crate-name {crate} --version {version} --src-root $SRCS --subrepo {pkg_name}/{subrepo_name} --features '{features_arg}' --install '{install_arg}' --third-party-folder {third_party_path}",
+        # Move to output
+        "mv $SRCS $OUT",
+    ]
+    cmd = " && ".join(cmds)
+
+    # Always use a tagged name for the build_rule since we need to create an alias
+    repo = build_rule(
+        name = tag(name, "repo"),
+        srcs = [download],
+        cmd = cmd,
+        outs = [subrepo_name],
+        tools = ["//tools/please_rust:bootstrap"],
+        deps = deps,
+        output_is_complete = True,
+        labels = labels + [f"rust_crate:{crate}@{version}"],
+    )
+
+    # Register as subrepo
+    # Since we moved $SRCS to $OUT directly, the package_root is empty
+    subrepo(
+        name = subrepo_name,
+        dep = repo,
+    )
+
+    # Always create an alias that wraps the subrepo target
+    # This allows `:name` to resolve to the rlib, not the directory
+    # The target inside the subrepo is named after the crate (crate_normalized),
+    # while the subrepo itself may have a different name (subrepo_name) for versioned crates
+    return filegroup(
+        name = name,
+        visibility = visibility,
+        exported_deps = [f"///{pkg_name}/{subrepo_name}//:{crate_normalized}"],
+        labels = labels,
+    )
