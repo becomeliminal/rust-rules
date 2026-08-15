@@ -106,6 +106,12 @@ pub struct CompileArgs {
     #[arg(long)]
     pub cap_lints: Option<String>,
 
+    /// Direct dependency crate names. When given, --extern is added only for
+    /// externconfig entries matching these; everything else in the sandbox
+    /// stays reachable via -L only (transitive deps, as cargo does).
+    #[arg(long = "dep")]
+    pub deps: Vec<String>,
+
     /// Features to enable
     #[arg(long = "feature")]
     pub features: Vec<String>,
@@ -212,17 +218,18 @@ pub fn run(args: CompileArgs) -> Result<()> {
                     let found_path = find_file_recursive(".", filename);
 
                     if let Some(path) = found_path {
-                        // Add --extern flag with found path
-                        cmd.arg("--extern");
-                        cmd.arg(format!("{}={}", name, path.display()));
-
-                        // Also add -L for the directory containing the library
+                        let direct = args.deps.is_empty() || args.deps.iter().any(|d| d == name);
+                        if direct {
+                            cmd.arg("--extern");
+                            cmd.arg(format!("{}={}", name, path.display()));
+                            extern_paths.push((name.to_string(), path.clone()));
+                        }
+                        // -L keeps transitive crates resolvable by metadata hash
                         if let Some(dir) = path.parent() {
                             if !dir.as_os_str().is_empty() {
                                 cmd.arg("-L").arg(dir);
                             }
                         }
-                        extern_paths.push((name.to_string(), path));
                     } else {
                         eprintln!("Warning: Could not find {} for crate {}", filename, name);
                     }

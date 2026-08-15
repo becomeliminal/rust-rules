@@ -21,12 +21,26 @@ _RUST_TOOLS = {
 _AGGREGATE_EXTERNCONFIGS = "find . -name '*.externconfig' -type f 2>/dev/null | xargs cat >> externconfig 2>/dev/null || true"
 
 
-def _compile_cmds(crate_name:str, edition:str, crate_type:str, emit:str, features:list=None, test:bool=False, write_externconfig:bool=False, manifest:str=None):
-    """Returns the {dbg, opt} command dict for compiling a crate via please_rust."""
+def _dep_names(deps:list):
+    """Crate names of direct deps, for --extern filtering (rule name = crate name)."""
+    names = []
+    for dep in deps:
+        name = canonicalise(dep).split(':')[-1]
+        names += [name.replace('-', '_')]
+    return names
+
+
+def _compile_cmds(crate_name:str, edition:str, crate_type:str, emit:str, features:list=None, test:bool=False, write_externconfig:bool=False, manifest:str=None, deps:list=None):
+    """Returns the {dbg, opt} command dict for compiling a crate via please_rust.
+
+    Direct deps get --extern (by crate name, from --dep filtering); transitive
+    crates in the sandbox stay reachable via -L only, mirroring cargo.
+    """
     feature_args = ' '.join([f'--feature {f}' for f in features]) if features else ''
     test_arg = '--test ' if test else ''
     manifest_arg = '--manifest-path $SRCS_MANIFEST ' if manifest else ''
-    base = f'{_AGGREGATE_EXTERNCONFIGS} && $TOOLS_PLEASE_RUST compile --externconfig externconfig {manifest_arg}--rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --crate-name {crate_name} --edition {edition} --crate-type {crate_type} --emit {emit} {test_arg}{feature_args}'
+    dep_args = ' '.join([f'--dep {d}' for d in _dep_names(deps)]) + ' ' if deps else ''
+    base = f'{_AGGREGATE_EXTERNCONFIGS} && $TOOLS_PLEASE_RUST compile --externconfig externconfig {manifest_arg}{dep_args}--rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --crate-name {crate_name} --edition {edition} --crate-type {crate_type} --emit {emit} {test_arg}{feature_args}'
     suffix = f" && echo '{crate_name}=lib{crate_name}.rlib' > $OUTS_EXTERNCONFIG" if write_externconfig else ''
     return {
         'dbg': f'{base} -g $SRCS_MAIN{suffix}',
@@ -71,6 +85,7 @@ def rust_library(name:str, root:str, crate_name:str="", modules:list=None, deps:
             emit = 'dep-info,link,metadata',
             features = features,
             write_externconfig = True,
+            deps = deps,
         ),
         deps = deps,
         tools = _RUST_TOOLS,
@@ -116,6 +131,7 @@ def rust_binary(name:str, main:str, modules:list=None, deps:list=[], edition:str
             emit = 'dep-info,link',
             features = features,
             manifest = manifest,
+            deps = deps,
         ),
         deps = deps,
         tools = _RUST_TOOLS,
@@ -160,6 +176,7 @@ def rust_test(name:str, root:str, modules:list=None, deps:list=[], edition:str="
             emit = 'dep-info,link',
             features = features,
             test = True,
+            deps = deps,
         ),
         deps = deps,
         tools = _RUST_TOOLS,
@@ -186,6 +203,7 @@ def rust_benchmark(name:str, root:str, modules:list=None, deps:list=[], edition:
     """
     crate_name = name.replace('-', '_')
 
+    deps = deps + ["//third_party/rust:criterion"]
     return build_rule(
         name = name,
         srcs = {
@@ -200,8 +218,9 @@ def rust_benchmark(name:str, root:str, modules:list=None, deps:list=[], edition:
             crate_type = 'bin',
             emit = 'dep-info,link',
             features = features,
+            deps = deps,
         ),
-        deps = deps + ["//third_party/rust:criterion"],
+        deps = deps,
         tools = _RUST_TOOLS,
         needs_transitive_deps = True,
         visibility = visibility,

@@ -4,9 +4,13 @@
 //! they play the role go.mod plays for go-rules. This command computes the
 //! rest of what cargo would: per-dependency version routing (semver matching
 //! against the declared set) and unified features (cargo resolver v2
-//! semantics), evaluated for one target triple. The output lock file is
-//! checked in and consumed by `generate` for each subrepo, keeping builds
-//! deterministic with no cargo anywhere.
+//! semantics), evaluated for one target triple.
+//!
+//! Like cargo, resolution distinguishes two build units: TARGET (code linked
+//! into final artifacts) and HOST (proc-macros, build scripts, and their
+//! transitive dependencies, which run in the compiler / at build time).
+//! Features unify separately per unit; a crate needed by both with different
+//! feature sets gets a distinct `<crate>_host` build target.
 
 use anyhow::{bail, Context, Result};
 use cargo_toml::Manifest;
@@ -78,12 +82,21 @@ pub struct LockDep {
     pub name: String,
     pub crate_name: String,
     pub subrepo: String,
+    /// Build target inside the subrepo (crate name, or crate_host for the
+    /// host variant of a dual-unit crate)
+    #[serde(default)]
+    pub target_name: String,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct LockFile {
     pub target: String,
+    /// Primary entry per subrepo (target unit; host unit if host-only)
     pub crates: BTreeMap<String, LockEntry>,
+    /// Host-unit variants for crates needed by both units with different
+    /// features (built as <crate>_host)
+    #[serde(default)]
+    pub host_crates: BTreeMap<String, LockEntry>,
 }
 
 /// Parse a manifest, normalizing deprecated underscore key spellings that
@@ -112,6 +125,16 @@ enum DepKind {
     Build,
 }
 
+/// Cargo's two build units. Host code (proc-macros, build scripts and their
+/// dependencies) runs in the compiler; target code links into artifacts.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Unit {
+    Target = 0,
+    Host = 1,
+}
+
+const UNITS: [Unit; 2] = [Unit::Target, Unit::Host];
+
 /// A dependency declaration extracted from a manifest, pre-filtered by target cfg.
 struct DepDecl {
     name: String,    // declared name (may be a rename)
@@ -123,6 +146,15 @@ struct DepDecl {
     kind: DepKind,
 }
 
+#[derive(Default)]
+struct UnitState {
+    activated: bool,
+    enabled_features: BTreeSet<String>,
+    enabled_optional_deps: BTreeSet<String>,
+    // weak features (dep?/feat) waiting for the dep to be activated
+    deferred: Vec<(String, String)>,
+}
+
 struct CrateNode {
     subrepo: String,
     crate_name: String,
@@ -130,11 +162,25 @@ struct CrateNode {
     manifest: Manifest,
     deps: Vec<DepDecl>,
     requested_features: Vec<String>,
-    activated: bool,
-    enabled_features: BTreeSet<String>,
-    enabled_optional_deps: BTreeSet<String>,
-    // weak features (dep?/feat) waiting for the dep to be activated
-    deferred: Vec<(String, String)>,
+    is_proc_macro: bool,
+    units: [UnitState; 2],
+}
+
+impl CrateNode {
+    fn unit(&self, u: Unit) -> &UnitState {
+        &self.units[u as usize]
+    }
+    fn unit_mut(&mut self, u: Unit) -> &mut UnitState {
+        &mut self.units[u as usize]
+    }
+    /// Proc-macros only ever build for the host.
+    fn normalize_unit(&self, u: Unit) -> Unit {
+        if self.is_proc_macro {
+            Unit::Host
+        } else {
+            u
+        }
+    }
 }
 
 pub fn run(args: ResolveArgs) -> Result<()> {
@@ -155,8 +201,9 @@ pub fn run(args: ResolveArgs) -> Result<()> {
     fs::write(&args.output, serde_json::to_string_pretty(&lock)? + "\n")
         .with_context(|| format!("Failed to write {}", args.output.display()))?;
     eprintln!(
-        "please_rust resolve: {} crates resolved for {}",
+        "please_rust resolve: {} crates ({} dual host variants) resolved for {}",
         lock.crates.len(),
+        lock.host_crates.len(),
         args.target
     );
     Ok(())
@@ -197,6 +244,11 @@ pub fn resolve_entries(entries: &[EntryInput], target: &str) -> Result<LockFile>
         let version = Version::parse(&e.version)
             .with_context(|| format!("Bad version {} for {}", e.version, e.crate_name))?;
         let deps = collect_deps(&manifest, target_info);
+        let is_proc_macro = manifest
+            .lib
+            .as_ref()
+            .map(|l| l.proc_macro || l.crate_type.contains(&"proc-macro".to_string()))
+            .unwrap_or(false);
         nodes.push(CrateNode {
             subrepo: e.subrepo.clone(),
             crate_name: e.crate_name.clone(),
@@ -204,10 +256,8 @@ pub fn resolve_entries(entries: &[EntryInput], target: &str) -> Result<LockFile>
             manifest,
             deps,
             requested_features: e.features.clone(),
-            activated: false,
-            enabled_features: BTreeSet::new(),
-            enabled_optional_deps: BTreeSet::new(),
-            deferred: Vec::new(),
+            is_proc_macro,
+            units: [UnitState::default(), UnitState::default()],
         });
     }
 
@@ -229,8 +279,10 @@ pub fn resolve_entries(entries: &[EntryInput], target: &str) -> Result<LockFile>
     let mut work: Vec<Work> = Vec::new();
     for (i, e) in entries.iter().enumerate() {
         if e.root {
+            let unit = nodes[i].normalize_unit(Unit::Target);
             work.push(Work::ActivateCrate {
                 idx: i,
+                unit,
                 default_features: e.default_features,
                 features: nodes[i].requested_features.clone(),
             });
@@ -239,28 +291,47 @@ pub fn resolve_entries(entries: &[EntryInput], target: &str) -> Result<LockFile>
 
     process(&mut nodes, &resolver, work)?;
 
-    // Emit lock file
+    // Emit the lock. Per subrepo:
+    // - active in target unit only -> crates
+    // - active in host unit only (proc-macros, pure build deps) -> crates
+    // - active in both with identical features -> crates (shared artifact;
+    //   valid while host triple == target triple)
+    // - active in both with different features -> crates + host_crates
+    let mut dual: BTreeSet<usize> = BTreeSet::new();
+    for (i, n) in nodes.iter().enumerate() {
+        if n.unit(Unit::Target).activated
+            && n.unit(Unit::Host).activated
+            && n.unit(Unit::Target).enabled_features != n.unit(Unit::Host).enabled_features
+        {
+            dual.insert(i);
+        }
+    }
+
     let mut crates = BTreeMap::new();
-    for n in &nodes {
-        if !n.activated {
+    let mut host_crates = BTreeMap::new();
+    for (i, n) in nodes.iter().enumerate() {
+        let target_active = n.unit(Unit::Target).activated;
+        let host_active = n.unit(Unit::Host).activated;
+        if !target_active && !host_active {
             continue;
         }
-        let (deps, build_deps) = emit_deps(n, &nodes, &resolver)?;
+        let primary_unit = if target_active { Unit::Target } else { Unit::Host };
         crates.insert(
             n.subrepo.clone(),
-            LockEntry {
-                crate_name: n.crate_name.clone(),
-                version: n.version.to_string(),
-                features: n.enabled_features.iter().cloned().collect(),
-                deps,
-                build_deps,
-            },
+            emit_entry(n, primary_unit, &nodes, &resolver, &dual)?,
         );
+        if dual.contains(&i) {
+            host_crates.insert(
+                n.subrepo.clone(),
+                emit_entry(n, Unit::Host, &nodes, &resolver, &dual)?,
+            );
+        }
     }
 
     Ok(LockFile {
         target: target.to_string(),
         crates,
+        host_crates,
     })
 }
 
@@ -279,9 +350,8 @@ impl Resolver {
                 }
             }
         }
-        // No semver match: a single declared version is used as-is (matches
-        // the previous name-based routing); multiple versions is an error the
-        // caller reports.
+        // No semver match: a single declared version is used as-is; multiple
+        // versions with no match is an error the caller reports.
         if candidates.len() == 1 {
             return Some(candidates[0]);
         }
@@ -292,13 +362,24 @@ impl Resolver {
 enum Work {
     ActivateCrate {
         idx: usize,
+        unit: Unit,
         default_features: bool,
         features: Vec<String>,
     },
     Feature {
         idx: usize,
+        unit: Unit,
         feature: String,
     },
+}
+
+/// The unit a dependency edge lands in: build-deps always go to host; a
+/// host-unit crate's normal deps stay host; proc-macro children are host.
+fn edge_unit(parent_unit: Unit, kind: DepKind) -> Unit {
+    match kind {
+        DepKind::Build => Unit::Host,
+        DepKind::Normal => parent_unit,
+    }
 }
 
 fn process(nodes: &mut Vec<CrateNode>, resolver: &Resolver, mut work: Vec<Work>) -> Result<()> {
@@ -306,23 +387,35 @@ fn process(nodes: &mut Vec<CrateNode>, resolver: &Resolver, mut work: Vec<Work>)
         match item {
             Work::ActivateCrate {
                 idx,
+                unit,
                 default_features,
                 features,
             } => {
-                let newly = !nodes[idx].activated;
-                nodes[idx].activated = true;
+                let unit = nodes[idx].normalize_unit(unit);
+                let newly = !nodes[idx].unit(unit).activated;
+                nodes[idx].unit_mut(unit).activated = true;
                 if newly {
                     // Mandatory deps always flow
-                    let mandatory: Vec<(String, bool, Vec<String>, Option<VersionReq>)> = nodes[idx]
-                        .deps
-                        .iter()
-                        .filter(|d| !d.optional)
-                        .map(|d| (d.package.clone(), d.default_features, d.features.clone(), d.req.clone()))
-                        .collect();
-                    for (package, df, feats, req) in mandatory {
+                    let mandatory: Vec<(String, bool, Vec<String>, Option<VersionReq>, DepKind)> =
+                        nodes[idx]
+                            .deps
+                            .iter()
+                            .filter(|d| !d.optional)
+                            .map(|d| {
+                                (
+                                    d.package.clone(),
+                                    d.default_features,
+                                    d.features.clone(),
+                                    d.req.clone(),
+                                    d.kind,
+                                )
+                            })
+                            .collect();
+                    for (package, df, feats, req, kind) in mandatory {
                         if let Some(child) = resolver.select(&package, req.as_ref(), nodes) {
                             work.push(Work::ActivateCrate {
                                 idx: child,
+                                unit: edge_unit(unit, kind),
                                 default_features: df,
                                 features: feats,
                             });
@@ -335,21 +428,27 @@ fn process(nodes: &mut Vec<CrateNode>, resolver: &Resolver, mut work: Vec<Work>)
                             );
                         }
                         // Unknown package: not declared (e.g. platform-only);
-                        // generate will warn if it's actually needed.
+                        // emit warns if it's actually needed.
                     }
                 }
                 if default_features && nodes[idx].manifest.features.contains_key("default") {
                     work.push(Work::Feature {
                         idx,
+                        unit,
                         feature: "default".to_string(),
                     });
                 }
                 for f in features {
-                    work.push(Work::Feature { idx, feature: f });
+                    work.push(Work::Feature {
+                        idx,
+                        unit,
+                        feature: f,
+                    });
                 }
             }
-            Work::Feature { idx, feature } => {
-                enable_feature(nodes, resolver, idx, &feature, &mut work)?;
+            Work::Feature { idx, unit, feature } => {
+                let unit = nodes[idx].normalize_unit(unit);
+                enable_feature(nodes, resolver, idx, unit, &feature, &mut work)?;
             }
         }
     }
@@ -360,41 +459,46 @@ fn enable_feature(
     nodes: &mut Vec<CrateNode>,
     resolver: &Resolver,
     idx: usize,
+    unit: Unit,
     feature: &str,
     work: &mut Vec<Work>,
 ) -> Result<()> {
-    if nodes[idx].enabled_features.contains(feature) {
+    if nodes[idx].unit(unit).enabled_features.contains(feature) {
         return Ok(());
     }
 
     // A [features] table entry expands to its constituents
     if let Some(items) = nodes[idx].manifest.features.get(feature).cloned() {
-        nodes[idx].enabled_features.insert(feature.to_string());
+        nodes[idx]
+            .unit_mut(unit)
+            .enabled_features
+            .insert(feature.to_string());
         for item in items {
             if let Some(dep_name) = item.strip_prefix("dep:") {
-                activate_dep(nodes, resolver, idx, dep_name, work)?;
+                activate_dep(nodes, resolver, idx, unit, dep_name, work)?;
             } else if let Some((dep_name, dep_feat)) = item.split_once("?/") {
                 // Weak: only applies if the dep is otherwise activated
                 let dep_name = dep_name.to_string();
                 let dep_feat = dep_feat.to_string();
-                if nodes[idx].enabled_optional_deps.contains(&dep_name)
+                if nodes[idx].unit(unit).enabled_optional_deps.contains(&dep_name)
                     || nodes[idx]
                         .deps
                         .iter()
                         .any(|d| d.name == dep_name && !d.optional)
                 {
-                    forward_feature(nodes, resolver, idx, &dep_name, &dep_feat, work)?;
+                    forward_feature(nodes, resolver, idx, unit, &dep_name, &dep_feat, work)?;
                 } else {
-                    nodes[idx].deferred.push((dep_name, dep_feat));
+                    nodes[idx].unit_mut(unit).deferred.push((dep_name, dep_feat));
                 }
             } else if let Some((dep_name, dep_feat)) = item.split_once('/') {
                 let dep_name = dep_name.to_string();
                 let dep_feat = dep_feat.to_string();
-                activate_dep(nodes, resolver, idx, &dep_name, work)?;
-                forward_feature(nodes, resolver, idx, &dep_name, &dep_feat, work)?;
+                activate_dep(nodes, resolver, idx, unit, &dep_name, work)?;
+                forward_feature(nodes, resolver, idx, unit, &dep_name, &dep_feat, work)?;
             } else {
                 work.push(Work::Feature {
                     idx,
+                    unit,
                     feature: item,
                 });
             }
@@ -405,13 +509,16 @@ fn enable_feature(
     // Not a named feature: an implicit optional-dep feature, or an unknown
     // cfg the crate checks. Both become an enabled feature cfg; the former
     // also activates the dep.
-    nodes[idx].enabled_features.insert(feature.to_string());
+    nodes[idx]
+        .unit_mut(unit)
+        .enabled_features
+        .insert(feature.to_string());
     let is_optional_dep = nodes[idx]
         .deps
         .iter()
         .any(|d| d.name == feature && d.optional);
     if is_optional_dep {
-        activate_dep(nodes, resolver, idx, feature, work)?;
+        activate_dep(nodes, resolver, idx, unit, feature, work)?;
     }
     Ok(())
 }
@@ -421,10 +528,11 @@ fn activate_dep(
     nodes: &mut Vec<CrateNode>,
     resolver: &Resolver,
     idx: usize,
+    unit: Unit,
     dep_name: &str,
     work: &mut Vec<Work>,
 ) -> Result<()> {
-    if nodes[idx].enabled_optional_deps.contains(dep_name) {
+    if nodes[idx].unit(unit).enabled_optional_deps.contains(dep_name) {
         return Ok(());
     }
     let decl = match nodes[idx].deps.iter().find(|d| d.name == dep_name) {
@@ -433,27 +541,32 @@ fn activate_dep(
             d.default_features,
             d.features.clone(),
             d.req.clone(),
+            d.kind,
         ),
         None => return Ok(()), // e.g. a platform-filtered dep
     };
-    nodes[idx].enabled_optional_deps.insert(dep_name.to_string());
+    nodes[idx]
+        .unit_mut(unit)
+        .enabled_optional_deps
+        .insert(dep_name.to_string());
 
-    let (package, df, feats, req) = decl;
+    let (package, df, feats, req, kind) = decl;
     if let Some(child) = resolver.select(&package, req.as_ref(), nodes) {
         work.push(Work::ActivateCrate {
             idx: child,
+            unit: edge_unit(unit, kind),
             default_features: df,
             features: feats,
         });
     }
 
     // Flush weak features now that the dep is active
-    let deferred: Vec<(String, String)> = std::mem::take(&mut nodes[idx].deferred);
+    let deferred: Vec<(String, String)> = std::mem::take(&mut nodes[idx].unit_mut(unit).deferred);
     let (matching, rest): (Vec<_>, Vec<_>) =
         deferred.into_iter().partition(|(d, _)| d == dep_name);
-    nodes[idx].deferred = rest;
+    nodes[idx].unit_mut(unit).deferred = rest;
     for (d, f) in matching {
-        forward_feature(nodes, resolver, idx, &d, &f, work)?;
+        forward_feature(nodes, resolver, idx, unit, &d, &f, work)?;
     }
     Ok(())
 }
@@ -463,34 +576,39 @@ fn forward_feature(
     nodes: &mut Vec<CrateNode>,
     resolver: &Resolver,
     idx: usize,
+    unit: Unit,
     dep_name: &str,
     dep_feat: &str,
     work: &mut Vec<Work>,
 ) -> Result<()> {
     let decl = match nodes[idx].deps.iter().find(|d| d.name == dep_name) {
-        Some(d) => (d.package.clone(), d.req.clone()),
+        Some(d) => (d.package.clone(), d.req.clone(), d.kind),
         None => return Ok(()),
     };
     if let Some(child) = resolver.select(&decl.0, decl.1.as_ref(), nodes) {
         work.push(Work::Feature {
             idx: child,
+            unit: edge_unit(unit, decl.2),
             feature: dep_feat.to_string(),
         });
     }
     Ok(())
 }
 
-/// Final dep lists for the lock entry: mandatory deps plus activated optionals.
-fn emit_deps(
+/// Build the lock entry for one (crate, unit): mandatory deps plus activated
+/// optionals, each routed to its subrepo and unit-appropriate build target.
+fn emit_entry(
     n: &CrateNode,
+    unit: Unit,
     nodes: &[CrateNode],
     resolver: &Resolver,
-) -> Result<(Vec<LockDep>, Vec<LockDep>)> {
+    dual: &BTreeSet<usize>,
+) -> Result<LockEntry> {
     let mut deps = Vec::new();
     let mut build_deps = Vec::new();
     let mut seen: BTreeSet<(String, bool)> = BTreeSet::new();
     for d in &n.deps {
-        if d.optional && !n.enabled_optional_deps.contains(&d.name) {
+        if d.optional && !n.unit(unit).enabled_optional_deps.contains(&d.name) {
             continue;
         }
         let child = match resolver.select(&d.package, d.req.as_ref(), nodes) {
@@ -514,17 +632,33 @@ fn emit_deps(
         if !seen.insert((d.name.clone(), d.kind == DepKind::Build)) {
             continue;
         }
+        let child_unit = nodes[child].normalize_unit(edge_unit(unit, d.kind));
+        let crate_norm = nodes[child].crate_name.replace('-', "_");
+        // Route to the host variant only when the child is genuinely dual and
+        // this edge is a host edge
+        let target_name = if child_unit == Unit::Host && dual.contains(&child) {
+            format!("{}_host", crate_norm)
+        } else {
+            crate_norm
+        };
         let lock_dep = LockDep {
             name: d.name.clone(),
             crate_name: nodes[child].crate_name.clone(),
             subrepo: nodes[child].subrepo.clone(),
+            target_name,
         };
         match d.kind {
             DepKind::Normal => deps.push(lock_dep),
             DepKind::Build => build_deps.push(lock_dep),
         }
     }
-    Ok((deps, build_deps))
+    Ok(LockEntry {
+        crate_name: n.crate_name.clone(),
+        version: n.version.to_string(),
+        features: n.unit(unit).enabled_features.iter().cloned().collect(),
+        deps,
+        build_deps,
+    })
 }
 
 /// Extract dependency declarations, filtering platform-specific tables by cfg.

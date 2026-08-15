@@ -102,11 +102,8 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         .next()
         .unwrap_or(&args.subrepo)
         .to_string();
-    let lock_entry = args.lock.as_ref().and_then(|p| {
-        if !p.exists() {
-            return None;
-        }
-        match crate::resolve::LockFile::load(p) {
+    let (lock_entry, host_entry) = match args.lock.as_ref() {
+        Some(p) if p.exists() => match crate::resolve::LockFile::load(p) {
             Ok(lock) => {
                 let entry = lock.crates.get(&subrepo_key).cloned();
                 if entry.is_none() {
@@ -115,27 +112,29 @@ pub fn run(args: GenerateArgs) -> Result<()> {
                         subrepo_key
                     );
                 }
-                entry
+                (entry, lock.host_crates.get(&subrepo_key).cloned())
             }
             Err(e) => {
                 eprintln!("warning: {:#}", e);
-                None
+                (None, None)
             }
-        }
-    });
+        },
+        _ => (None, None),
+    };
+
+    let mk = |d: &crate::resolve::LockDep| {
+        let target_name = if d.target_name.is_empty() {
+            d.crate_name.replace('-', "_")
+        } else {
+            d.target_name.clone()
+        };
+        (
+            d.name.clone(),
+            format!("///{}/{}//:{}", args.third_party_folder, d.subrepo, target_name),
+        )
+    };
 
     let (requested_features, deps, build_deps) = if let Some(entry) = &lock_entry {
-        let mk = |d: &crate::resolve::LockDep| {
-            (
-                d.name.clone(),
-                format!(
-                    "///{}/{}//:{}",
-                    args.third_party_folder,
-                    d.subrepo,
-                    d.crate_name.replace('-', "_")
-                ),
-            )
-        };
         (
             entry.features.clone(),
             entry.deps.iter().map(mk).collect::<Vec<_>>(),
@@ -163,7 +162,7 @@ pub fn run(args: GenerateArgs) -> Result<()> {
     };
 
     // Generate BUILD file content
-    let build_content = generate_build_file(
+    let mut build_content = generate_build_file(
         crate_name,
         &args.version,
         edition,
@@ -173,7 +172,28 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         &build_deps,
         build_script_path.as_deref(),
         &lib_path,
+        "",
     );
+
+    // Host-unit variant for dual crates (proc-macro/build-script consumers
+    // with a different unified feature set than the target unit)
+    if let Some(host) = &host_entry {
+        let host_deps: Vec<(String, String)> = host.deps.iter().map(mk).collect();
+        let host_build_deps: Vec<(String, String)> = host.build_deps.iter().map(mk).collect();
+        build_content.push('\n');
+        build_content.push_str(&generate_build_file(
+            crate_name,
+            &args.version,
+            edition,
+            &crate_type,
+            &host.features,
+            &host_deps,
+            &host_build_deps,
+            build_script_path.as_deref(),
+            &lib_path,
+            "_host",
+        ));
+    }
 
     // Write BUILD file
     let build_path = args.src_root.join("BUILD");
@@ -380,10 +400,12 @@ fn generate_build_file(
     build_deps: &[(String, String)],
     build_script_path: Option<&str>,
     lib_path: &str,
+    suffix: &str,
 ) -> String {
     let mut content = String::new();
 
-    let normalized_name = crate_name.replace("-", "_");
+    let crate_ident = crate_name.replace("-", "_");
+    let normalized_name = format!("{}{}", crate_ident, suffix);
     let edition_str = match edition {
         cargo_toml::Edition::E2015 => "2015",
         cargo_toml::Edition::E2018 => "2018",
@@ -394,18 +416,18 @@ fn generate_build_file(
     // Multiple versions of a crate can coexist in one dependent's inputs, so
     // library filenames and metadata are disambiguated per version, the same
     // way cargo uses -C extra-filename/-C metadata.
-    let version_tag = version.replace(['.', '+'], "_");
+    let version_tag = format!("{}{}", version.replace(['.', '+'], "_"), suffix);
 
     // Determine outputs based on crate type
     let (out_rlib, out_rmeta, emit) = match crate_type {
         "proc-macro" => (
-            format!("lib{}-{}.so", normalized_name, version_tag),
-            format!("lib{}-{}.so", normalized_name, version_tag),
+            format!("lib{}-{}.so", crate_ident, version_tag),
+            format!("lib{}-{}.so", crate_ident, version_tag),
             "dep-info,link",
         ),
         _ => (
-            format!("lib{}-{}.rlib", normalized_name, version_tag),
-            format!("lib{}-{}.rmeta", normalized_name, version_tag),
+            format!("lib{}-{}.rlib", crate_ident, version_tag),
+            format!("lib{}-{}.rmeta", crate_ident, version_tag),
             "dep-info,link,metadata",
         ),
     };
@@ -440,6 +462,7 @@ fn generate_build_file(
         content.push_str("\n");
         content.push_str(&generate_compile_rule_with_buildscript(
             &normalized_name,
+            &crate_ident,
             edition_str,
             crate_type,
             &out_rlib,
@@ -452,6 +475,7 @@ fn generate_build_file(
     } else {
         content.push_str(&generate_compile_rule(
             &normalized_name,
+            &crate_ident,
             edition_str,
             crate_type,
             &out_rlib,
@@ -556,6 +580,7 @@ fn generate_build_script_rule(
 /// Generate the main compile rule with buildscript support (Stage 2)
 fn generate_compile_rule_with_buildscript(
     normalized_name: &str,
+    crate_ident: &str,
     edition_str: &str,
     crate_type: &str,
     out_rlib: &str,
@@ -578,7 +603,7 @@ fn generate_compile_rule_with_buildscript(
     // Compile command with --buildscript flag
     let compile_base = format!(
         "$TOOLS_PLEASE_RUST compile --externconfig externconfig --buildscript $SRCS_BUILDSCRIPT --manifest-path $SRCS_MANIFEST --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cap-lints allow --crate-name {} --edition {} --crate-type {} --emit {} {}",
-        normalized_name, edition_str, crate_type, emit, feature_str
+        crate_ident, edition_str, crate_type, emit, feature_str
     );
 
     let cmd_dbg = format!(
@@ -643,6 +668,7 @@ fn generate_compile_rule_with_buildscript(
 /// Generate the main compile rule (no build script)
 fn generate_compile_rule(
     normalized_name: &str,
+    crate_ident: &str,
     edition_str: &str,
     crate_type: &str,
     out_rlib: &str,
@@ -664,7 +690,7 @@ fn generate_compile_rule(
 
     let compile_base = format!(
         "$TOOLS_PLEASE_RUST compile --externconfig externconfig --manifest-path $SRCS_MANIFEST --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cap-lints allow --crate-name {} --edition {} --crate-type {} --emit {} {}",
-        normalized_name, edition_str, crate_type, emit, feature_str
+        crate_ident, edition_str, crate_type, emit, feature_str
     );
 
     let cmd_dbg = format!(
