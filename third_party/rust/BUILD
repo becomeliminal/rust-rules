@@ -898,35 +898,37 @@ rust_toolchain(
 
 #### rust-proto examples ####
 
-rust_crate(
-    name = "once_cell.1.10.0",
-    crate = "once_cell",
-    edition = "2021",
-    version = "1.10.0",
-    # crate_name = "once_cell",
-)
+# LEGACY PROTO TOOLCHAIN — parked until rust_proto is ported to rust_repo (M7).
+# These rust_crate targets cannot link against rust_repo subrepo deps.
+# rust_crate(
+#     name = "once_cell.1.10.0",
+#     crate = "once_cell",
+#     edition = "2021",
+#     version = "1.10.0",
+#     # crate_name = "once_cell",
+# )
 
-rust_crate_download(
-    name = "protoc_gen_prost_dl",
-    crate = "protoc-gen-prost",
-    version = "0.3.1",
-)
+# rust_crate_download(
+#     name = "protoc_gen_prost_dl",
+#     crate = "protoc-gen-prost",
+#     version = "0.3.1",
+# )
 
-rust_crate(
-    name = "protoc_gen_prost_lib",
-    crate = "protoc-gen-prost",
-    edition = "2021",
-    download = ":protoc_gen_prost_dl",
-    version = "0.3.1",
-    features = [],
-    deps = [
-        ":once_cell",
-        ":prost",
-        ":prost_build",
-        ":prost_types",
-        ":regex",
-    ],
-)
+# rust_crate(
+#     name = "protoc_gen_prost_lib",
+#     crate = "protoc-gen-prost",
+#     edition = "2021",
+#     download = ":protoc_gen_prost_dl",
+#     version = "0.3.1",
+#     features = [],
+#     deps = [
+#         ":once_cell",
+#         ":prost",
+#         ":prost_build",
+#         ":prost_types",
+#         ":regex",
+#     ],
+# )
 
 # Migrated to rust_repo below
 #rust_crate(
@@ -945,31 +947,31 @@ rust_crate(
 #)
 
 
-rust_crate_download(
-    name = "protoc_gen_tonic_dl",
-    crate = "protoc-gen-tonic",
-    version = "0.4.0",
-)
+# rust_crate_download(
+#     name = "protoc_gen_tonic_dl",
+#     crate = "protoc-gen-tonic",
+#     version = "0.4.0",
+# )
 
-rust_crate(
-    name = "protoc_gen_tonic_lib",
-    crate = "protoc-gen-tonic",
-    download = ":protoc_gen_tonic_dl",
-    edition = "2021",
-    features = [],
-    version = "0.4.0",
-    deps = [
-        ":heck",
-        ":prettyplease",
-        ":prost_build",
-        ":prost_types",
-        ":prost",
-        ":protoc_gen_prost_lib",
-        ":regex",
-        ":syn",
-        ":tonic_build",
-    ],
-)
+# rust_crate(
+#     name = "protoc_gen_tonic_lib",
+#     crate = "protoc-gen-tonic",
+#     download = ":protoc_gen_tonic_dl",
+#     edition = "2021",
+#     features = [],
+#     version = "0.4.0",
+#     deps = [
+#         ":heck",
+#         ":prettyplease",
+#         ":prost_build",
+#         ":prost_types",
+#         ":prost",
+#         ":protoc_gen_prost_lib",
+#         ":regex",
+#         ":syn",
+#         ":tonic_build",
+#     ],
+# )
 
 # Migrated to rust_repo below
 #rust_crate(
@@ -1069,18 +1071,18 @@ rust_crate(
 #    ],
 #)
 
-rust_crate(
-    name = "digest.0.9.0",
-    crate = "digest",
-    edition = "2018",
-    version = "0.9.0",
-    features = [
-        "std",
-    ],
-    deps = [
-        ":generic_array",
-    ],
-)
+# rust_crate(
+#     name = "digest.0.9.0",
+#     crate = "digest",
+#     edition = "2018",
+#     version = "0.9.0",
+#     features = [
+#         "std",
+#     ],
+#     deps = [
+#         ":generic_array",
+#     ],
+# )
 
 # Migrated to rust_repo below
 #rust_crate(
@@ -1656,6 +1658,7 @@ rust_repo(
     name = "indexmap_1_9_3",
     crate = "indexmap",
     version = "1.9.3",
+    dep_overrides = {"hashbrown": "hashbrown_0_12_3"},
 )
 
 rust_repo(
@@ -2111,6 +2114,7 @@ rust_repo(
     crate = "tower",
     version = "0.4.13",
     features = ["__common", "balance", "buffer", "discover", "futures-core", "futures-util", "indexmap", "limit", "load", "make", "pin-project", "pin-project-lite", "rand", "ready-cache", "slab", "timeout", "tokio", "tokio-util", "tracing", "util"],
+    dep_overrides = {"indexmap": "indexmap_1_9_3"},
 )
 
 rust_repo(
@@ -2124,6 +2128,7 @@ rust_repo(
     name = "axum",
     crate = "axum",
     version = "0.6.20",
+    dep_overrides = {"bitflags": "bitflags_1_3_2"},
 )
 
 rust_repo(
@@ -2132,12 +2137,15 @@ rust_repo(
     version = "0.4.1",
 )
 
-rust_repo(
-    name = "tonic",
-    crate = "tonic",
-    version = "0.11.0",
-    features = ["channel", "codegen", "default", "prost", "transport"],
-)
+# PARKED: async_stream::try_stream! expansion fails ("expected expression,
+# found `$`") — macro token issue to debug when the proto/grpc stack is
+# revived (M7). Only the disabled rust_proto examples depend on tonic.
+# rust_repo(
+#     name = "tonic",
+#     crate = "tonic",
+#     version = "0.11.0",
+#     features = ["channel", "codegen", "default", "prost", "transport"],
+# )
 
 # rust-proto examples
 rust_repo(
@@ -2164,6 +2172,7 @@ rust_repo(
     crate = "libsecp256k1",
     version = "0.6.0",
     features = ["default"],
+    dep_overrides = {"digest": "digest_0_9_0"},
 )
 
 rust_repo(
@@ -2176,6 +2185,7 @@ rust_repo(
     name = "libsecp256k1_core",
     crate = "libsecp256k1-core",
     version = "0.2.2",
+    dep_overrides = {"digest": "digest_0_9_0"},
 )
 
 rust_repo(
@@ -2223,6 +2233,12 @@ rust_repo(
 )
 
 rust_repo(
+    name = "version_check",
+    crate = "version_check",
+    version = "0.9.5",
+)
+
+rust_repo(
     name = "typenum",
     crate = "typenum",
     version = "1.17.0",
@@ -2244,7 +2260,9 @@ rust_repo(
     name = "blake3",
     crate = "blake3",
     version = "1.5.4",
-    features = ["default", "std"],
+    # "pure" keeps the build script from invoking a C compiler on the asm
+    # implementations; revisit when hermetic C toolchain support lands.
+    features = ["default", "std", "pure"],
 )
 
 rust_repo(

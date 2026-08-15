@@ -102,14 +102,21 @@ pub fn run(args: BuildScriptArgs) -> Result<()> {
     let out_dir = args.out_dir.canonicalize()
         .with_context(|| format!("Failed to canonicalize OUT_DIR: {}", args.out_dir.display()))?;
 
-    // 3. Compile build.rs as a binary
-    let build_script_binary = compile_build_script(&args, &out_dir)?;
-
-    // 4. Build environment variables
+    // 3. Build environment variables (cargo sets these at compile time of the
+    //    build script too, e.g. for env!("CARGO_PKG_VERSION") in build.rs)
     let env = build_environment(&args, pkg, &out_dir)?;
 
-    // 5. Execute build script
-    let directives = execute_build_script(&build_script_binary, &env)?;
+    // 4. Compile build.rs as a binary
+    let edition = match pkg.edition.get() {
+        Ok(cargo_toml::Edition::E2015) => "2015",
+        Ok(cargo_toml::Edition::E2018) => "2018",
+        _ => "2021",
+    };
+    let build_script_binary = compile_build_script(&args, &out_dir, edition, &env)?;
+
+    // 5. Execute build script from the package root (cargo contract)
+    let manifest_dir = PathBuf::from(env.get("CARGO_MANIFEST_DIR").cloned().unwrap_or_else(|| ".".to_string()));
+    let directives = execute_build_script(&build_script_binary, &env, &manifest_dir)?;
 
     // 6. Print warnings
     for warning in &directives.warnings {
@@ -128,7 +135,12 @@ pub fn run(args: BuildScriptArgs) -> Result<()> {
     Ok(())
 }
 
-fn compile_build_script(args: &BuildScriptArgs, out_dir: &Path) -> Result<PathBuf> {
+fn compile_build_script(
+    args: &BuildScriptArgs,
+    out_dir: &Path,
+    edition: &str,
+    env: &HashMap<String, String>,
+) -> Result<PathBuf> {
     let binary_path = out_dir.join("build_script");
 
     let mut cmd = Command::new(&args.rustc);
@@ -136,9 +148,15 @@ fn compile_build_script(args: &BuildScriptArgs, out_dir: &Path) -> Result<PathBu
     cmd.arg(&args.build_script)
         .arg("--crate-name=build_script")
         .arg("--crate-type=bin")
-        .arg("--edition=2021")
+        .arg(format!("--edition={}", edition))
         .arg("-o")
         .arg(&binary_path);
+
+    // Cargo exposes the package env vars at compile time as well as run time
+    // (build scripts may use env!("CARGO_PKG_VERSION") etc.)
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
 
     // Set sysroot if provided (tells rustc where to find std/core)
     if let Some(sysroot) = &args.sysroot {
@@ -226,6 +244,18 @@ fn build_environment(
     env.insert("RUSTC".to_string(), args.rustc.display().to_string());
     env.insert("RUSTDOC".to_string(), "rustdoc".to_string());
 
+    // Probing build scripts (autocfg etc.) invoke $RUSTC themselves and honor
+    // RUSTFLAGS; without the sysroot every probe fails as "can't find core"
+    // and crates silently configure themselves for no_std.
+    if let Some(sysroot) = &args.sysroot {
+        let sysroot_abs = sysroot.canonicalize().unwrap_or_else(|_| sysroot.clone());
+        env.insert("RUSTFLAGS".to_string(), format!("--sysroot {}", sysroot_abs.display()));
+        env.insert(
+            "CARGO_ENCODED_RUSTFLAGS".to_string(),
+            format!("--sysroot\u{1f}{}", sysroot_abs.display()),
+        );
+    }
+
     // Optimization level
     if args.optimize {
         env.insert("OPT_LEVEL".to_string(), "3".to_string());
@@ -237,91 +267,10 @@ fn build_environment(
         env.insert("PROFILE".to_string(), "debug".to_string());
     }
 
-    // Package metadata - CARGO_PKG_NAME
-    env.insert("CARGO_PKG_NAME".to_string(), pkg.name.clone());
-
-    // CARGO_PKG_VERSION and components
-    // pkg.version is Inheritable<String>, .get() returns Result<&String, Error>
-    let version_str = pkg.version.get()
-        .map(|v| v.clone())
-        .unwrap_or_else(|_| "0.0.0".to_string());
-    env.insert("CARGO_PKG_VERSION".to_string(), version_str.clone());
-
-    // Parse version components (e.g., "1.2.3-beta.1" -> major=1, minor=2, patch=3, pre=beta.1)
-    let parts: Vec<&str> = version_str.split('.').collect();
-    env.insert("CARGO_PKG_VERSION_MAJOR".to_string(), parts.first().unwrap_or(&"0").to_string());
-    env.insert("CARGO_PKG_VERSION_MINOR".to_string(), parts.get(1).unwrap_or(&"0").to_string());
-
-    // Handle patch version which might have pre-release suffix
-    let patch_part = parts.get(2).unwrap_or(&"0");
-    let (patch, pre) = if let Some(idx) = patch_part.find('-') {
-        (&patch_part[..idx], &patch_part[idx + 1..])
-    } else {
-        (*patch_part, "")
-    };
-    env.insert("CARGO_PKG_VERSION_PATCH".to_string(), patch.to_string());
-    env.insert("CARGO_PKG_VERSION_PRE".to_string(), pre.to_string());
-
-    // CARGO_PKG_AUTHORS - deprecated but still used by some build scripts
-    // pkg.authors is Inheritable<Vec<String>>
-    if let Ok(authors) = pkg.authors.get() {
-        env.insert("CARGO_PKG_AUTHORS".to_string(), authors.join(":"));
-    } else {
-        env.insert("CARGO_PKG_AUTHORS".to_string(), "".to_string());
+    // Package metadata (CARGO_PKG_*)
+    for (key, value) in package_env(pkg) {
+        env.insert(key, value);
     }
-
-    // CARGO_PKG_DESCRIPTION - pkg.description is Option<Inheritable<String>>
-    if let Some(ref desc_inheritable) = pkg.description {
-        if let Ok(desc) = desc_inheritable.get() {
-            env.insert("CARGO_PKG_DESCRIPTION".to_string(), desc.clone());
-        }
-    }
-    // Set empty string if not present (Cargo does this)
-    env.entry("CARGO_PKG_DESCRIPTION".to_string()).or_insert_with(|| "".to_string());
-
-    // CARGO_PKG_HOMEPAGE - pkg.homepage is Option<Inheritable<String>>
-    if let Some(ref homepage_inheritable) = pkg.homepage {
-        if let Ok(homepage) = homepage_inheritable.get() {
-            env.insert("CARGO_PKG_HOMEPAGE".to_string(), homepage.clone());
-        }
-    }
-    env.entry("CARGO_PKG_HOMEPAGE".to_string()).or_insert_with(|| "".to_string());
-
-    // CARGO_PKG_REPOSITORY - pkg.repository is Option<Inheritable<String>>
-    if let Some(ref repo_inheritable) = pkg.repository {
-        if let Ok(repo) = repo_inheritable.get() {
-            env.insert("CARGO_PKG_REPOSITORY".to_string(), repo.clone());
-        }
-    }
-    env.entry("CARGO_PKG_REPOSITORY".to_string()).or_insert_with(|| "".to_string());
-
-    // CARGO_PKG_LICENSE - pkg.license is Option<Inheritable<String>>
-    if let Some(ref license_inheritable) = pkg.license {
-        if let Ok(license) = license_inheritable.get() {
-            env.insert("CARGO_PKG_LICENSE".to_string(), license.clone());
-        }
-    }
-    env.entry("CARGO_PKG_LICENSE".to_string()).or_insert_with(|| "".to_string());
-
-    // CARGO_PKG_LICENSE_FILE - pkg.license_file is Option<Inheritable<PathBuf>>
-    if let Some(ref license_file_inheritable) = pkg.license_file {
-        if let Ok(license_file) = license_file_inheritable.get() {
-            env.insert("CARGO_PKG_LICENSE_FILE".to_string(), license_file.display().to_string());
-        }
-    }
-    env.entry("CARGO_PKG_LICENSE_FILE".to_string()).or_insert_with(|| "".to_string());
-
-    // CARGO_PKG_RUST_VERSION - pkg.rust_version is Option<Inheritable<String>>
-    if let Some(ref rust_version_inheritable) = pkg.rust_version {
-        if let Ok(rust_version) = rust_version_inheritable.get() {
-            env.insert("CARGO_PKG_RUST_VERSION".to_string(), rust_version.clone());
-        }
-    }
-    env.entry("CARGO_PKG_RUST_VERSION".to_string()).or_insert_with(|| "".to_string());
-
-    // CARGO_PKG_README - pkg.readme is Inheritable<OptionalFile>
-    // OptionalFile is complex, just set empty for now if not easily extractable
-    env.insert("CARGO_PKG_README".to_string(), "".to_string());
 
     // Feature environment variables
     for feature in &args.features {
@@ -368,8 +317,71 @@ fn build_environment(
     Ok(env)
 }
 
-fn execute_build_script(binary_path: &Path, env: &HashMap<String, String>) -> Result<Directives> {
+/// Package metadata environment variables (CARGO_PKG_*).
+///
+/// Cargo sets these both when running build scripts and when compiling the
+/// crate itself, so this is shared with the compile subcommand.
+pub fn package_env(pkg: &cargo_toml::Package) -> Vec<(String, String)> {
+    let mut env: Vec<(String, String)> = Vec::new();
+
+    env.push(("CARGO_PKG_NAME".to_string(), pkg.name.clone()));
+
+    // CARGO_PKG_VERSION and components
+    // pkg.version is Inheritable<String>, .get() returns Result<&String, Error>
+    let version_str = pkg.version.get()
+        .map(|v| v.clone())
+        .unwrap_or_else(|_| "0.0.0".to_string());
+    env.push(("CARGO_PKG_VERSION".to_string(), version_str.clone()));
+
+    // Parse version components (e.g., "1.2.3-beta.1" -> major=1, minor=2, patch=3, pre=beta.1)
+    let parts: Vec<&str> = version_str.split('.').collect();
+    env.push(("CARGO_PKG_VERSION_MAJOR".to_string(), parts.first().unwrap_or(&"0").to_string()));
+    env.push(("CARGO_PKG_VERSION_MINOR".to_string(), parts.get(1).unwrap_or(&"0").to_string()));
+
+    // Handle patch version which might have pre-release suffix
+    let patch_part = parts.get(2).unwrap_or(&"0");
+    let (patch, pre) = if let Some(idx) = patch_part.find('-') {
+        (&patch_part[..idx], &patch_part[idx + 1..])
+    } else {
+        (*patch_part, "")
+    };
+    env.push(("CARGO_PKG_VERSION_PATCH".to_string(), patch.to_string()));
+    env.push(("CARGO_PKG_VERSION_PRE".to_string(), pre.to_string()));
+
+    // CARGO_PKG_AUTHORS - deprecated but still used by some build scripts
+    let authors = pkg.authors.get().map(|a| a.join(":")).unwrap_or_default();
+    env.push(("CARGO_PKG_AUTHORS".to_string(), authors));
+
+    // Optional string metadata; cargo sets empty strings when absent
+    let opt = |field: &Option<cargo_toml::Inheritable<String>>| -> String {
+        field.as_ref().and_then(|f| f.get().ok()).cloned().unwrap_or_default()
+    };
+    env.push(("CARGO_PKG_DESCRIPTION".to_string(), opt(&pkg.description)));
+    env.push(("CARGO_PKG_HOMEPAGE".to_string(), opt(&pkg.homepage)));
+    env.push(("CARGO_PKG_REPOSITORY".to_string(), opt(&pkg.repository)));
+    env.push(("CARGO_PKG_LICENSE".to_string(), opt(&pkg.license)));
+    env.push((
+        "CARGO_PKG_LICENSE_FILE".to_string(),
+        pkg.license_file.as_ref().and_then(|f| f.get().ok()).map(|p| p.display().to_string()).unwrap_or_default(),
+    ));
+    env.push(("CARGO_PKG_RUST_VERSION".to_string(), opt(&pkg.rust_version)));
+
+    // CARGO_PKG_README - pkg.readme is Inheritable<OptionalFile>
+    // OptionalFile is complex, just set empty for now if not easily extractable
+    env.push(("CARGO_PKG_README".to_string(), "".to_string()));
+
+    env
+}
+
+fn execute_build_script(
+    binary_path: &Path,
+    env: &HashMap<String, String>,
+    manifest_dir: &Path,
+) -> Result<Directives> {
     let mut cmd = Command::new(binary_path);
+
+    // Cargo runs build scripts with cwd = the package root
+    cmd.current_dir(manifest_dir);
 
     // Clear environment and set only what we want
     cmd.env_clear();
@@ -453,8 +465,10 @@ fn write_directives(output: &Path, directives: &Directives, out_dir: &Path) -> R
     content.push_str("# Generated by please_rust build-script\n");
     content.push_str(&format!("# OUT_DIR={}\n", out_dir.display()));
 
-    // Write OUT_DIR so compile can access generated files
-    content.push_str(&format!("out-dir={}\n", out_dir.display()));
+    // Record OUT_DIR by name only: this sandbox's absolute path is gone by the
+    // time the crate compiles, so compile resolves it relative to this file.
+    let out_dir_name = out_dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "out".to_string());
+    content.push_str(&format!("out-dir={}\n", out_dir_name));
 
     for cfg in &directives.rustc_cfgs {
         content.push_str(&format!("rustc-cfg={}\n", cfg));

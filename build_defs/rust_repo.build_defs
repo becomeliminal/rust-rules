@@ -38,6 +38,7 @@ def rust_repo(
     visibility: list = ["PUBLIC"],
     third_party_path: str = "third_party/rust",
     labels: list = [],
+    dep_overrides: dict = {},
 ):
     """Downloads a crate and generates BUILD files as a subrepo.
 
@@ -58,6 +59,9 @@ def rust_repo(
         visibility: Visibility for the install target.
         third_party_path: Where subrepos are placed.
         labels: Labels for the rule.
+        dep_overrides: Routes named deps to versioned subrepos, e.g.
+                       {"hashbrown": "hashbrown_0_12_3"}. Keys are real crate
+                       (package) names, values are subrepo names.
     """
     if not crate:
         fail("crate is required for rust_repo")
@@ -101,7 +105,7 @@ def rust_repo(
         "rm -rf $SRCS/.plzconfig",
         "find $SRCS -name BUILD -delete",
         # Run please_rust generate (SRCS points directly to the extracted directory)
-        f"$TOOL generate --crate-name {crate} --version {version} --src-root $SRCS --subrepo {pkg_name}/{subrepo_name} --features '{features_arg}' --install '{install_arg}' --third-party-folder {third_party_path}",
+        f"$TOOL generate --crate-name {crate} --version {version} --src-root $SRCS --subrepo {pkg_name}/{subrepo_name} --features '{features_arg}' --install '{install_arg}' --third-party-folder {third_party_path}" + "".join([f" --override {k}={v}" for k, v in sorted(dep_overrides.items())]),
         # Move to output
         "mv $SRCS $OUT",
     ]

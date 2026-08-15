@@ -10,6 +10,25 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Resolve the OUT_DIR recorded in a buildscript directives file to an
+/// absolute path. Tries, in order: relative to the directives file itself
+/// (the normal case — the out dir is a sibling output of the same rule),
+/// then as given (absolute paths from older directive files).
+fn resolve_out_dir(recorded: &Path, buildscript: Option<&Path>) -> Option<PathBuf> {
+    if let Some(bs) = buildscript {
+        if let Some(parent) = bs.parent() {
+            let candidate = parent.join(recorded);
+            if candidate.is_dir() {
+                return candidate.canonicalize().ok();
+            }
+        }
+    }
+    if recorded.is_dir() {
+        return recorded.canonicalize().ok();
+    }
+    None
+}
+
 /// Recursively search for a file with the given name in the directory tree
 fn find_file_recursive(dir: &str, filename: &str) -> Option<PathBuf> {
     let dir_path = Path::new(dir);
@@ -46,6 +65,11 @@ pub struct CompileArgs {
     #[arg(long)]
     pub buildscript: Option<PathBuf>,
 
+    /// Path to Cargo.toml; sets CARGO_PKG_*/CARGO_MANIFEST_DIR for the compile
+    /// (crates may use env!("CARGO_PKG_VERSION") etc. in normal source)
+    #[arg(long)]
+    pub manifest_path: Option<PathBuf>,
+
     /// Path to rustc binary
     #[arg(long, default_value = "rustc")]
     pub rustc: PathBuf,
@@ -74,9 +98,18 @@ pub struct CompileArgs {
     #[arg(short = 'L', long = "search-path")]
     pub search_paths: Vec<PathBuf>,
 
+    /// Additional -C codegen options (e.g. metadata=..., extra-filename=...)
+    #[arg(short = 'C', long = "codegen")]
+    pub codegen: Vec<String>,
+
     /// Features to enable
     #[arg(long = "feature")]
     pub features: Vec<String>,
+
+    /// Dependency renames as depname=cratename (e.g. libc_errno=errno for
+    /// deps declared with package = "..."). Adds --extern depname=<path of cratename>.
+    #[arg(long = "rename")]
+    pub renames: Vec<String>,
 
     /// Build a test harness (passes --test to rustc)
     #[arg(long)]
@@ -147,9 +180,16 @@ pub fn run(args: CompileArgs) -> Result<()> {
         cmd.arg("--sysroot").arg(sysroot);
     }
 
+    // The proc_macro crate is compiler-provided; cargo injects it into the
+    // extern prelude for proc-macro crates.
+    if args.crate_type == "proc-macro" {
+        cmd.arg("--extern").arg("proc_macro");
+    }
+
     // Parse externconfig and add --extern flags
     // The externconfig contains lines like: crate_name=libcrate.rlib
     // We search for the actual file in the current directory tree
+    let mut extern_paths: Vec<(String, PathBuf)> = Vec::new();
     if let Some(config_path) = &args.externconfig {
         if config_path.exists() {
             let content = fs::read_to_string(config_path)
@@ -178,10 +218,24 @@ pub fn run(args: CompileArgs) -> Result<()> {
                                 cmd.arg("-L").arg(dir);
                             }
                         }
+                        extern_paths.push((name.to_string(), path));
                     } else {
                         eprintln!("Warning: Could not find {} for crate {}", filename, name);
                     }
                 }
+            }
+        }
+    }
+
+    // Renamed deps: source refers to them by the rename, so add an extra
+    // --extern under that name pointing at the real crate's library.
+    for rename in &args.renames {
+        if let Some((dep_name, crate_name)) = rename.split_once('=') {
+            if let Some((_, path)) = extern_paths.iter().find(|(n, _)| n == crate_name.trim()) {
+                cmd.arg("--extern");
+                cmd.arg(format!("{}={}", dep_name.trim(), path.display()));
+            } else {
+                eprintln!("Warning: rename {}: crate {} not found in externconfig", dep_name, crate_name);
             }
         }
     }
@@ -210,6 +264,9 @@ pub fn run(args: CompileArgs) -> Result<()> {
     cmd.arg(format!("--emit={}", args.emit));
     cmd.arg("--error-format=human");
     cmd.arg("-C").arg("embed-bitcode=no");
+    for opt in &args.codegen {
+        cmd.arg("-C").arg(opt);
+    }
 
     // Search paths from command line
     for path in &args.search_paths {
@@ -227,9 +284,40 @@ pub fn run(args: CompileArgs) -> Result<()> {
             }
         }
 
-        // Add OUT_DIR as a search path (for generated code)
+        // Resolve OUT_DIR and expose it both as a search path and as the
+        // OUT_DIR env var (for include!(concat!(env!("OUT_DIR"), ...))).
+        // The directives file records it relative to itself, since the
+        // build-script rule's sandbox no longer exists at compile time.
         if let Some(ref out_dir) = directives.out_dir {
-            cmd.arg("-L").arg(out_dir);
+            if let Some(resolved) = resolve_out_dir(out_dir, args.buildscript.as_deref()) {
+                cmd.arg("-L").arg(&resolved);
+                cmd.env("OUT_DIR", &resolved);
+            } else {
+                eprintln!("Warning: OUT_DIR {} not found", out_dir.display());
+            }
+        }
+    }
+
+    // Package metadata env vars from Cargo.toml
+    if let Some(mp) = &args.manifest_path {
+        if mp.exists() {
+            let content = fs::read(mp)
+                .with_context(|| format!("Failed to read {}", mp.display()))?;
+            if let Ok(manifest) = cargo_toml::Manifest::from_slice(&content) {
+                if let Some(pkg) = &manifest.package {
+                    for (key, value) in crate::build_script::package_env(pkg) {
+                        cmd.env(key, value);
+                    }
+                }
+            }
+            let manifest_dir = match mp.parent() {
+                Some(p) if !p.as_os_str().is_empty() => p.canonicalize().ok(),
+                _ => std::env::current_dir().ok(),
+            };
+            if let Some(dir) = manifest_dir {
+                cmd.env("CARGO_MANIFEST_DIR", dir);
+            }
+            cmd.env("CARGO", "/bin/false");
         }
     }
 

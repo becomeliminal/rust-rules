@@ -38,6 +38,11 @@ pub struct GenerateArgs {
     /// Targets to install/export (comma-separated)
     #[arg(long, default_value = "")]
     pub install: String,
+
+    /// Dependency overrides as package=subrepo_name, routing a dep to a
+    /// versioned subrepo (e.g. hashbrown=hashbrown_0_12_3)
+    #[arg(long = "override")]
+    pub overrides: Vec<String>,
 }
 
 pub fn run(args: GenerateArgs) -> Result<()> {
@@ -56,13 +61,28 @@ pub fn run(args: GenerateArgs) -> Result<()> {
     let crate_name = &args.crate_name;
     let edition = package.edition.get().unwrap_or(&cargo_toml::Edition::E2021);
 
-    // Check if build script is enabled
-    // build = false means disabled, build = true or build = "path" means enabled
-    let has_build_script = match &package.build {
-        Some(cargo_toml::OptionalFile::Flag(false)) => false,  // Explicitly disabled
-        Some(_) => true,  // Path or Flag(true)
-        None => false,    // Not specified (no build.rs)
+    // Check if build script is enabled and where it lives.
+    // build = false means disabled; build = "path" overrides the default build.rs
+    let build_script_path = match &package.build {
+        Some(cargo_toml::OptionalFile::Flag(false)) => None,
+        Some(cargo_toml::OptionalFile::Path(p)) => Some(p.to_string_lossy().to_string()),
+        Some(cargo_toml::OptionalFile::Flag(true)) => Some("build.rs".to_string()),
+        None => {
+            // Cargo auto-detects build.rs in the package root
+            if args.src_root.join("build.rs").exists() {
+                Some("build.rs".to_string())
+            } else {
+                None
+            }
+        }
     };
+
+    // Library root; [lib] path overrides the default src/lib.rs (e.g. fnv uses lib.rs)
+    let lib_path = manifest
+        .lib
+        .as_ref()
+        .and_then(|l| l.path.clone())
+        .unwrap_or_else(|| "src/lib.rs".to_string());
 
     // Determine crate type
     let crate_type = determine_crate_type(&manifest);
@@ -74,8 +94,15 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         args.features.split(',').map(|s| s.trim().to_string()).collect()
     };
 
+    // Dependency overrides (package -> subrepo name)
+    let overrides: std::collections::HashMap<String, String> = args
+        .overrides
+        .iter()
+        .filter_map(|o| o.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
+        .collect();
+
     // Resolve dependencies to subrepo targets
-    let deps = resolve_dependencies(&manifest, &args.third_party_folder, &requested_features);
+    let deps = resolve_dependencies(&manifest, &args.third_party_folder, &requested_features, &overrides);
 
     // Resolve build-dependencies (for build.rs compilation)
     let build_deps = resolve_build_dependencies(&manifest, &args.third_party_folder);
@@ -83,13 +110,14 @@ pub fn run(args: GenerateArgs) -> Result<()> {
     // Generate BUILD file content
     let build_content = generate_build_file(
         crate_name,
+        &args.version,
         edition,
         &crate_type,
         &requested_features,
         &deps,
         &build_deps,
-        has_build_script,
-        &args.subrepo,
+        build_script_path.as_deref(),
+        &lib_path,
     );
 
     // Write BUILD file
@@ -145,12 +173,20 @@ fn resolve_dependencies(
     manifest: &Manifest,
     third_party_folder: &str,
     enabled_features: &[String],
+    overrides: &std::collections::HashMap<String, String>,
 ) -> Vec<(String, String)> {
     let mut deps = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
     // Helper to add a dependency
     let mut add_dep = |name: &str, dep: &cargo_toml::Dependency| {
+        // Renamed deps (package = "...") point at the real crate; the
+        // rustc-std-workspace-* shims only exist for building std itself.
+        let package_name = dep.package().unwrap_or(name);
+        if package_name.starts_with("rustc-std-workspace") {
+            return;
+        }
+
         // Check if this is an optional dependency
         let is_optional = dep.optional();
 
@@ -184,12 +220,18 @@ fn resolve_dependencies(
 
         // Convert crate name to subrepo target
         // e.g., "serde-derive" -> "///third_party/rust/serde_derive//:serde_derive"
-        let normalized_name = name.replace("-", "_");
+        // Overrides route to a versioned subrepo; the target inside is still
+        // named after the crate.
+        let normalized_name = package_name.replace("-", "_");
+        let subrepo_name = overrides
+            .get(package_name)
+            .cloned()
+            .unwrap_or_else(|| normalized_name.clone());
         if seen.insert(normalized_name.clone()) {
             let target = format!(
                 "///{}/{}//:{}",
                 third_party_folder,
-                normalized_name,
+                subrepo_name,
                 normalized_name
             );
             deps.push((name.to_string(), target));
@@ -275,13 +317,14 @@ fn resolve_build_dependencies(
 
 fn generate_build_file(
     crate_name: &str,
+    version: &str,
     edition: &cargo_toml::Edition,
     crate_type: &str,
     features: &[String],
     deps: &[(String, String)],
     build_deps: &[(String, String)],
-    has_build_script: bool,
-    _subrepo: &str,
+    build_script_path: Option<&str>,
+    lib_path: &str,
 ) -> String {
     let mut content = String::new();
 
@@ -290,19 +333,24 @@ fn generate_build_file(
         cargo_toml::Edition::E2015 => "2015",
         cargo_toml::Edition::E2018 => "2018",
         cargo_toml::Edition::E2021 => "2021",
-        _ => "2021",
+        _ => "2024",
     };
+
+    // Multiple versions of a crate can coexist in one dependent's inputs, so
+    // library filenames and metadata are disambiguated per version, the same
+    // way cargo uses -C extra-filename/-C metadata.
+    let version_tag = version.replace(['.', '+'], "_");
 
     // Determine outputs based on crate type
     let (out_rlib, out_rmeta, emit) = match crate_type {
         "proc-macro" => (
-            format!("lib{}.so", normalized_name),
-            format!("lib{}.so", normalized_name),
+            format!("lib{}-{}.so", normalized_name, version_tag),
+            format!("lib{}-{}.so", normalized_name, version_tag),
             "dep-info,link",
         ),
         _ => (
-            format!("lib{}.rlib", normalized_name),
-            format!("lib{}.rmeta", normalized_name),
+            format!("lib{}-{}.rlib", normalized_name, version_tag),
+            format!("lib{}-{}.rmeta", normalized_name, version_tag),
             "dep-info,link,metadata",
         ),
     };
@@ -312,11 +360,28 @@ fn generate_build_file(
         .iter()
         .map(|f| format!("--feature {}", f))
         .collect();
-    let feature_str = feature_args.join(" ");
+    let mut feature_str = feature_args.join(" ");
+
+    // Renamed deps (declared name differs from the real package): tell
+    // compile to add an --extern under the declared name too.
+    for (name, target) in deps {
+        let dep_norm = name.replace('-', "_");
+        if let Some(pkg) = target.rsplit(':').next() {
+            if dep_norm != pkg {
+                feature_str.push_str(&format!(" --rename {}={}", dep_norm, pkg));
+            }
+        }
+    }
+
+    // Version-disambiguated symbols and output filenames (see version_tag above)
+    feature_str.push_str(&format!(
+        " -C metadata={}-{} -C extra-filename=-{}",
+        normalized_name, version, version_tag
+    ));
 
     // If this crate has a build script, generate two-stage build
-    if has_build_script {
-        content.push_str(&generate_build_script_rule(&normalized_name, features, build_deps));
+    if let Some(script_path) = build_script_path {
+        content.push_str(&generate_build_script_rule(&normalized_name, features, build_deps, script_path));
         content.push_str("\n");
         content.push_str(&generate_compile_rule_with_buildscript(
             &normalized_name,
@@ -327,6 +392,7 @@ fn generate_build_file(
             emit,
             &feature_str,
             deps,
+            lib_path,
         ));
     } else {
         content.push_str(&generate_compile_rule(
@@ -338,6 +404,7 @@ fn generate_build_file(
             emit,
             &feature_str,
             deps,
+            lib_path,
         ));
     }
 
@@ -349,6 +416,7 @@ fn generate_build_script_rule(
     normalized_name: &str,
     features: &[String],
     build_deps: &[(String, String)],
+    script_path: &str,
 ) -> String {
     let mut content = String::new();
 
@@ -359,10 +427,11 @@ fn generate_build_script_rule(
         .collect();
     let feature_str = feature_args.join(" ");
 
-    // If we have build-dependencies, we need to aggregate their externconfigs
+    // Aggregate direct build-dependencies' externconfigs only (transitive
+    // ones can contain colliding entries for other versions of a crate)
     let has_build_deps = !build_deps.is_empty();
     let aggregate_cmd = if has_build_deps {
-        "find . -name '*.externconfig' -type f 2>/dev/null | xargs cat >> externconfig 2>/dev/null || true && "
+        "cat $SRCS_EXTERNCONFIGS > externconfig && "
     } else {
         ""
     };
@@ -372,9 +441,12 @@ fn generate_build_script_rule(
         ""
     };
 
-    // Build script command
+    // Build script command. OUT_DIR is a declared output directory of this
+    // rule so the files a build script generates survive into the crate's
+    // compile action (the directives file records it by name; compile
+    // resolves it as a sibling of the directives file).
     let build_script_cmd = format!(
-        "mkdir -p $TMP_DIR/out && {}$TOOLS_PLEASE_RUST build-script --manifest-path $SRCS_MANIFEST --build-script $SRCS_SCRIPT --out-dir $TMP_DIR/out --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT {}--output $OUT {}",
+        "mkdir -p out && {}$TOOLS_PLEASE_RUST build-script --manifest-path $SRCS_MANIFEST --build-script $SRCS_SCRIPT --out-dir out --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT {}--output $OUTS_BUILDSCRIPT {}",
         aggregate_cmd, externconfig_arg, feature_str
     );
 
@@ -382,11 +454,24 @@ fn generate_build_script_rule(
     content.push_str("build_rule(\n");
     content.push_str(&format!("    name = \"_{}_build_script\",\n", normalized_name));
     content.push_str("    srcs = {\n");
-    content.push_str("        \"script\": [\"build.rs\"],\n");
+    content.push_str(&format!("        \"script\": [\"{}\"],\n", script_path));
+    // Cargo runs build scripts from the package root with the whole package
+    // present (scripts read source/data files, e.g. blake3 reads c/).
+    content.push_str(&format!("        \"package\": glob([\"**/*\"], exclude=[\"{}\", \"Cargo.toml\", \"BUILD\", \".plzconfig\", \"out\"], allow_empty=True),\n", script_path));
     content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
+    if has_build_deps {
+        content.push_str("        \"externconfigs\": [\n");
+        for (_name, target) in build_deps {
+            content.push_str(&format!("            \"{}|externconfig\",\n", target));
+        }
+        content.push_str("        ],\n");
+    }
     content.push_str("    },\n");
     content.push_str(&format!("    cmd = \"{}\",\n", build_script_cmd));
-    content.push_str(&format!("    outs = [\"{}.buildscript\"],\n", normalized_name));
+    content.push_str("    outs = {\n");
+    content.push_str(&format!("        \"buildscript\": [\"{}.buildscript\"],\n", normalized_name));
+    content.push_str("        \"out\": [\"out\"],\n");
+    content.push_str("    },\n");
 
     // Add build-dependencies if any
     if has_build_deps {
@@ -423,14 +508,21 @@ fn generate_compile_rule_with_buildscript(
     emit: &str,
     feature_str: &str,
     deps: &[(String, String)],
+    lib_path: &str,
 ) -> String {
     let mut content = String::new();
 
-    let aggregate_cmd = "find . -name '*.externconfig' -type f 2>/dev/null | xargs cat >> externconfig 2>/dev/null || true";
+    // Direct deps' externconfigs only: transitive configs can contain
+    // colliding entries for other versions of the same crate.
+    let aggregate_cmd = if deps.is_empty() {
+        "true".to_string()
+    } else {
+        "cat $SRCS_EXTERNCONFIGS > externconfig".to_string()
+    };
 
     // Compile command with --buildscript flag
     let compile_base = format!(
-        "$TOOLS_PLEASE_RUST compile --externconfig externconfig --buildscript $SRCS_BUILDSCRIPT --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --crate-name {} --edition {} --crate-type {} --emit {} {}",
+        "$TOOLS_PLEASE_RUST compile --externconfig externconfig --buildscript $SRCS_BUILDSCRIPT --manifest-path $SRCS_MANIFEST --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --crate-name {} --edition {} --crate-type {} --emit {} {}",
         normalized_name, edition_str, crate_type, emit, feature_str
     );
 
@@ -447,10 +539,19 @@ fn generate_compile_rule_with_buildscript(
     content.push_str("build_rule(\n");
     content.push_str(&format!("    name = \"{}\",\n", normalized_name));
     content.push_str("    srcs = {\n");
-    content.push_str("        \"main\": [\"src/lib.rs\"],\n");
-    content.push_str("        \"mods\": glob([\"src/**/*.rs\"], exclude=[\"src/lib.rs\", \"src/main.rs\"], allow_empty=True),\n");
+    content.push_str(&format!("        \"main\": [\"{}\"],\n", lib_path));
+    content.push_str(&format!("        \"mods\": glob([\"src/**\", \"*.rs\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\"], allow_empty=True),\n", lib_path));
     content.push_str("        \"data\": glob([\"*.md\", \"LICENSE*\", \"examples/**/*\"], allow_empty=True),\n");
-    content.push_str(&format!("        \"buildscript\": [\":_{}_build_script\"],\n", normalized_name));
+    content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
+    if !deps.is_empty() {
+        content.push_str("        \"externconfigs\": [\n");
+        for (_name, target) in deps {
+            content.push_str(&format!("            \"{}|externconfig\",\n", target));
+        }
+        content.push_str("        ],\n");
+    }
+    content.push_str(&format!("        \"buildscript\": [\":_{}_build_script|buildscript\"],\n", normalized_name));
+    content.push_str(&format!("        \"buildscript_out\": [\":_{}_build_script|out\"],\n", normalized_name));
     content.push_str("    },\n");
     content.push_str("    cmd = {\n");
     content.push_str(&format!("        \"dbg\": \"{}\",\n", cmd_dbg));
@@ -494,13 +595,20 @@ fn generate_compile_rule(
     emit: &str,
     feature_str: &str,
     deps: &[(String, String)],
+    lib_path: &str,
 ) -> String {
     let mut content = String::new();
 
-    let aggregate_cmd = "find . -name '*.externconfig' -type f 2>/dev/null | xargs cat >> externconfig 2>/dev/null || true";
+    // Direct deps' externconfigs only: transitive configs can contain
+    // colliding entries for other versions of the same crate.
+    let aggregate_cmd = if deps.is_empty() {
+        "true".to_string()
+    } else {
+        "cat $SRCS_EXTERNCONFIGS > externconfig".to_string()
+    };
 
     let compile_base = format!(
-        "$TOOLS_PLEASE_RUST compile --externconfig externconfig --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --crate-name {} --edition {} --crate-type {} --emit {} {}",
+        "$TOOLS_PLEASE_RUST compile --externconfig externconfig --manifest-path $SRCS_MANIFEST --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --crate-name {} --edition {} --crate-type {} --emit {} {}",
         normalized_name, edition_str, crate_type, emit, feature_str
     );
 
@@ -516,9 +624,17 @@ fn generate_compile_rule(
     content.push_str("build_rule(\n");
     content.push_str(&format!("    name = \"{}\",\n", normalized_name));
     content.push_str("    srcs = {\n");
-    content.push_str("        \"main\": [\"src/lib.rs\"],\n");
-    content.push_str("        \"mods\": glob([\"src/**/*.rs\"], exclude=[\"src/lib.rs\", \"src/main.rs\"], allow_empty=True),\n");
+    content.push_str(&format!("        \"main\": [\"{}\"],\n", lib_path));
+    content.push_str(&format!("        \"mods\": glob([\"src/**\", \"*.rs\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\"], allow_empty=True),\n", lib_path));
     content.push_str("        \"data\": glob([\"*.md\", \"LICENSE*\", \"examples/**/*\"], allow_empty=True),\n");
+    content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
+    if !deps.is_empty() {
+        content.push_str("        \"externconfigs\": [\n");
+        for (_name, target) in deps {
+            content.push_str(&format!("            \"{}|externconfig\",\n", target));
+        }
+        content.push_str("        ],\n");
+    }
     content.push_str("    },\n");
     content.push_str("    cmd = {\n");
     content.push_str(&format!("        \"dbg\": \"{}\",\n", cmd_dbg));
