@@ -386,7 +386,7 @@ fn import_cargo_lock(path: &Path, decls: &mut Vec<Decl>) -> Result<()> {
     let manifest_path = path.parent().unwrap_or(Path::new(".")).join("Cargo.toml");
     if manifest_path.exists() {
         let mcontent = fs::read(&manifest_path)?;
-        if let Ok(manifest) = cargo_toml::Manifest::from_slice(&mcontent) {
+        if let Ok(manifest) = crate::resolve::parse_manifest(&mcontent) {
             for (name, dep) in &manifest.dependencies {
                 let package = dep.package().unwrap_or(name).to_string();
                 let req = semver::VersionReq::parse(dep.req()).ok();

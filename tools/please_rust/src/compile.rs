@@ -310,7 +310,7 @@ pub fn run(args: CompileArgs) -> Result<()> {
         if mp.exists() {
             let content = fs::read(mp)
                 .with_context(|| format!("Failed to read {}", mp.display()))?;
-            if let Ok(manifest) = cargo_toml::Manifest::from_slice(&content) {
+            if let Ok(manifest) = crate::resolve::parse_manifest(&content) {
                 if let Some(pkg) = &manifest.package {
                     for (key, value) in crate::build_script::package_env(pkg) {
                         cmd.env(key, value);

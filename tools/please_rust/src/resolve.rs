@@ -68,6 +68,17 @@ pub struct LockFile {
     pub crates: BTreeMap<String, LockEntry>,
 }
 
+/// Parse a manifest, normalizing deprecated underscore key spellings that
+/// cargo accepts but cargo_toml's kebab-case parsing silently ignores
+/// (e.g. tonic 0.11 ships `default_features = false`).
+pub fn parse_manifest(bytes: &[u8]) -> Result<Manifest, cargo_toml::Error> {
+    let text = String::from_utf8_lossy(bytes)
+        .replace("default_features =", "default-features =")
+        .replace("dev_dependencies]", "dev-dependencies]")
+        .replace("build_dependencies]", "build-dependencies]");
+    Manifest::from_slice(text.as_bytes())
+}
+
 impl LockFile {
     pub fn load(path: &std::path::Path) -> Result<Self> {
         let content = fs::read_to_string(path)
@@ -136,7 +147,7 @@ pub fn resolve_entries(entries: &[EntryInput], target: &str) -> Result<LockFile>
     for e in entries {
         let content = fs::read(&e.manifest)
             .with_context(|| format!("Failed to read {}", e.manifest.display()))?;
-        let manifest = Manifest::from_slice(&content)
+        let manifest = parse_manifest(&content)
             .with_context(|| format!("Failed to parse {}", e.manifest.display()))?;
         let version = Version::parse(&e.version)
             .with_context(|| format!("Bad version {} for {}", e.version, e.crate_name))?;

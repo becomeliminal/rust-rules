@@ -3156,6 +3156,115 @@
       "deps": [],
       "build_deps": []
     },
+    "tonic": {
+      "crate_name": "tonic",
+      "version": "0.11.0",
+      "features": [
+        "channel",
+        "codegen",
+        "default",
+        "prost",
+        "transport"
+      ],
+      "deps": [
+        {
+          "name": "async-stream",
+          "crate_name": "async-stream",
+          "subrepo": "async_stream"
+        },
+        {
+          "name": "async-trait",
+          "crate_name": "async-trait",
+          "subrepo": "async_trait"
+        },
+        {
+          "name": "axum",
+          "crate_name": "axum",
+          "subrepo": "axum"
+        },
+        {
+          "name": "base64",
+          "crate_name": "base64",
+          "subrepo": "base64"
+        },
+        {
+          "name": "bytes",
+          "crate_name": "bytes",
+          "subrepo": "bytes"
+        },
+        {
+          "name": "h2",
+          "crate_name": "h2",
+          "subrepo": "h2"
+        },
+        {
+          "name": "http",
+          "crate_name": "http",
+          "subrepo": "http"
+        },
+        {
+          "name": "http-body",
+          "crate_name": "http-body",
+          "subrepo": "http_body"
+        },
+        {
+          "name": "hyper",
+          "crate_name": "hyper",
+          "subrepo": "hyper"
+        },
+        {
+          "name": "hyper-timeout",
+          "crate_name": "hyper-timeout",
+          "subrepo": "hyper_timeout"
+        },
+        {
+          "name": "percent-encoding",
+          "crate_name": "percent-encoding",
+          "subrepo": "percent_encoding"
+        },
+        {
+          "name": "pin-project",
+          "crate_name": "pin-project",
+          "subrepo": "pin_project"
+        },
+        {
+          "name": "prost",
+          "crate_name": "prost",
+          "subrepo": "prost"
+        },
+        {
+          "name": "tokio",
+          "crate_name": "tokio",
+          "subrepo": "tokio"
+        },
+        {
+          "name": "tokio-stream",
+          "crate_name": "tokio-stream",
+          "subrepo": "tokio_stream"
+        },
+        {
+          "name": "tower",
+          "crate_name": "tower",
+          "subrepo": "tower"
+        },
+        {
+          "name": "tower-layer",
+          "crate_name": "tower-layer",
+          "subrepo": "tower_layer"
+        },
+        {
+          "name": "tower-service",
+          "crate_name": "tower-service",
+          "subrepo": "tower_service"
+        },
+        {
+          "name": "tracing",
+          "crate_name": "tracing",
+          "subrepo": "tracing"
+        }
+      ],
+      "build_deps": []
+    },
     "tonic_build": {
       "crate_name": "tonic-build",
       "version": "0.11.0",

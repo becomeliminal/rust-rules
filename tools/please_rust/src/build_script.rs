@@ -87,7 +87,7 @@ pub fn run(args: BuildScriptArgs) -> Result<()> {
     // traverses parent directories looking for workspace Cargo.toml)
     let manifest_content = fs::read(&args.manifest_path)
         .with_context(|| format!("Failed to read {}", args.manifest_path.display()))?;
-    let manifest = Manifest::from_slice(&manifest_content)
+    let manifest = crate::resolve::parse_manifest(&manifest_content)
         .with_context(|| format!("Failed to parse {}", args.manifest_path.display()))?;
 
     let pkg = manifest
@@ -153,6 +153,14 @@ fn compile_build_script(
         .arg("-o")
         .arg(&binary_path)
         .arg("--cap-lints=allow");
+
+    // Cargo compiles build scripts with the crate's feature cfgs — build.rs
+    // commonly branches on cfg!(feature = "..."), e.g. proc-macro2 only emits
+    // wrap_proc_macro (real compiler spans) when it sees its proc-macro
+    // feature at compile time.
+    for feature in &args.features {
+        cmd.arg("--cfg").arg(format!("feature=\"{}\"", feature));
+    }
 
     // Cargo exposes the package env vars at compile time as well as run time
     // (build scripts may use env!("CARGO_PKG_VERSION") etc.)

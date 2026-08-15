@@ -55,7 +55,9 @@ pub fn run(args: GenerateArgs) -> Result<()> {
     let cargo_toml_path = args.src_root.join("Cargo.toml");
 
     // Parse Cargo.toml
-    let manifest = Manifest::from_path(&cargo_toml_path)
+    let manifest_bytes = fs::read(&cargo_toml_path)
+        .with_context(|| format!("Failed to read {}", cargo_toml_path.display()))?;
+    let manifest = crate::resolve::parse_manifest(&manifest_bytes)
         .with_context(|| format!("Failed to parse {}", cargo_toml_path.display()))?;
 
     let package = manifest
