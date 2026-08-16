@@ -24,22 +24,22 @@ tool:
 
 Honest list, ordered by how much it matters to a developer choosing daily.
 
-### 1. The inner loop (Cargo's strongest remaining edge)
+### 1. The inner loop
 
-- **rust-analyzer**: RA speaks `cargo metadata` natively. Without IDE
-  support, no one lives in this daily. RA also supports
-  **`rust-project.json`** (how rules_rust and rust-project do it) — we can
-  generate it from the lock + build graph, and the toolchain dist already
-  ships `rust-analyzer-preview`.
+Development here is editor-agnostic and increasingly agent-driven; what
+matters is that `plz build`/`plz test` are fast, targeted, and give clear
+diagnostics — which they already are and do. The remaining gaps:
+
 - **Incremental compilation**: rustc's incremental cache makes small edits
   to a big crate fast under Cargo. We rebuild whole crates (plz caches
   *across* crates perfectly, but not within one). Mitigations: crate
   splitting is idiomatic in monorepos anyway; an opt-in non-hermetic dev
   profile persisting rustc's incremental dir is possible later.
 - **fmt / clippy / doc**: `cargo fmt`, `cargo clippy`, `cargo doc` are daily
-  verbs. All three tools are in the dist tarball we already download —
-  they need exposing plus small rules (`rust_fmt` hook, `rust_lint`,
-  `rust_doc`).
+  verbs (for humans and agents alike — clippy findings are exactly the kind
+  of thing CI should gate on). All three tools are in the dist tarball we
+  already download — they need exposing plus small rules (`rust_fmt` hook,
+  `rust_lint`, `rust_doc`).
 
 ### 2. Ecosystem long tail
 
@@ -113,19 +113,17 @@ Phases ordered by leverage. S = hours, M = a day or two, L = up to a week.
 The phase that makes someone *choose* this over Cargo for their next
 service.
 
-1. **`please_rust ide`** — generate `rust-project.json` from the lock +
-  BUILD graph; expose `rust-analyzer` from the toolchain. (M)
-2. **Workspace importer** — `sync --import-workspace path/to/Cargo.toml`
+1. **Workspace importer** — `sync --import-workspace path/to/Cargo.toml`
   emitting first-party BUILD files. (L)
-3. **fmt / clippy / doc rules** — expose the dist components; `rust_fmt`
+2. **fmt / clippy / doc rules** — expose the dist components; `rust_fmt`
   + lint + doc rules with plz-idiomatic wiring. (S–M)
-4. **Profile knobs** — opt-level, lto, panic, codegen-units via plugin
+3. **Profile knobs** — opt-level, lto, panic, codegen-units via plugin
   config → dbg/opt configs. (M)
-5. **Pilot debt** — subrepo namespacing fix, `lock` feature UX,
+4. **Pilot debt** — subrepo namespacing fix, `lock` feature UX,
   release-on-tag CI. (M)
 
-**Exit criterion:** a cargo developer ports their service with one command,
-opens it in their editor with working completion, and their CI gets faster.
+**Exit criterion:** a cargo project ports with one command, clippy and fmt
+gate CI, and builds/tests get faster.
 
 ### Phase 2 — Ecosystem depth (stop losing on crates)
 
@@ -159,6 +157,12 @@ individually explained.
 
 ## What we deliberately do not chase
 
+- **Editor/IDE integration** (`rust-project.json` for rust-analyzer): parked.
+  Development on this codebase is emacs- and agent-driven; the build system's
+  job is fast targeted commands and clear diagnostics, not editor plumbing.
+  The dist tarball ships `rust-analyzer-preview`, so if a consumer ever needs
+  it, `please_rust ide` generating `rust-project.json` is a well-understood
+  add (it is how rules_rust does it) — on request, not on the roadmap.
 - **Building third-party crates' own test suites** — Cargo doesn't run your
   dependencies' tests either in normal use.
 - **`cargo publish`** — publishing to crates.io stays with Cargo; this is a
