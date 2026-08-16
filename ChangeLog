@@ -1,3 +1,41 @@
+Version 0.3.0
+-------------
+The parity release: PubGrub resolution, coverage, pipelined compilation,
+the tooling rules, and one-command porting of a cargo workspace.
+
+  * lock resolves versions with PubGrub, backtracking instead of failing
+    when a late requirement rules out an earlier choice. Each (crate,
+    compatibility bucket) is a package so incompatible majors coexist as
+    cargo allows; requirements spanning buckets become proxy packages so
+    the bucket choice backtracks too. --greedy keeps the old resolver.
+  * MSRV-aware resolution: releases needing a newer rustc than the
+    declared toolchain are filtered out (cargo >=1.84 semantics),
+    relaxing with a warning rather than refusing to resolve.
+  * lock --add --features, with the optional dependencies those features
+    activate declared automatically (resolution reports what it could not
+    find; lock re-solves until the graph closes).
+  * sync --import-workspace ports a whole cargo workspace: a BUILD file
+    per member, plus .plzconfig, plugins/BUILD and third_party scaffolding
+    on a fresh repo.
+  * plz cover works end to end: -C instrument-coverage, llvm-profdata and
+    llvm-cov, per-file line coverage. Consumers add .rs to [cover]
+    FileExtension.
+  * Pipelined compilation (opt-in): a metadata-only compile per crate that
+    dependents hang off, with full codegen in parallel, so chains build at
+    frontend depth. All compiles now remap the sandbox path, making
+    artifacts path-independent.
+  * Tooling rules: rust_clippy, rust_fmt_test, rust_doc, rust_bindgen
+    (bindgen built from crates in-graph; host libclang).
+  * Profile knobs: OptLevel, LTO, CodegenUnits, Panic, Strip,
+    DebugAssertions.
+  * links / DEP_<LINKS>_<KEY> propagation and rust <-> C interop in both
+    directions via cc_deps and staticlib.
+  * Benchmarks vs cargo, with methodology and caveats (docs/BENCHMARKS.md):
+    ~1.7x faster cold builds on the same rustc; cargo keeps the
+    single-crate edit loop.
+  * Release CI attaches the static please_rust binary and its sha256 on a
+    v* tag.
+
 Version 0.2.0
 -------------
 The hermetic rust_repo release: third-party crates as generated subrepos,
