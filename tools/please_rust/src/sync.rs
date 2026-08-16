@@ -844,6 +844,15 @@ pub struct LockCmdArgs {
     /// plz binary used to fetch missing crate downloads ("" disables)
     #[arg(long, default_value = "plz")]
     pub plz: String,
+
+    /// Use the greedy resolver instead of PubGrub backtracking
+    #[arg(long)]
+    pub greedy: bool,
+
+    /// Ignore rust-version when selecting releases (MSRV filtering is on by
+    /// default, using the toolchain declared in the third-party BUILD file)
+    #[arg(long)]
+    pub ignore_msrv: bool,
 }
 
 #[derive(serde::Deserialize, Clone)]
@@ -880,6 +889,8 @@ struct IndexVersion {
     features2: Option<BTreeMap<String, Vec<String>>>,
     #[serde(default)]
     yanked: bool,
+    #[serde(default)]
+    rust_version: Option<String>,
 }
 
 impl IndexVersion {
@@ -958,6 +969,65 @@ impl Index {
     }
 }
 
+impl crate::pubgrub_solver::ReleaseSource for IndexSource<'_> {
+    fn releases(&self, name: &str) -> Result<Vec<crate::pubgrub_solver::Release>> {
+        let versions = self.index.versions(name)?;
+        if versions.is_empty() {
+            bail!("{} has no releases in the index", name);
+        }
+        Ok(versions
+            .iter()
+            .filter_map(|iv| {
+                let version = Version::parse(&iv.vers).ok()?;
+                let activated = default_activated_deps(iv);
+                Some(crate::pubgrub_solver::Release {
+                    version,
+                    cksum: iv.cksum.clone(),
+                    yanked: iv.yanked,
+                    rust_version: iv
+                        .rust_version
+                        .as_deref()
+                        .and_then(parse_rust_version),
+                    deps: iv
+                        .deps
+                        .iter()
+                        .map(|d| crate::pubgrub_solver::ReleaseDep {
+                            package: d.package.clone().unwrap_or_else(|| d.name.clone()),
+                            req: d.req.clone(),
+                            optional: d.optional,
+                            default_activated: activated.contains(&d.name),
+                            kind: d.kind.clone().unwrap_or_else(|| "normal".to_string()),
+                            target: d.target.clone(),
+                        })
+                        .collect(),
+                })
+            })
+            .collect())
+    }
+
+    fn target_applies(&self, gate: &str) -> bool {
+        target_applies(gate, self.target)
+    }
+}
+
+pub struct IndexSource<'a> {
+    index: &'a Index,
+    target: &'a str,
+}
+
+/// `rust-version` may be given as "1.70" (no patch), which semver rejects.
+fn parse_rust_version(s: &str) -> Option<Version> {
+    if let Ok(v) = Version::parse(s) {
+        return Some(v);
+    }
+    let parts: Vec<&str> = s.split('.').collect();
+    match parts.len() {
+        1 => Version::parse(&format!("{}.0.0", parts[0])).ok(),
+        2 => Version::parse(&format!("{}.{}.0", parts[0], parts[1])).ok(),
+        _ => None,
+    }
+}
+
 pub fn lock(args: LockCmdArgs) -> Result<()> {
     let build_text = fs::read_to_string(&args.build_file)
         .with_context(|| format!("Failed to read {}", args.build_file.display()))?;
@@ -995,6 +1065,10 @@ pub fn lock(args: LockCmdArgs) -> Result<()> {
             .split_once('@')
             .with_context(|| format!("--add takes crate@req, got {}", add))?;
         work.push((name.to_string(), req.to_string(), "--add".to_string()));
+    }
+
+    if !args.greedy {
+        return lock_with_pubgrub(&args, &index, decls, &build_text);
     }
 
     let mut newly: BTreeMap<String, (Version, String)> = BTreeMap::new(); // crate -> (version, cksum)
@@ -1110,7 +1184,15 @@ pub fn lock(args: LockCmdArgs) -> Result<()> {
         });
     }
 
-    // Hand over to sync for naming, downloads, feature resolution & writing.
+    finish_lock(&args, decls)
+}
+
+/// Hand over to sync for naming, downloads, feature resolution and writing.
+/// Shared by the greedy and PubGrub paths.
+fn finish_lock(args: &LockCmdArgs, mut decls: Vec<Decl>) -> Result<()> {
+    let build_text = fs::read_to_string(&args.build_file)
+        .with_context(|| format!("Failed to read {}", args.build_file.display()))?;
+    let lines: Vec<String> = build_text.lines().map(|s| s.to_string()).collect();
     let _ = normalize_names(&mut decls)?;
     fs::write(&args.build_file, rewrite_build(&lines, &decls, &[]))?;
     run(SyncArgs {
@@ -1139,6 +1221,135 @@ fn dirs_cache() -> PathBuf {
 }
 
 /// Dep names activated by the crate's default features (index metadata).
+/// PubGrub-backed lock: solve the whole declared set plus the requested
+/// additions at once, then hand the result to the same declaration writer
+/// the greedy path uses.
+fn lock_with_pubgrub(
+    args: &LockCmdArgs,
+    index: &Index,
+    mut decls: Vec<Decl>,
+    build_text: &str,
+) -> Result<()> {
+    // Fast path: if every requested addition is already satisfied by a
+    // declaration, there is nothing to solve and nothing to fetch. This keeps
+    // a no-op `lock --add` working offline with a cold index cache.
+    let all_satisfied = !args.add.is_empty()
+        && args.add.iter().all(|add| {
+            let Some((name, req_str)) = add.split_once('@') else {
+                return false;
+            };
+            let Ok(req) = semver::VersionReq::parse(req_str) else {
+                return false;
+            };
+            decls.iter().any(|d| {
+                d.crate_name == name
+                    && Version::parse(&d.version).map(|v| req.matches(&v)).unwrap_or(false)
+            })
+        });
+    if all_satisfied {
+        eprintln!("lock: nothing to do");
+        return Ok(());
+    }
+
+    let source = IndexSource { index, target: &args.target };
+    let mut solver = crate::pubgrub_solver::Solver::new(&source);
+
+    // Declared versions are preferences, not requirements: the solve is
+    // driven by the additions, so `lock --add` never needs index entries for
+    // unrelated crates (which would also break --offline).
+    for d in &decls {
+        let v = Version::parse(&d.version)
+            .with_context(|| format!("Bad version {} for {}", d.version, d.crate_name))?;
+        solver.pin(&d.crate_name, v);
+    }
+    for add in &args.add {
+        let (name, req_str) = add
+            .split_once('@')
+            .with_context(|| format!("--add takes crate@req, got {}", add))?;
+        let req = semver::VersionReq::parse(req_str)
+            .with_context(|| format!("Bad requirement {} in --add", req_str))?;
+        solver.require(name, req);
+    }
+
+    let toolchain = if args.ignore_msrv {
+        None
+    } else {
+        let tc = crate::pubgrub_solver::toolchain_version(build_text);
+        if tc.is_none() {
+            eprintln!("lock: no rust_toolchain version found; MSRV filtering is off");
+        }
+        tc
+    };
+    solver.msrv(toolchain);
+
+    let solution = solver.solve()?;
+
+    // Fold the solution into the declarations: an existing crate in the same
+    // compatibility bucket is upgraded in place (cargo's behaviour when a new
+    // requirement needs a newer patch or minor), anything else is added.
+    use crate::pubgrub_solver::Bucket;
+    let mut newly: Vec<(String, Version, String)> = Vec::new();
+    let mut upgraded: Vec<(String, String, Version)> = Vec::new();
+    for (key, (version, cksum)) in &solution {
+        let name = key.split('@').next().unwrap_or(key).to_string();
+        let bucket = Bucket::of(version);
+        let existing = decls.iter_mut().find(|d| {
+            d.crate_name == name
+                && Version::parse(&d.version)
+                    .map(|v| Bucket::of(&v) == bucket)
+                    .unwrap_or(false)
+        });
+        match existing {
+            Some(d) => {
+                if d.version != version.to_string() {
+                    upgraded.push((name.clone(), d.version.clone(), version.clone()));
+                    d.version = version.to_string();
+                    d.hashes = vec![cksum.clone()];
+                }
+            }
+            None => newly.push((name, version.clone(), cksum.clone())),
+        }
+    }
+    newly.sort();
+    upgraded.sort();
+
+    for (name, from, to) in &upgraded {
+        eprintln!("lock: ^ {} {} -> {}", name, from, to);
+    }
+
+    if newly.is_empty() && upgraded.is_empty() {
+        eprintln!("lock: nothing to do");
+        return Ok(());
+    }
+
+    let added_names: BTreeSet<String> = args
+        .add
+        .iter()
+        .filter_map(|a| a.split_once('@').map(|(n, _)| n.to_string()))
+        .collect();
+    for (name, version, cksum) in &newly {
+        let root = added_names.contains(name);
+        eprintln!("lock: + {}@{}{}", name, version, if root { " (root)" } else { "" });
+        decls.push(Decl {
+            name: None,
+            crate_name: name.clone(),
+            version: version.to_string(),
+            features: vec![],
+            hashes: vec![cksum.clone()],
+            passthrough: vec![],
+            leading_comments: vec![],
+            span: None,
+            imported: true,
+            root,
+            default_features: true,
+            git_repo: String::new(),
+            git_revision: String::new(),
+        });
+    }
+
+    finish_lock(args, decls)
+}
+
 fn default_activated_deps(iv: &IndexVersion) -> BTreeSet<String> {
     let features = iv.all_features();
     let mut activated = BTreeSet::new();
@@ -1554,6 +1765,7 @@ rust_repo(
             .collect(),
             features2: Some([("weakling".to_string(), vec!["other?/x".to_string()])].into_iter().collect()),
             yanked: false,
+            rust_version: None,
         };
         let activated = default_activated_deps(&iv);
         assert!(activated.contains("mandatory_opt"));
@@ -1622,6 +1834,8 @@ mod lock_cmd_tests {
             target: "x86_64-unknown-linux-gnu".to_string(),
             curl: "false".to_string(),
             plz: "".to_string(),
+            greedy: false,
+            ignore_msrv: false,
         })
         .unwrap();
 
@@ -1653,6 +1867,8 @@ mod lock_cmd_tests {
             target: "x86_64-unknown-linux-gnu".to_string(),
             curl: "false".to_string(),
             plz: "".to_string(),
+            greedy: false,
+            ignore_msrv: false,
         })
         .unwrap_err();
         assert!(err.to_string().contains("not in index cache"));
@@ -1676,6 +1892,8 @@ mod lock_cmd_tests {
             target: "x86_64-unknown-linux-gnu".to_string(),
             curl: "false".to_string(),
             plz: "".to_string(),
+            greedy: false,
+            ignore_msrv: false,
         })
         .unwrap();
         assert_eq!(fs::read_to_string(&build_file).unwrap(), before);

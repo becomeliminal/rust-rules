@@ -97,6 +97,14 @@ To add a dependency (and everything it needs) straight from crates.io:
 ```ini
 plz run //tools/please_rust -- lock --add serde@1
 ```
+Version selection is a PubGrub solve over the crates.io index: it backtracks
+rather than failing when a late requirement rules out an earlier choice, and
+it respects `rust-version`, so an older `rust_toolchain` gets the newest
+releases that actually support it. Already-declared versions are preferred,
+so adding one crate does not churn the rest of the graph. `--ignore-msrv`
+turns MSRV filtering off; `--greedy` selects the older non-backtracking
+resolver.
+
 
 Or import an existing Cargo project wholesale from its lockfile:
 ```ini
@@ -307,10 +315,6 @@ Contributions are welcome! Please open or submit a pull request with your change
 
 ### Extra Features for Contribution
 Here are some extra features that would be valuable additions to this project:
-
-- **Resolver depth**: `lock` is greedy max-satisfying with a documented
-  `select()` seam for a backtracking (PubGrub) solver; MSRV-aware resolution
-  (`rust-version`) is not yet enforced. Both are planned.
 
 - **Target (OS and Architecture) Compatibility**: primarily built and tested
   on x86_64-unknown-linux-gnu. The resolver's host/target unit split is in

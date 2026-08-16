@@ -14,6 +14,7 @@ use clap::{Parser, Subcommand};
 mod build_script;
 mod compile;
 mod generate;
+mod pubgrub_solver;
 mod resolve;
 mod sync;
 mod workspace;

@@ -102,14 +102,23 @@ binary-link time.
       real-world repos, resolve with cargo and with us, diff. Lives in a
       separate corpus repo (rust-rules-corpus), not here; run several repos
       and expand over time
-- [ ] PubGrub backtracking at `lock`'s `select()` seam, via the pubgrub
-      crate (proven at scale by uv). Neither go-rules (Go's MVS needs no
-      backtracking) nor rules_rust (delegates to cargo) has an equivalent;
-      cargo itself uses a bespoke solver, so this would make us the first
-      Rust build tool on PubGrub
-- [ ] MSRV-aware resolution: the sparse index carries rust_version per
-      release, so this is a candidate filter in lock matching cargo >=1.84
-      semantics. Companion to the PubGrub work
+- [x] PubGrub backtracking, via the pubgrub crate (proven at scale by uv).
+      Each (crate, compatibility bucket) is a package, so incompatible
+      majors coexist as cargo allows; a requirement spanning several buckets
+      becomes a proxy package whose versions are the candidate buckets, so
+      the bucket choice is itself backtrackable. Declared versions are pins
+      (preferences), not requirements, so an unrelated `--add` never churns
+      the graph and no-op adds stay offline-safe; same-bucket changes upgrade
+      a declaration in place instead of duplicating it. `--greedy` keeps the
+      old walk. Neither go-rules (Go's MVS needs no backtracking) nor
+      rules_rust (delegates to cargo) has an equivalent, and cargo itself
+      uses a bespoke solver
+- [x] MSRV-aware resolution: releases requiring a newer rustc than the
+      declared `rust_toolchain` are filtered out (cargo >=1.84 semantics),
+      relaxing with a warning if a package would otherwise be unsolvable.
+      `--ignore-msrv` opts out. Verified end to end: clap resolves to the
+      4.5 line on rustc 1.97 and to 4.0.32 with the older dependency stack
+      on rustc 1.63
 - [ ] Multi-platform lock entries (per-triple resolution outputs)
 
 ### Dependency management
