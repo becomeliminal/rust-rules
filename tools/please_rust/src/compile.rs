@@ -117,6 +117,11 @@ pub struct CompileArgs {
     #[arg(long = "dep")]
     pub deps: Vec<String>,
 
+    /// Native static libraries (.a) to link into this crate (cc interop);
+    /// rustc records the linkage in the rlib for the final link
+    #[arg(long = "native", num_args = 0..)]
+    pub native: Vec<PathBuf>,
+
     /// Features to enable
     #[arg(long = "feature")]
     pub features: Vec<String>,
@@ -236,6 +241,9 @@ fn build_command(args: &CompileArgs) -> Result<Command> {
                 if line.is_empty() {
                     continue;
                 }
+                if line.starts_with("native=") {
+                    continue; // handled separately below
+                }
                 if let Some((name, filename)) = line.split_once('=') {
                     let name = name.trim();
                     let filename = filename.trim();
@@ -258,6 +266,38 @@ fn build_command(args: &CompileArgs) -> Result<Command> {
                         }
                     } else {
                         eprintln!("Warning: Could not find {} for crate {}", filename, name);
+                    }
+                }
+            }
+        }
+    }
+
+    // Native archives from cc deps: -l on the owning crate records the
+    // requirement in its rlib; -L makes the archive findable
+    for lib in &args.native {
+        let stem = lib
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let name = stem.strip_prefix("lib").unwrap_or(&stem).to_string();
+        let abs = lib.canonicalize().unwrap_or_else(|_| lib.clone());
+        cmd.arg("-l").arg(format!("static={}", name));
+        if let Some(dir) = abs.parent() {
+            cmd.arg("-L").arg(format!("native={}", dir.display()));
+        }
+    }
+
+    // native= lines in externconfigs: archives linked by (transitive) deps;
+    // they only need to be locatable at link time
+    if let Some(config_path) = &args.externconfig {
+        if config_path.exists() {
+            let content = fs::read_to_string(config_path)?;
+            for line in content.lines() {
+                if let Some(filename) = line.trim().strip_prefix("native=") {
+                    if let Some(path) = find_file_recursive(".", filename.trim()) {
+                        if let Some(dir) = path.canonicalize().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+                            cmd.arg("-L").arg(format!("native={}", dir.display()));
+                        }
                     }
                 }
             }

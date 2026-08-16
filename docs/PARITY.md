@@ -21,10 +21,13 @@ binary-link time.
 - [x] `links` / `DEP_<LINKS>_<KEY>` propagation to dependents' build scripts
       (lock carries links keys; buildscript files are self-describing;
       test/links proves the pair end to end)
-- [ ] Rust → C dependency edges: `rust_library` deps on the cc plugin's
-      `cc_library`, linked correctly
-- [ ] C → Rust dependency edges: cc targets consuming `staticlib`/`cdylib`
-      outputs with generated headers (cbindgen)
+- [x] Rust → C dependency edges: cc_deps on rust_library/binary/test links
+      c/cc plugin archives (recorded in the rlib, bundled, flowing to final
+      links; test/cc_interop). Note: use c_library for C — cc_library
+      compiles as C++ and mangles symbols
+- [x] C → Rust dependency edges: c_binary/cc targets link staticlib outputs
+      directly (test/cc_interop:uses_rust); cbindgen header generation still
+      open — tracked under the bindgen item
 - [ ] Optional hermetic C toolchain target for CCTool (host cc remains the
       default, per the cc plugin convention)
 - [ ] bindgen rule (needs libclang strategy)
