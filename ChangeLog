@@ -1,3 +1,9 @@
+Version 0.3.3
+-------------
+  * --extern filtering derives crate names correctly from plz's internal
+    _name#tag targets, which is how generated proto and gRPC libraries are
+    exposed; first-party code can now depend on them.
+
 Version 0.3.2
 -------------
   * Resolution never routes a dependency to a version its requirement rules
