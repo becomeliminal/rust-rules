@@ -93,7 +93,16 @@ binary-link time.
       plugin consumers can rarely hit a wedged parse
 - [ ] Remote execution audit (absolute-path canonicalization, cwd walks)
 - [ ] Scale test: 1k+ crate graph through sync/resolve/build
-- [ ] Subrepo name namespacing (`subrepo_name()` prefix — pilot finding)
+- [ ] Subrepo name namespacing (pilot finding). Plugin-internal third_party
+      subrepos register unqualified names (`serde`), which can collide with a
+      consumer's own. Attempted reproduction (2026-08) needs the plugin
+      consumed as a raw path subrepo, and that setup trips the dev .plzconfig
+      preloads first, so the collision has not been isolated in a test. It
+      does not affect the documented path (released binary + plugin_repo at a
+      tag), which the labs pilot exercises. Fixing blind would rewrite every
+      generated label, so this waits for a real repro. go-rules is immune by
+      construction: Go module paths (github.com_pkg_errors) are unique where
+      crate names are not
 
 ## Track 2: Cargo parity (log)
 
