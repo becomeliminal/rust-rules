@@ -13,6 +13,11 @@ orders of magnitude smaller than crate_universe.
 ## Track 1: rules_rust parity (active)
 
 ### C / native interop
+
+plz has no Bazel-style provider system, so interop is explicit metadata
+plumbing: carry native-link info (lib paths, -l flags) through the graph the
+way build-script rustc-link-lib directives already flow, and emit it at
+binary-link time.
 - [ ] `links` / `DEP_<LINKS>_<KEY>` propagation to dependents' build scripts
       (parsed today, not wired)
 - [ ] Rust → C dependency edges: `rust_library` deps on the cc plugin's
@@ -35,12 +40,10 @@ orders of magnitude smaller than crate_universe.
 - [ ] Nightly / channel toolchains policy
 
 ### Build speed
-- [ ] rmeta pipelining: dependents' metadata compiles start against `.rmeta`
-      before dependency codegen finishes (cargo and rules_rust both do this;
-      needs a split metadata-only action — investigate cost model in plz)
-- [ ] Opt-in non-hermetic incremental dev mode (the rules_rust
-      `experimental_incremental_base` equivalent: persistent rustc
-      incremental dir, local dev only, never CI)
+- [ ] rmeta pipelining via the rules_rust two-action scheme: a metadata-only
+      compile per crate that dependents' compiles hang off, with full rlib
+      codegen in parallel and only binary links waiting on rlibs. Cost:
+      frontend runs twice; win: chains build at frontend-depth speed
 
 ### Tooling rules
 - [ ] `rust_clippy` (clippy-preview is already in the dist tarball) + CI gate
@@ -56,8 +59,10 @@ orders of magnitude smaller than crate_universe.
 ## Track 2: Cargo parity (log)
 
 ### Resolver
-- [ ] Differential testing: cargo resolution as a dev-time oracle over a
-      manifest corpus; every divergence is a bug or a documented decision
+- [ ] Differential testing: cargo resolution as a dev-time oracle — pick
+      real-world repos, resolve with cargo and with us, diff. Lives in a
+      separate corpus repo (rust-rules-corpus), not here; run several repos
+      and expand over time
 - [ ] PubGrub backtracking at `lock`'s `select()` seam
 - [ ] MSRV-aware resolution (`rust-version`, Cargo ≥1.84 behavior)
 - [ ] Multi-platform lock entries (per-triple resolution outputs)
@@ -80,7 +85,8 @@ orders of magnitude smaller than crate_universe.
       CARGO_CRATE_NAME et al.)
 
 ### Ecosystem burn-down
-- [ ] Top-100-crates corpus package in CI; pass-rate is the public metric
+- [ ] Top-100-crates corpus in the separate corpus repo, run in its CI;
+      pass-rate is the public metric
 - [ ] Per-crate escape hatches: patches (arg exists, unexercised), source
       overrides (done via download=), env injection for build scripts
 
@@ -89,4 +95,7 @@ orders of magnitude smaller than crate_universe.
   agent-driven development here
 - Third-party crates' own test suites
 - `cargo publish`
-- Bit-for-bit rustc incremental parity in hermetic mode
+- rustc incremental compilation, in any mode (decided 2026-08: crate
+  splitting + plz caching is the model; cross-machine cached builds likely
+  beat cargo's warm incremental in practice anyway — the benchmark harness
+  will settle it)
