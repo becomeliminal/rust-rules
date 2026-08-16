@@ -18,8 +18,9 @@ plz has no Bazel-style provider system, so interop is explicit metadata
 plumbing: carry native-link info (lib paths, -l flags) through the graph the
 way build-script rustc-link-lib directives already flow, and emit it at
 binary-link time.
-- [ ] `links` / `DEP_<LINKS>_<KEY>` propagation to dependents' build scripts
-      (parsed today, not wired)
+- [x] `links` / `DEP_<LINKS>_<KEY>` propagation to dependents' build scripts
+      (lock carries links keys; buildscript files are self-describing;
+      test/links proves the pair end to end)
 - [ ] Rust → C dependency edges: `rust_library` deps on the cc plugin's
       `cc_library`, linked correctly
 - [ ] C → Rust dependency edges: cc targets consuming `staticlib`/`cdylib`

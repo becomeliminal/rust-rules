@@ -132,24 +132,52 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         .next()
         .unwrap_or(&args.subrepo)
         .to_string();
-    let (lock_entry, host_entry) = match args.lock.as_ref() {
+    let lock_file = match args.lock.as_ref() {
         Some(p) if p.exists() => match crate::resolve::LockFile::load(p) {
-            Ok(lock) => {
-                let entry = lock.crates.get(&subrepo_key).cloned();
-                if entry.is_none() {
-                    eprintln!(
-                        "warning: {} not in lock file, falling back to heuristic resolution",
-                        subrepo_key
-                    );
-                }
-                (entry, lock.host_crates.get(&subrepo_key).cloned())
-            }
+            Ok(lock) => Some(lock),
             Err(e) => {
                 eprintln!("warning: {:#}", e);
-                (None, None)
+                None
             }
         },
-        _ => (None, None),
+        _ => None,
+    };
+    let (lock_entry, host_entry) = match &lock_file {
+        Some(lock) => {
+            let entry = lock.crates.get(&subrepo_key).cloned();
+            if entry.is_none() {
+                eprintln!(
+                    "warning: {} not in lock file, falling back to heuristic resolution",
+                    subrepo_key
+                );
+            }
+            (entry, lock.host_crates.get(&subrepo_key).cloned())
+        }
+        None => (None, None),
+    };
+
+    // Direct normal deps with links keys: their build-script outputs feed
+    // this crate's build script as DEP_<LINKS>_<KEY> env vars
+    let linked_deps: Vec<String> = match (&lock_file, &lock_entry) {
+        (Some(lock), Some(entry)) => entry
+            .deps
+            .iter()
+            .filter(|d| {
+                lock.crates
+                    .get(&d.subrepo)
+                    .map(|e| e.links.is_some())
+                    .unwrap_or(false)
+            })
+            .map(|d| {
+                format!(
+                    "///{}/{}//:_{}_build_script|buildscript",
+                    args.third_party_folder,
+                    d.subrepo,
+                    d.crate_name.replace('-', "_")
+                )
+            })
+            .collect(),
+        _ => vec![],
     };
 
     let mk = |d: &crate::resolve::LockDep| {
@@ -203,6 +231,7 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         build_script_path.as_deref(),
         &lib_path,
         "",
+        &linked_deps,
     );
 
     // Binary targets (e.g. protoc plugins). Named <crate>_bin; they link the
@@ -241,6 +270,7 @@ pub fn run(args: GenerateArgs) -> Result<()> {
             build_script_path.as_deref(),
             &lib_path,
             "_host",
+            &linked_deps,
         ));
     }
 
@@ -464,6 +494,7 @@ fn generate_build_file(
     build_script_path: Option<&str>,
     lib_path: &str,
     suffix: &str,
+    linked_deps: &[String],
 ) -> String {
     let mut content = String::new();
 
@@ -521,7 +552,7 @@ fn generate_build_file(
 
     // If this crate has a build script, generate two-stage build
     if let Some(script_path) = build_script_path {
-        content.push_str(&generate_build_script_rule(&normalized_name, features, build_deps, script_path));
+        content.push_str(&generate_build_script_rule(&normalized_name, features, build_deps, script_path, linked_deps));
         content.push_str("\n");
         content.push_str(&generate_compile_rule_with_buildscript(
             &normalized_name,
@@ -630,6 +661,7 @@ fn generate_build_script_rule(
     features: &[String],
     build_deps: &[(String, String)],
     script_path: &str,
+    linked_deps: &[String],
 ) -> String {
     let mut content = String::new();
 
@@ -658,9 +690,14 @@ fn generate_build_script_rule(
     // rule so the files a build script generates survive into the crate's
     // compile action (the directives file records it by name; compile
     // resolves it as a sibling of the directives file).
+    let dep_metadata_arg = if linked_deps.is_empty() {
+        ""
+    } else {
+        "--dep-metadata $SRCS_DEP_METADATA "
+    };
     let build_script_cmd = format!(
-        "mkdir -p out && {}$TOOLS_PLEASE_RUST build-script --manifest-path $SRCS_MANIFEST --build-script $SRCS_SCRIPT --out-dir out --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cc $TOOLS_CC {}--output $OUTS_BUILDSCRIPT {}",
-        aggregate_cmd, externconfig_arg, feature_str
+        "mkdir -p out && {}$TOOLS_PLEASE_RUST build-script --manifest-path $SRCS_MANIFEST --build-script $SRCS_SCRIPT --out-dir out --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cc $TOOLS_CC {}{}--output $OUTS_BUILDSCRIPT {}",
+        aggregate_cmd, externconfig_arg, dep_metadata_arg, feature_str
     );
 
     content.push_str(&format!("# Stage 1: Run build script for {}\n", normalized_name));
@@ -676,6 +713,13 @@ fn generate_build_script_rule(
         content.push_str("        \"externconfigs\": [\n");
         for (_name, target) in build_deps {
             content.push_str(&format!("            \"{}|externconfig\",\n", target));
+        }
+        content.push_str("        ],\n");
+    }
+    if !linked_deps.is_empty() {
+        content.push_str("        \"dep_metadata\": [\n");
+        for label in linked_deps {
+            content.push_str(&format!("            \"{}\",\n", label));
         }
         content.push_str("        ],\n");
     }
@@ -937,6 +981,7 @@ mod tests {
             build_script,
             "src/lib.rs",
             suffix,
+            &[],
         )
     }
 
@@ -959,6 +1004,27 @@ mod tests {
         assert!(out.contains("\"script\": [\"build/main.rs\"]"));
         assert!(out.contains("--buildscript $SRCS_BUILDSCRIPT"));
         assert!(out.contains("\"out\": [\"out\"]"));
+        assert!(!out.contains("dep_metadata"));
+    }
+
+    #[test]
+    fn linked_deps_feed_build_script() {
+        let out = generate_build_file(
+            "my-crate",
+            "1.2.3",
+            &cargo_toml::Edition::E2021,
+            "lib",
+            &[],
+            &[],
+            &[],
+            Some("build.rs"),
+            "src/lib.rs",
+            "",
+            &["///third_party/rust/libz_sys//:_libz_sys_build_script|buildscript".to_string()],
+        );
+        assert!(out.contains("\"dep_metadata\": ["));
+        assert!(out.contains("///third_party/rust/libz_sys//:_libz_sys_build_script|buildscript"));
+        assert!(out.contains("--dep-metadata $SRCS_DEP_METADATA"));
     }
 
     #[test]
@@ -1065,6 +1131,7 @@ mod run_tests {
                     target_name: "dep_a".to_string(),
                 }],
                 build_deps: vec![],
+                links: None,
             },
         );
         let mut host_crates = BTreeMap::new();
@@ -1077,6 +1144,7 @@ mod run_tests {
                     features: vec!["host-feat".to_string()],
                     deps: vec![],
                     build_deps: vec![],
+                    links: None,
                 },
             );
         }

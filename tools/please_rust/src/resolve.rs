@@ -74,6 +74,10 @@ pub struct LockEntry {
     pub features: Vec<String>,
     pub deps: Vec<LockDep>,
     pub build_deps: Vec<LockDep>,
+    /// The manifest's links key; such crates export build-script metadata
+    /// to direct dependents as DEP_<LINKS>_<KEY> env vars
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub links: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -668,6 +672,7 @@ fn emit_entry(
         features: n.unit(unit).enabled_features.iter().cloned().collect(),
         deps,
         build_deps,
+        links: n.manifest.package.as_ref().and_then(|p| p.links.clone()),
     })
 }
 
