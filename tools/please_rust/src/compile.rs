@@ -532,6 +532,7 @@ mod command_tests {
             cap_lints: Some("allow".to_string()),
             cc: None,
             deps: vec![],
+            native: vec![],
             features: vec!["std".to_string()],
             renames: vec![],
             static_crt: false,
