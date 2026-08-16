@@ -26,6 +26,39 @@ def rust_crate_download(name:str, crate:str, version:str, hashes:list=None, labe
     )
 
 
+def rust_git_download(name:str, crate:str, version:str, repo:str, revision:str, hashes:list=None,
+                      host:str="github.com", subdir:str="", visibility:list=None):
+    """Downloads a crate's source from a git forge archive (for forks and
+    unpublished revisions), normalized to the {crate}-{version} layout that
+    rust_repo expects. The go-rules `download` pattern: the crate keeps its
+    canonical name and version, the bytes come from the fork.
+
+    Args:
+        name: Name of the rule.
+        crate: Crate name (canonical, as dependents refer to it).
+        version: Version dependents resolve against.
+        repo: owner/repo on the forge.
+        revision: Commit sha or tag to fetch.
+        hashes: Optional archive hashes to verify.
+        host: Forge host serving /archive/ tarballs (github.com, gitlab works too).
+        subdir: Path of the crate within the repo, for workspace members.
+    """
+    dl = remote_file(
+        name = tag(name, "git"),
+        url = f"https://{host}/{repo}/archive/{revision}.tar.gz",
+        hashes = hashes,
+        extract = True,
+    )
+    src_path = f"$SRCS/{subdir}" if subdir else "$SRCS"
+    return build_rule(
+        name = name,
+        srcs = [dl],
+        outs = [f"{crate}-{version}"],
+        cmd = f"mv {src_path} $OUT",
+        visibility = visibility,
+    )
+
+
 def rust_repo(
     name: str = None,
     crate: str = "",
@@ -43,6 +76,9 @@ def rust_repo(
     indirect: bool = False,
     default_features: bool = True,
     bin: bool = False,
+    download: str = None,
+    git_repo: str = "",
+    git_revision: str = "",
 ):
     """Downloads a crate and generates BUILD files as a subrepo.
 
@@ -77,6 +113,12 @@ def rust_repo(
                           are enabled unless this is False.
         bin: True to alias the crate's binary target (<crate>_bin) instead of
              its library, for crates used as tools (e.g. protoc plugins).
+        download: A rule providing the crate source (a {crate}-{version} dir
+                  with Cargo.toml at its root) instead of the crates.io
+                  tarball — e.g. a rust_git_download of a fork.
+        git_repo: owner/repo shorthand: fetch the source from this git forge
+                  repository instead of crates.io.
+        git_revision: Commit sha or tag for git_repo.
     """
     if not crate:
         fail("crate is required for rust_repo")
@@ -95,13 +137,24 @@ def rust_repo(
         # duplicates use the `crate-x.y.z` convention (written by sync).
         subrepo_name = name
 
-    # Download the crate
-    download = rust_crate_download(
-        name = tag(name, "download"),
-        crate = crate,
-        version = version,
-        hashes = hashes,
-    )
+    # Download the crate (crates.io tarball, a git forge archive, or any
+    # user-provided rule via download=)
+    if git_repo:
+        download = rust_git_download(
+            name = tag(name, "download"),
+            crate = crate,
+            version = version,
+            repo = git_repo,
+            revision = git_revision or version,
+            hashes = hashes,
+        )
+    elif not download:
+        download = rust_crate_download(
+            name = tag(name, "download"),
+            crate = crate,
+            version = version,
+            hashes = hashes,
+        )
 
     # The crate's manifest, staged for the package-level rust_resolve rule
     build_rule(

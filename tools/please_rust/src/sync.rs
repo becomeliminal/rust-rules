@@ -82,6 +82,9 @@ struct Decl {
     root: bool,
     /// Cargo semantics: roots enable default features unless opted out
     default_features: bool,
+    /// Git forge source (owner/repo, revision) instead of crates.io
+    git_repo: String,
+    git_revision: String,
 }
 
 impl Decl {
@@ -293,7 +296,7 @@ fn repo_root(build_file: &Path) -> PathBuf {
     }
 }
 
-const MANAGED_KEYS: &[&str] = &["name", "crate", "version", "features", "hashes", "dep_overrides", "indirect", "default_features"];
+const MANAGED_KEYS: &[&str] = &["name", "crate", "version", "features", "hashes", "dep_overrides", "indirect", "default_features", "git_repo", "git_revision"];
 
 fn parse_build(lines: &[String]) -> Result<Vec<Decl>> {
     let mut decls = Vec::new();
@@ -391,6 +394,8 @@ fn parse_build(lines: &[String]) -> Result<Vec<Decl>> {
         decls.push(Decl {
             root: !indirect,
             default_features: !no_default,
+            git_repo: get("git_repo").unwrap_or_default(),
+            git_revision: get("git_revision").unwrap_or_default(),
             name,
             crate_name,
             version,
@@ -431,8 +436,27 @@ fn import_cargo_lock(path: &Path, decls: &mut Vec<Decl>) -> Result<()> {
             .and_then(|v| v.as_str())
             .unwrap_or_default();
         let source = pkg.get("source").and_then(|v| v.as_str()).unwrap_or("");
-        // Only registry crates can be fetched from crates.io
-        if name.is_empty() || !source.contains("registry") {
+        // Registry crates fetch from crates.io; git+ sources from a forge
+        // archive (github-style /archive/ URLs) when the host supports it.
+        let (mut git_repo, mut git_revision) = (String::new(), String::new());
+        if let Some(rest) = source.strip_prefix("git+") {
+            let (url, frag) = rest.split_once('#').unwrap_or((rest, ""));
+            let url = url.split('?').next().unwrap_or(url);
+            if let Some(path) = url.strip_prefix("https://github.com/") {
+                git_repo = path.trim_end_matches(".git").to_string();
+                git_revision = frag.to_string();
+            } else {
+                eprintln!(
+                    "warning: {} uses a non-github git source ({}); declare it manually with rust_repo(download = ...)",
+                    name, url
+                );
+                continue;
+            }
+            if git_revision.is_empty() {
+                eprintln!("warning: {} git source has no pinned revision, skipping", name);
+                continue;
+            }
+        } else if name.is_empty() || !source.contains("registry") {
             continue;
         }
         let checksum = pkg
@@ -464,6 +488,8 @@ fn import_cargo_lock(path: &Path, decls: &mut Vec<Decl>) -> Result<()> {
             imported: true,
             root: false,
             default_features: true,
+            git_repo: git_repo.clone(),
+            git_revision: git_revision.clone(),
         });
         added += 1;
     }
@@ -651,6 +677,10 @@ fn emit_decl(d: &Decl) -> String {
     if !d.hashes.is_empty() {
         let hs: Vec<String> = d.hashes.iter().map(|h| format!("\"{}\"", h)).collect();
         s.push_str(&format!("    hashes = [{}],\n", hs.join(", ")));
+    }
+    if !d.git_repo.is_empty() {
+        s.push_str(&format!("    git_repo = \"{}\",\n", d.git_repo));
+        s.push_str(&format!("    git_revision = \"{}\",\n", d.git_revision));
     }
     if !d.root {
         s.push_str("    indirect = True,\n");
@@ -973,6 +1003,8 @@ pub fn lock(args: LockCmdArgs) -> Result<()> {
             imported: !root,
             root,
             default_features: true,
+            git_repo: String::new(),
+            git_revision: String::new(),
         });
     }
 
