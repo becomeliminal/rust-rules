@@ -74,3 +74,10 @@ ConfigKey = LlvmTools
 DefaultValue = //third_party/rust:toolchain_llvm_tools
 Help = Build label of the llvm-tools directory (llvm-profdata, llvm-cov) used for coverage.
 Inherit = true
+
+[PluginConfig "pipelined_compilation"]
+ConfigKey = PipelinedCompilation
+DefaultValue = false
+Type = bool
+Help = Split each crate into a metadata-only compile that dependents hang off plus a parallel full compile (the rules_rust two-action scheme). Dependency chains build at frontend depth; the frontend runs twice per crate.
+Inherit = true

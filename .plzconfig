@@ -10,6 +10,8 @@ Target = //plugins:rust
 Rustc = //third_party/rust:toolchain_rustc
 StdLib = //third_party/rust:toolchain_stdlib
 RepoRoot = //third_party/rust:toolchain_target
+; Exercise the pipelined shape in this repo; consumers default to off
+PipelinedCompilation = true
 
 [Parse]
 preloadsubincludes = ///proto//build_defs:proto
@@ -134,3 +136,10 @@ Inherit = true
 ; default list. Consuming repos need this too (documented in the README).
 [cover]
 fileextension = .rs
+
+[PluginConfig "pipelined_compilation"]
+ConfigKey = PipelinedCompilation
+DefaultValue = false
+Type = bool
+Help = Split each crate into a metadata-only compile that dependents hang off plus a parallel full compile (the rules_rust two-action scheme). Dependency chains build at frontend depth; the frontend runs twice per crate.
+Inherit = true

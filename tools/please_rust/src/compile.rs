@@ -139,6 +139,12 @@ pub struct CompileArgs {
     #[arg(long)]
     pub coverage: bool,
 
+    /// Pipelined metadata compile: run the full compile but terminate rustc
+    /// as soon as the .rmeta artifact is emitted (cargo/rules_rust scheme; a
+    /// plain --emit=metadata rmeta lacks the optimized MIR dependents need)
+    #[arg(long)]
+    pub pipeline_rmeta: bool,
+
     /// Build a test harness (passes --test to rustc)
     #[arg(long)]
     pub test: bool,
@@ -205,13 +211,58 @@ pub fn run(args: CompileArgs) -> Result<()> {
 
     eprintln!("please_rust compile: {:?}", cmd);
 
-    let status = cmd.status()
-        .with_context(|| format!("Failed to execute rustc: {}", args.rustc.display()))?;
+    run_rustc(cmd, &args)
+}
 
+/// Runs rustc, rendering its JSON diagnostics, and — in pipelined metadata
+/// mode — terminates it as soon as the .rmeta artifact is on disk: the
+/// codegen this skips belongs to the parallel `#link` action.
+fn run_rustc(mut cmd: Command, args: &CompileArgs) -> Result<()> {
+    use std::io::BufRead;
+
+    cmd.stderr(std::process::Stdio::piped());
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("Failed to execute rustc: {}", args.rustc.display()))?;
+    let stderr = child.stderr.take().expect("stderr piped");
+    let reader = std::io::BufReader::new(stderr);
+
+    let mut rmeta_emitted = false;
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => break,
+        };
+        let parsed: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => {
+                eprintln!("{}", line);
+                continue;
+            }
+        };
+        if let Some(artifact) = parsed.get("artifact").and_then(|a| a.as_str()) {
+            if args.pipeline_rmeta
+                && (parsed.get("emit").and_then(|e| e.as_str()) == Some("metadata")
+                    || artifact.ends_with(".rmeta"))
+            {
+                rmeta_emitted = true;
+                let _ = child.kill();
+                break;
+            }
+            continue;
+        }
+        if let Some(rendered) = parsed.get("rendered").and_then(|r| r.as_str()) {
+            eprint!("{}", rendered);
+        }
+    }
+
+    let status = child.wait().context("Failed to wait for rustc")?;
+    if rmeta_emitted {
+        return Ok(());
+    }
     if !status.success() {
         anyhow::bail!("rustc failed with exit code: {}", status.code().unwrap_or(-1));
     }
-
     Ok(())
 }
 
@@ -343,7 +394,13 @@ fn build_command(args: &CompileArgs) -> Result<Command> {
         cmd.arg(format!("--crate-type={}", args.crate_type));
     }
     cmd.arg(format!("--emit={}", args.emit));
-    cmd.arg("--error-format=human");
+    // Always JSON: rustc tracks the error-format flags in the crate hash
+    // (svh), and pipelined metadata twins must produce the same svh as
+    // their #link rules, so every compile uses the same diagnostics flags.
+    // The wrapper prints the pre-rendered messages, and the artifact
+    // notifications drive the pipelined early-cutoff.
+    cmd.arg("--error-format=json");
+    cmd.arg("--json=diagnostic-rendered-ansi,artifacts");
     if let Some(level) = &args.cap_lints {
         cmd.arg(format!("--cap-lints={}", level));
     }
@@ -455,11 +512,13 @@ fn build_command(args: &CompileArgs) -> Result<Command> {
     }
     if args.coverage {
         cmd.arg("-C").arg("instrument-coverage");
-        // Coverage mappings record sources joined onto the absolute build
-        // sandbox cwd; remap it away so llvm-cov reports repo-relative paths.
-        if let Ok(cwd) = std::env::current_dir() {
-            cmd.arg(format!("--remap-path-prefix={}=", cwd.display()));
-        }
+    }
+    // Remap the build sandbox cwd out of all embedded paths. This keeps the
+    // crate hash (svh) identical across sandbox directories — required for
+    // pipelined #rmeta/#link twins to agree — makes artifacts reproducible
+    // byte-for-byte across machines, and gives coverage repo-relative paths.
+    if let Ok(cwd) = std::env::current_dir() {
+        cmd.arg(format!("--remap-path-prefix={}=", cwd.display()));
     }
 
     // Debug/optimize flags
@@ -546,6 +605,7 @@ mod command_tests {
             deps: vec![],
             native: vec![],
             coverage: false,
+            pipeline_rmeta: false,
             features: vec!["std".to_string()],
             renames: vec![],
             static_crt: false,

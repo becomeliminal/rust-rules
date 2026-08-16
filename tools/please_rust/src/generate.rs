@@ -65,6 +65,13 @@ pub struct GenerateArgs {
     /// Build label of a C toolchain (cc_toolchain rule); empty disables
     #[arg(long, default_value = "")]
     pub cc_label: String,
+
+    /// Emit pipelined-compilation rule shapes: each crate splits into a
+    /// `_X#link` compile rule, a `_X#rmeta` metadata-only rule that
+    /// dependents' compiles hang off, and a public `X` filegroup that
+    /// propagates rlibs to binary links (the rules_rust two-action scheme)
+    #[arg(long)]
+    pub pipeline: bool,
 }
 
 pub fn run(args: GenerateArgs) -> Result<()> {
@@ -232,6 +239,7 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         &lib_path,
         "",
         &linked_deps,
+        args.pipeline,
     );
 
     // Binary targets (e.g. protoc plugins). Named <crate>_bin; they link the
@@ -249,6 +257,7 @@ pub fn run(args: GenerateArgs) -> Result<()> {
                 &requested_features,
                 &deps,
                 has_lib,
+                args.pipeline,
             ));
         }
     }
@@ -271,6 +280,7 @@ pub fn run(args: GenerateArgs) -> Result<()> {
             &lib_path,
             "_host",
             &linked_deps,
+            args.pipeline,
         ));
     }
 
@@ -483,6 +493,22 @@ fn resolve_build_dependencies(
     deps
 }
 
+/// Rewrites a dep target label to its `_name#rmeta` twin.
+fn rmeta_ref(target: &str) -> String {
+    match target.rfind(':') {
+        Some(i) => format!("{}:_{}#rmeta", &target[..i], &target[i + 1..]),
+        None => format!("_{}#rmeta", target),
+    }
+}
+
+/// Rewrites a dep target label to its `_name#link` compile rule.
+fn link_ref(target: &str) -> String {
+    match target.rfind(':') {
+        Some(i) => format!("{}:_{}#link", &target[..i], &target[i + 1..]),
+        None => format!("_{}#link", target),
+    }
+}
+
 fn generate_build_file(
     crate_name: &str,
     version: &str,
@@ -495,6 +521,7 @@ fn generate_build_file(
     lib_path: &str,
     suffix: &str,
     linked_deps: &[String],
+    pipeline: bool,
 ) -> String {
     let mut content = String::new();
 
@@ -552,7 +579,7 @@ fn generate_build_file(
 
     // If this crate has a build script, generate two-stage build
     if let Some(script_path) = build_script_path {
-        content.push_str(&generate_build_script_rule(&normalized_name, features, build_deps, script_path, linked_deps));
+        content.push_str(&generate_build_script_rule(&normalized_name, features, build_deps, script_path, linked_deps, pipeline));
         content.push_str("\n");
         content.push_str(&generate_compile_rule_with_buildscript(
             &normalized_name,
@@ -565,6 +592,7 @@ fn generate_build_file(
             &feature_str,
             deps,
             lib_path,
+            pipeline,
         ));
     } else {
         content.push_str(&generate_compile_rule(
@@ -578,8 +606,139 @@ fn generate_build_file(
             &feature_str,
             deps,
             lib_path,
+            pipeline,
         ));
     }
+
+    if pipeline {
+        // Public filegroup: what dependents and the rust_repo alias point
+        // at. It propagates transitive rlibs to binary links via its deps.
+        content.push('\n');
+        content.push_str("filegroup(\n");
+        content.push_str(&format!("    name = \"{}\",\n", normalized_name));
+        content.push_str(&format!("    srcs = [\":_{}#link\"],\n", normalized_name));
+        if !deps.is_empty() {
+            content.push_str("    deps = [\n");
+            for (_name, target) in deps {
+                content.push_str(&format!("        \"{}\",\n", target));
+            }
+            content.push_str("    ],\n");
+        }
+        content.push_str("    visibility = [\"PUBLIC\"],\n");
+        content.push_str(")\n");
+
+        content.push('\n');
+        if crate_type == "proc-macro" {
+            // Proc-macros must fully build before dependents can expand
+            // them; the twin just re-exports the externconfig under the
+            // uniform name, with the dylib staged via the public dep.
+            content.push_str("build_rule(\n");
+            content.push_str(&format!("    name = \"_{}#rmeta\",\n", normalized_name));
+            content.push_str(&format!("    srcs = [\":_{}#link|externconfig\"],\n", normalized_name));
+            content.push_str("    cmd = \"cp $SRCS $OUTS_EXTERNCONFIG\",\n");
+            content.push_str("    outs = {\n");
+            content.push_str(&format!("        \"externconfig\": [\"{}.rmeta.externconfig\"],\n", normalized_name));
+            content.push_str("    },\n");
+            content.push_str(&format!("    deps = [\":{}\"],\n", normalized_name));
+            content.push_str("    visibility = [\"PUBLIC\"],\n");
+            content.push_str(")\n");
+        } else {
+            content.push_str(&generate_rmeta_rule(
+                &normalized_name,
+                &crate_ident,
+                edition_str,
+                &out_rmeta,
+                &feature_str,
+                deps,
+                lib_path,
+                build_script_path.is_some(),
+            ));
+        }
+    }
+
+    content
+}
+
+/// Generate the metadata-only compile rule (`_X#rmeta`) that dependents'
+/// compiles hang off under pipelined compilation. Frontend-only: no codegen,
+/// so a chain of crates builds at frontend depth.
+fn generate_rmeta_rule(
+    normalized_name: &str,
+    crate_ident: &str,
+    edition_str: &str,
+    out_rmeta: &str,
+    feature_str: &str,
+    deps: &[(String, String)],
+    lib_path: &str,
+    has_buildscript: bool,
+) -> String {
+    let mut content = String::new();
+
+    let aggregate_cmd = if deps.is_empty() {
+        "true".to_string()
+    } else {
+        "cat $SRCS_EXTERNCONFIGS > externconfig".to_string()
+    };
+    let buildscript_arg = if has_buildscript {
+        "--buildscript $SRCS_BUILDSCRIPT "
+    } else {
+        ""
+    };
+    // The full compile command with --pipeline-rmeta: rustc is terminated as
+    // soon as the rmeta artifact lands (a plain --emit=metadata rmeta lacks
+    // the optimized MIR dependents' codegen needs). Profile flags must match
+    // the link rule so the inlined MIR agrees.
+    let compile_base = format!(
+        "{} && $TOOLS_PLEASE_RUST compile --pipeline-rmeta --externconfig externconfig {}--manifest-path $SRCS_MANIFEST --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cap-lints allow --crate-name {} --edition {} --crate-type lib --emit dep-info,link,metadata {}",
+        aggregate_cmd, buildscript_arg, crate_ident, edition_str, feature_str
+    );
+    let ec_cmd = format!("echo '{}={}' > $OUTS_EXTERNCONFIG", normalized_name, out_rmeta);
+    let cmd_dbg = format!("{} -g $SRCS_MAIN && {}", compile_base, ec_cmd);
+    let cmd_opt = format!("{} -O $SRCS_MAIN && {}", compile_base, ec_cmd);
+
+    content.push_str("build_rule(\n");
+    content.push_str(&format!("    name = \"_{}#rmeta\",\n", normalized_name));
+    content.push_str("    srcs = {\n");
+    content.push_str(&format!("        \"main\": [\"{}\"],\n", lib_path));
+    content.push_str(&format!("        \"mods\": glob([\"src/**\", \"*.rs\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\"], allow_empty=True),\n", lib_path));
+    content.push_str("        \"data\": glob([\"*.md\", \"LICENSE*\", \"examples/**/*\"], allow_empty=True),\n");
+    content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
+    if !deps.is_empty() {
+        content.push_str("        \"externconfigs\": [\n");
+        for (_name, target) in deps {
+            content.push_str(&format!("            \"{}|externconfig\",\n", rmeta_ref(target)));
+        }
+        content.push_str("        ],\n");
+    }
+    if has_buildscript {
+        content.push_str(&format!("        \"buildscript\": [\":_{}_build_script|buildscript\"],\n", normalized_name));
+        content.push_str(&format!("        \"buildscript_out\": [\":_{}_build_script|out\"],\n", normalized_name));
+    }
+    content.push_str("    },\n");
+    content.push_str("    cmd = {\n");
+    content.push_str(&format!("        \"dbg\": \"{}\",\n", cmd_dbg));
+    content.push_str(&format!("        \"opt\": \"{}\",\n", cmd_opt));
+    content.push_str(&format!("        \"cover\": \"{}\",\n", cmd_dbg));
+    content.push_str("    },\n");
+    content.push_str("    outs = {\n");
+    content.push_str(&format!("        \"rmeta\": [\"{}\"],\n", out_rmeta));
+    content.push_str(&format!("        \"externconfig\": [\"{}.rmeta.externconfig\"],\n", normalized_name));
+    content.push_str("    },\n");
+    if !deps.is_empty() {
+        content.push_str("    deps = [\n");
+        for (_name, target) in deps {
+            content.push_str(&format!("        \"{}\",\n", rmeta_ref(target)));
+        }
+        content.push_str("    ],\n");
+    }
+    content.push_str("    tools = {\n");
+    content.push_str("        \"please_rust\": [\"@//tools/please_rust:bootstrap\"],\n");
+    content.push_str("        \"rustc\": [\"@//third_party/rust:toolchain_rustc\"],\n");
+    content.push_str("        \"sysroot\": [\"@//third_party/rust:toolchain_sysroot\"],\n");
+    content.push_str("    },\n");
+    content.push_str("    needs_transitive_deps = True,\n");
+    content.push_str("    visibility = [\"PUBLIC\"],\n");
+    content.push_str(")\n");
 
     content
 }
@@ -594,6 +753,7 @@ fn generate_bin_rule(
     features: &[String],
     deps: &[(String, String)],
     has_lib: bool,
+    pipeline: bool,
 ) -> String {
     let edition_str = match edition {
         cargo_toml::Edition::E2015 => "2015",
@@ -619,10 +779,16 @@ fn generate_bin_rule(
     content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
     content.push_str("        \"externconfigs\": [\n");
     if has_lib {
-        content.push_str(&format!("            \":{}|externconfig\",\n", crate_ident));
+        let lib_ec = if pipeline {
+            format!(":_{}#link", crate_ident)
+        } else {
+            format!(":{}", crate_ident)
+        };
+        content.push_str(&format!("            \"{}|externconfig\",\n", lib_ec));
     }
     for (_name, target) in deps {
-        content.push_str(&format!("            \"{}|externconfig\",\n", target));
+        let ec = if pipeline { link_ref(target) } else { target.clone() };
+        content.push_str(&format!("            \"{}|externconfig\",\n", ec));
     }
     content.push_str("        ],\n");
     content.push_str("    },\n");
@@ -662,6 +828,7 @@ fn generate_build_script_rule(
     build_deps: &[(String, String)],
     script_path: &str,
     linked_deps: &[String],
+    pipeline: bool,
 ) -> String {
     let mut content = String::new();
 
@@ -712,7 +879,8 @@ fn generate_build_script_rule(
     if has_build_deps {
         content.push_str("        \"externconfigs\": [\n");
         for (_name, target) in build_deps {
-            content.push_str(&format!("            \"{}|externconfig\",\n", target));
+            let ec = if pipeline { link_ref(target) } else { target.clone() };
+            content.push_str(&format!("            \"{}|externconfig\",\n", ec));
         }
         content.push_str("        ],\n");
     }
@@ -757,6 +925,37 @@ fn generate_build_script_rule(
 }
 
 /// Generate the main compile rule with buildscript support (Stage 2)
+/// Pipelined-shape naming for a crate's compile rule: the rule name plus how
+/// dependents' labels and externconfig refs are written. rlib-ish crates hang
+/// off deps' metadata twins; proc-macros link, so they need full dep builds.
+fn pipeline_shape(
+    normalized_name: &str,
+    crate_type: &str,
+    pipeline: bool,
+) -> (String, fn(&str) -> String, fn(&str) -> String) {
+    if !pipeline {
+        return (
+            normalized_name.to_string(),
+            |t| t.to_string(),
+            |t| format!("{}|externconfig", t),
+        );
+    }
+    let rule_name = format!("_{}#link", normalized_name);
+    if crate_type == "proc-macro" {
+        (
+            rule_name,
+            |t| t.to_string(),
+            |t| format!("{}|externconfig", link_ref(t)),
+        )
+    } else {
+        (
+            rule_name,
+            |t| rmeta_ref(t),
+            |t| format!("{}|externconfig", rmeta_ref(t)),
+        )
+    }
+}
+
 fn generate_compile_rule_with_buildscript(
     normalized_name: &str,
     crate_ident: &str,
@@ -768,8 +967,11 @@ fn generate_compile_rule_with_buildscript(
     feature_str: &str,
     deps: &[(String, String)],
     lib_path: &str,
+    pipeline: bool,
 ) -> String {
     let mut content = String::new();
+    let (rule_name, dep_label, dep_ec): (String, fn(&str) -> String, fn(&str) -> String) =
+        pipeline_shape(normalized_name, crate_type, pipeline);
 
     // Direct deps' externconfigs only: transitive configs can contain
     // colliding entries for other versions of the same crate.
@@ -796,7 +998,7 @@ fn generate_compile_rule_with_buildscript(
 
     content.push_str(&format!("# Stage 2: Compile {} with build script output\n", normalized_name));
     content.push_str("build_rule(\n");
-    content.push_str(&format!("    name = \"{}\",\n", normalized_name));
+    content.push_str(&format!("    name = \"{}\",\n", rule_name));
     content.push_str("    srcs = {\n");
     content.push_str(&format!("        \"main\": [\"{}\"],\n", lib_path));
     content.push_str(&format!("        \"mods\": glob([\"src/**\", \"*.rs\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\"], allow_empty=True),\n", lib_path));
@@ -805,7 +1007,7 @@ fn generate_compile_rule_with_buildscript(
     if !deps.is_empty() {
         content.push_str("        \"externconfigs\": [\n");
         for (_name, target) in deps {
-            content.push_str(&format!("            \"{}|externconfig\",\n", target));
+            content.push_str(&format!("            \"{}\",\n", dep_ec(target)));
         }
         content.push_str("        ],\n");
     }
@@ -819,7 +1021,7 @@ fn generate_compile_rule_with_buildscript(
     content.push_str("    },\n");
     content.push_str("    outs = {\n");
     content.push_str(&format!("        \"rlib\": [\"{}\"],\n", out_rlib));
-    if crate_type != "proc-macro" {
+    if crate_type != "proc-macro" && !pipeline {
         content.push_str(&format!("        \"rmeta\": [\"{}\"],\n", out_rmeta));
     }
     content.push_str(&format!("        \"externconfig\": [\"{}.externconfig\"],\n", normalized_name));
@@ -828,7 +1030,7 @@ fn generate_compile_rule_with_buildscript(
     if !deps.is_empty() {
         content.push_str("    deps = [\n");
         for (_name, target) in deps {
-            content.push_str(&format!("        \"{}\",\n", target));
+            content.push_str(&format!("        \"{}\",\n", dep_label(target)));
         }
         content.push_str("    ],\n");
     }
@@ -858,8 +1060,11 @@ fn generate_compile_rule(
     feature_str: &str,
     deps: &[(String, String)],
     lib_path: &str,
+    pipeline: bool,
 ) -> String {
     let mut content = String::new();
+    let (rule_name, dep_label, dep_ec): (String, fn(&str) -> String, fn(&str) -> String) =
+        pipeline_shape(normalized_name, crate_type, pipeline);
 
     // Direct deps' externconfigs only: transitive configs can contain
     // colliding entries for other versions of the same crate.
@@ -884,7 +1089,7 @@ fn generate_compile_rule(
     );
 
     content.push_str("build_rule(\n");
-    content.push_str(&format!("    name = \"{}\",\n", normalized_name));
+    content.push_str(&format!("    name = \"{}\",\n", rule_name));
     content.push_str("    srcs = {\n");
     content.push_str(&format!("        \"main\": [\"{}\"],\n", lib_path));
     content.push_str(&format!("        \"mods\": glob([\"src/**\", \"*.rs\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\"], allow_empty=True),\n", lib_path));
@@ -893,7 +1098,7 @@ fn generate_compile_rule(
     if !deps.is_empty() {
         content.push_str("        \"externconfigs\": [\n");
         for (_name, target) in deps {
-            content.push_str(&format!("            \"{}|externconfig\",\n", target));
+            content.push_str(&format!("            \"{}\",\n", dep_ec(target)));
         }
         content.push_str("        ],\n");
     }
@@ -905,7 +1110,7 @@ fn generate_compile_rule(
     content.push_str("    },\n");
     content.push_str("    outs = {\n");
     content.push_str(&format!("        \"rlib\": [\"{}\"],\n", out_rlib));
-    if crate_type != "proc-macro" {
+    if crate_type != "proc-macro" && !pipeline {
         content.push_str(&format!("        \"rmeta\": [\"{}\"],\n", out_rmeta));
     }
     content.push_str(&format!("        \"externconfig\": [\"{}.externconfig\"],\n", normalized_name));
@@ -914,7 +1119,7 @@ fn generate_compile_rule(
     if !deps.is_empty() {
         content.push_str("    deps = [\n");
         for (_name, target) in deps {
-            content.push_str(&format!("        \"{}\",\n", target));
+            content.push_str(&format!("        \"{}\",\n", dep_label(target)));
         }
         content.push_str("    ],\n");
     }
@@ -969,6 +1174,17 @@ mod tests {
         build_script: Option<&str>,
         suffix: &str,
     ) -> String {
+        gen_p(crate_type, features, deps, build_script, suffix, false)
+    }
+
+    fn gen_p(
+        crate_type: &str,
+        features: &[&str],
+        deps: &[(&str, &str)],
+        build_script: Option<&str>,
+        suffix: &str,
+        pipeline: bool,
+    ) -> String {
         generate_build_file(
             "my-crate",
             "1.2.3",
@@ -984,6 +1200,7 @@ mod tests {
             "src/lib.rs",
             suffix,
             &[],
+            pipeline,
         )
     }
 
@@ -1023,6 +1240,7 @@ mod tests {
             "src/lib.rs",
             "",
             &["///third_party/rust/libz_sys//:_libz_sys_build_script|buildscript".to_string()],
+            false,
         );
         assert!(out.contains("\"dep_metadata\": ["));
         assert!(out.contains("///third_party/rust/libz_sys//:_libz_sys_build_script|buildscript"));
@@ -1054,6 +1272,50 @@ mod tests {
     }
 
     #[test]
+    fn pipelined_lib_shape() {
+        let out = gen_p("lib", &[], &[("dep_a", "///third_party/rust/dep_a//:dep_a")], None, "", true);
+        // Three-rule shape: link rule, metadata twin, public filegroup
+        assert!(out.contains("name = \"_my_crate#link\""));
+        assert!(out.contains("name = \"_my_crate#rmeta\""));
+        assert!(out.contains("name = \"my_crate\""));
+        // Compiles hang off deps' metadata twins
+        assert!(out.contains("\"///third_party/rust/dep_a//:_dep_a#rmeta|externconfig\""));
+        assert!(out.contains("\"///third_party/rust/dep_a//:_dep_a#rmeta\","));
+        // The twin runs the identical compile, cut off at the rmeta artifact
+        // (identical flags keep the svh in sync with the link rule)
+        assert!(out.contains("--pipeline-rmeta"));
+        assert!(out.contains("my_crate=libmy_crate-1_2_3.rmeta"));
+        let link = out.split("name = \"_my_crate#rmeta\"").next().unwrap();
+        assert!(!link.contains("--pipeline-rmeta"));
+        // The link rule leaves the declared rmeta output to the twin
+        assert!(!link.contains("\"rmeta\": [\"libmy_crate-1_2_3.rmeta\"]"));
+        // The public filegroup keeps dep publics for transitive rlib staging
+        assert!(out.contains("\"///third_party/rust/dep_a//:dep_a\","));
+    }
+
+    #[test]
+    fn pipelined_proc_macro_shape() {
+        let out = gen_p("proc-macro", &[], &[("dep_a", "///third_party/rust/dep_a//:dep_a")], None, "", true);
+        // Proc-macros must fully build: twin is a copy-through of the link
+        // rule's externconfig, and dep refs use the link rules
+        assert!(out.contains("name = \"_my_crate#link\""));
+        assert!(out.contains("name = \"_my_crate#rmeta\""));
+        assert!(out.contains("cp $SRCS $OUTS_EXTERNCONFIG"));
+        assert!(out.contains("\"///third_party/rust/dep_a//:_dep_a#link|externconfig\""));
+        assert!(!out.contains("--pipeline-rmeta"));
+    }
+
+    #[test]
+    fn pipelined_buildscript_twin_consumes_script() {
+        let out = gen_p("lib", &[], &[], Some("build.rs"), "", true);
+        // The metadata twin still consumes the build script output (cfgs/env
+        // affect the frontend)
+        let twin = out.split("name = \"_my_crate#rmeta\"").nth(1).unwrap();
+        assert!(twin.contains("--buildscript $SRCS_BUILDSCRIPT"));
+        assert!(twin.contains(":_my_crate_build_script|buildscript"));
+    }
+
+    #[test]
     fn bin_rule_shape() {
         let out = generate_bin_rule(
             "my_crate",
@@ -1064,6 +1326,7 @@ mod tests {
             &[],
             &[("dep_a".to_string(), "///third_party/rust/dep_a//:dep_a".to_string())],
             true,
+            false,
         );
         assert!(out.contains("name = \"my_tool_bin\""));
         assert!(out.contains("--crate-name my_tool"));
@@ -1107,6 +1370,7 @@ mod run_tests {
             src_root,
             subrepo: "third_party/rust/demo".to_string(),
             third_party_folder: "third_party/rust".to_string(),
+            pipeline: false,
             features: "fallback-feat".to_string(),
             install: "".to_string(),
             overrides: vec![],

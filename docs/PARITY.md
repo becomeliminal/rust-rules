@@ -44,10 +44,17 @@ binary-link time.
 - [ ] Nightly / channel toolchains policy
 
 ### Build speed
-- [ ] rmeta pipelining via the rules_rust two-action scheme: a metadata-only
-      compile per crate that dependents' compiles hang off, with full rlib
-      codegen in parallel and only binary links waiting on rlibs. Cost:
-      frontend runs twice; win: chains build at frontend-depth speed
+- [x] rmeta pipelining via the rules_rust two-action scheme: each crate
+      splits into a `_X#rmeta` metadata compile (the full command, cut off
+      the moment rustc reports the rmeta artifact — a plain --emit=metadata
+      rmeta lacks the MIR dependents need) that dependents' compiles hang
+      off, a `_X#link` full compile in parallel, and a public filegroup
+      that stages transitive rlibs for binary links. First-party routes
+      via provides/requires ('rust_rmeta'); subrepos wire twins explicitly.
+      Opt-in via PipelinedCompilation (on in this repo, off by default).
+      Side effect: all compiles now pass --remap-path-prefix=$CWD= (twins
+      must hash identically across sandboxes), so artifacts are
+      path-independent — better remote cache portability for free
 
 ### Tooling rules
 - [ ] `rust_clippy` (clippy-preview is already in the dist tarball) + CI gate

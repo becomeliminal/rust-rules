@@ -36,7 +36,7 @@ def _dep_names(deps:list):
     return names
 
 
-def _compile_cmds(crate_name:str, edition:str, crate_type:str, emit:str, features:list=None, test:bool=False, write_externconfig:bool=False, manifest:str=None, deps:list=None, lib_file:str='', static:bool=False, cc_deps:list=None, native_files:list=None, main_src:str='$SRCS_MAIN'):
+def _compile_cmds(crate_name:str, edition:str, crate_type:str, emit:str, features:list=None, test:bool=False, write_externconfig:bool=False, manifest:str=None, deps:list=None, lib_file:str='', static:bool=False, cc_deps:list=None, native_files:list=None, main_src:str='$SRCS_MAIN', pipeline_rmeta:bool=False):
     """Returns the {dbg, opt} command dict for compiling a crate via please_rust.
 
     Direct deps get --extern (by crate name, from --dep filtering); transitive
@@ -50,7 +50,8 @@ def _compile_cmds(crate_name:str, edition:str, crate_type:str, emit:str, feature
     cc_arg = '--cc $TOOLS_CC ' if links and CONFIG.RUST.CC_TOOL else ''
     static_arg = '--static ' if static else ''
     native_arg = '--native $SRCS_NATIVE ' if cc_deps else ''
-    base = f'{_AGGREGATE_EXTERNCONFIGS} && $TOOLS_PLEASE_RUST compile --externconfig externconfig {manifest_arg}{dep_args}{cc_arg}{static_arg}{native_arg}--rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --crate-name {crate_name} --edition {edition} --crate-type {crate_type} --emit {emit} {test_arg}{feature_args}'
+    rmeta_arg = '--pipeline-rmeta ' if pipeline_rmeta else ''
+    base = f'{_AGGREGATE_EXTERNCONFIGS} && $TOOLS_PLEASE_RUST compile --externconfig externconfig {rmeta_arg}{manifest_arg}{dep_args}{cc_arg}{static_arg}{native_arg}--rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --crate-name {crate_name} --edition {edition} --crate-type {crate_type} --emit {emit} {test_arg}{feature_args}'
     lib_file = lib_file or f'lib{crate_name}.rlib'
     externconfig_lines = [f'{crate_name}={lib_file}']
     for f in (native_files or []):
@@ -128,10 +129,83 @@ def rust_library(name:str, root:str, crate_name:str="", crate_type:str="rlib", m
     if cc_deps:
         srcs['native'] = cc_deps
 
-    return build_rule(
+    # Pipelined compilation (the rules_rust two-action scheme): rlib crates
+    # split into a `_X#link` compile whose deps are the metadata-only
+    # `_X#rmeta` twins of its deps (rlib codegen never needs dep object
+    # code), a `_X#rmeta` twin dependents' compiles hang off, and a public
+    # filegroup that keeps dep publics so binary links still stage every
+    # transitive rlib. Chains build at frontend depth; codegen parallelises.
+    if CONFIG.RUST.PIPELINED_COMPILATION and crate_type == 'rlib':
+        # Both compile rules require 'rust_rmeta': deps whose public rule
+        # provides it (any pipelined rust library) are routed to their
+        # metadata twin; anything else (cc_deps, proto wrappers) falls back
+        # to the full build of itself.
+        compile_rule = build_rule(
+            name = tag(name, 'link'),
+            srcs = srcs,
+            outs = {
+                'rlib': [f'lib{crate_name}.rlib'],
+                'externconfig': [f'{crate_name}.externconfig'],
+            },
+            cmd = _compile_cmds(
+                crate_name = crate_name,
+                edition = edition,
+                crate_type = rustc_type,
+                emit = 'dep-info,link,metadata',
+                features = features,
+                write_externconfig = True,
+                lib_file = lib_file,
+                deps = deps,
+                cc_deps = cc_deps,
+                native_files = native_files,
+            ),
+            deps = deps + cc_deps,
+            requires = ['rust_rmeta'],
+            tools = _rust_tools(link = False),
+            needs_transitive_deps = True,
+            labels = ['rust'],
+        )
+        rmeta_rule = build_rule(
+            name = tag(name, 'rmeta'),
+            srcs = srcs,
+            outs = {
+                'rmeta': [f'lib{crate_name}.rmeta'],
+                'externconfig': [f'{crate_name}.rmeta.externconfig'],
+            },
+            cmd = _compile_cmds(
+                crate_name = crate_name,
+                edition = edition,
+                crate_type = rustc_type,
+                emit = 'dep-info,link,metadata',
+                features = features,
+                write_externconfig = True,
+                lib_file = f'lib{crate_name}.rmeta',
+                deps = deps,
+                pipeline_rmeta = True,
+            ),
+            deps = deps,
+            requires = ['rust_rmeta'],
+            tools = _rust_tools(link = False),
+            needs_transitive_deps = True,
+            labels = ['rust'],
+        )
+        return filegroup(
+            name = name,
+            srcs = [compile_rule],
+            deps = deps + cc_deps,
+            provides = {'rust_rmeta': rmeta_rule},
+            visibility = visibility,
+            labels = ['rust'],
+        )
+
+    provides = None
+    if CONFIG.RUST.PIPELINED_COMPILATION and linkable:
+        provides = {'rust_rmeta': ':' + tag(name, 'rmeta')}
+    lib_rule = build_rule(
         name = name,
         srcs = srcs,
         outs = outs,
+        provides = provides,
         cmd = _compile_cmds(
             crate_name = crate_name,
             edition = edition,
@@ -150,6 +224,22 @@ def rust_library(name:str, root:str, crate_name:str="", crate_type:str="rlib", m
         visibility = visibility,
         labels = ['rust'],
     )
+    # Linkable non-rlib crates (proc-macros must run, dylibs must link) get a
+    # copy-through `_X#rmeta` twin: it re-exports the externconfig under the
+    # rust_rmeta shape while the full build stages via its dep, so dependents'
+    # compiles wait for the complete artifact as they must.
+    if CONFIG.RUST.PIPELINED_COMPILATION and linkable:
+        build_rule(
+            name = tag(name, 'rmeta'),
+            srcs = [f':{name}|externconfig'],
+            outs = {
+                'externconfig': [f'{crate_name}.rmeta.externconfig'],
+            },
+            cmd = 'cp $SRCS $OUTS_EXTERNCONFIG',
+            deps = [lib_rule],
+            labels = ['rust'],
+        )
+    return lib_rule
 
 
 def rust_binary(name:str, main:str, modules:list=None, deps:list=[], cc_deps:list=[], edition:str='2021', features:list=None, manifest:str=None, static:bool=None, build_root:str=None, build_deps:list|dict=None, build_compile_env:dict=None, build_run_env:dict=None, target_dir:str=None, visibility:list=None):

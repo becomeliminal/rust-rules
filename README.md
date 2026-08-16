@@ -198,6 +198,17 @@ The path to the `stdlib` to be linked by the compiler. Defaults to the toolchain
 StdLib = //third_party/rust:toolchain_stdlib
 ```
 
+### PipelinedCompilation
+Splits each library crate into a metadata-only compile that dependents'
+compiles hang off and a full compile that runs in parallel (the scheme
+cargo and rules_rust use). Dependency chains build at frontend depth
+instead of full-compile depth; the cost is that the compiler frontend runs
+twice per crate. Off by default.
+```ini
+[Plugin "rust"]
+PipelinedCompilation = true
+```
+
 ### Coverage
 `plz cover` works out of the box: tests are compiled with
 `-C instrument-coverage` and the profiles are converted per-file line
