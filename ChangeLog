@@ -1,0 +1,28 @@
+Version 0.2.0
+-------------
+The hermetic rust_repo release: third-party crates as generated subrepos,
+with cargo's contract reimplemented offline (no cargo anywhere but the
+bootstrap egg).
+
+  * rust_repo: crates.io subrepos with generated BUILD files; git-forge
+    sources for forks (download= / git_repo=); runnable bin crates.
+  * please_rust: generate / compile / build-script / resolve / sync /
+    lock / test subcommands; self-hosted via these rules; 82 unit tests.
+  * Resolution in the build graph (rust_resolve): semver version routing
+    and cargo resolver-v2 feature unification, with host/target build
+    units split like cargo's.
+  * sync maintains the third-party BUILD (explicit direct/indirect
+    declarations, pruning, sha256 hashes, Cargo.lock import); lock adds
+    dependencies from the crates.io sparse index without cargo.
+  * First-party rules on the same driver: rust_library (all crate
+    types), rust_binary (statically linked by default), rust_test with
+    per-test results, integration tests, rust_doc_test, rust_benchmark.
+  * proto/gRPC: vendored language definition, protoc-gen-prost/tonic
+    built from their crates.
+  * Toolchain: Rust 1.97.1, sha256-pinned; C compiler via the cc
+    plugin's configuration; CONFIG knobs for all tools.
+  * e2e consumer-repo test and CI workflow.
+
+Version 0.1.0
+-------------
+  * Initial rust_crate-based rules.
