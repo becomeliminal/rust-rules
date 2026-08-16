@@ -36,7 +36,7 @@ def _dep_names(deps:list):
     return names
 
 
-def _compile_cmds(crate_name:str, edition:str, crate_type:str, emit:str, features:list=None, test:bool=False, write_externconfig:bool=False, manifest:str=None, deps:list=None, lib_file:str='', static:bool=False, cc_deps:list=None, native_files:list=None, main_src:str='$SRCS_MAIN', pipeline_rmeta:bool=False):
+def _compile_cmds(crate_name:str, edition:str, crate_type:str, emit:str, features:list=None, test:bool=False, write_externconfig:bool=False, manifest:str=None, deps:list=None, lib_file:str='', static:bool=False, cc_deps:list=None, native_files:list=None, main_src:str='$SRCS_MAIN', pipeline_rmeta:bool=False, extra_flags:str=''):
     """Returns the {dbg, opt} command dict for compiling a crate via please_rust.
 
     Direct deps get --extern (by crate name, from --dep filtering); transitive
@@ -51,7 +51,8 @@ def _compile_cmds(crate_name:str, edition:str, crate_type:str, emit:str, feature
     static_arg = '--static ' if static else ''
     native_arg = '--native $SRCS_NATIVE ' if cc_deps else ''
     rmeta_arg = '--pipeline-rmeta ' if pipeline_rmeta else ''
-    base = f'{_AGGREGATE_EXTERNCONFIGS} && $TOOLS_PLEASE_RUST compile --externconfig externconfig {rmeta_arg}{manifest_arg}{dep_args}{cc_arg}{static_arg}{native_arg}--rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --crate-name {crate_name} --edition {edition} --crate-type {crate_type} --emit {emit} {test_arg}{feature_args}'
+    extra_args = extra_flags + ' ' if extra_flags else ''
+    base = f'{_AGGREGATE_EXTERNCONFIGS} && $TOOLS_PLEASE_RUST compile --externconfig externconfig {rmeta_arg}{extra_args}{manifest_arg}{dep_args}{cc_arg}{static_arg}{native_arg}--rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --crate-name {crate_name} --edition {edition} --crate-type {crate_type} --emit {emit} {test_arg}{feature_args}'
     lib_file = lib_file or f'lib{crate_name}.rlib'
     externconfig_lines = [f'{crate_name}={lib_file}']
     for f in (native_files or []):
@@ -448,6 +449,116 @@ def rust_benchmark(name:str, root:str, modules:list=None, deps:list=[], edition:
         ),
         deps = deps,
         tools = _rust_tools(link = True),
+        needs_transitive_deps = True,
+        visibility = visibility,
+        labels = ['rust'],
+    )
+
+
+def rust_clippy(name:str, root:str, crate_name:str="", modules:list=None, deps:list=[], edition:str="2018", features:list=None, deny:list=["warnings"], visibility:list=None):
+    """Lints a crate with clippy (clippy-driver is a rustc-compatible
+    frontend, so this is the crate's compile run through it, metadata-only).
+
+    Args:
+        name (str): Name of the lint rule.
+        root (str): The crate's root source file.
+        crate_name (str): Name of the crate. Defaults to the rule name.
+        modules (list): Local modules that make up the crate.
+        deps (list): Dependencies of the crate.
+        edition (str): Rust edition to compile with (2015, 2018, 2021, 2024).
+        features (list): Feature cfgs to enable.
+        deny (list): Lint groups promoted to errors (default: warnings, so
+                     any clippy finding fails the build).
+        visibility (list): Visibility declaration.
+    """
+    if not crate_name:
+        crate_name = name.replace('-', '_')
+    # extra-filename disambiguates from the library's own rmeta outputs
+    deny_flags = ' '.join([f'--rustc-flag=-D{d}' for d in deny] + ['--rustc-flag=-Cextra-filename=-clippy'])
+    return build_rule(
+        name = name,
+        srcs = {
+            'main': [root],
+            'mods': modules or [],
+        },
+        outs = [f'lib{crate_name}-clippy.rmeta'],
+        cmd = _compile_cmds(
+            crate_name = crate_name,
+            edition = edition,
+            crate_type = 'lib',
+            emit = 'metadata',
+            features = features,
+            deps = deps,
+            extra_flags = deny_flags,
+        ),
+        deps = deps,
+        requires = ['rust_rmeta'],
+        tools = {
+            'please_rust': [CONFIG.RUST.PLEASE_RUST_TOOL],
+            'rustc': [CONFIG.RUST.CLIPPY_TOOL],
+            'sysroot': [CONFIG.RUST.SYSROOT],
+        },
+        needs_transitive_deps = True,
+        visibility = visibility,
+        labels = ['rust', 'lint'],
+    )
+
+
+def rust_fmt_test(name:str, srcs:list, edition:str="2018", visibility:list=None):
+    """A test that fails when the given sources are not rustfmt-formatted.
+
+    Args:
+        name (str): Name of the test.
+        srcs (list): Source files to check.
+        edition (str): Rust edition to parse with (2015, 2018, 2021, 2024).
+        visibility (list): Visibility declaration.
+    """
+    return gentest(
+        name = name,
+        data = srcs,
+        no_test_output = True,
+        test_cmd = f'$TOOLS_RUSTFMT --check --edition {edition} $DATA',
+        test_tools = {
+            'rustfmt': [CONFIG.RUST.RUSTFMT_TOOL],
+        },
+        visibility = visibility,
+        labels = ['rust', 'fmt'],
+    )
+
+
+def rust_doc(name:str, root:str, crate_name:str="", modules:list=None, deps:list=[], edition:str="2018", features:list=None, visibility:list=None):
+    """Generates rustdoc HTML documentation for a crate.
+
+    Args:
+        name (str): Name of the rule; also the output directory name.
+        root (str): The crate's root source file.
+        crate_name (str): Name of the crate. Defaults to the rule name.
+        modules (list): Local modules that make up the crate.
+        deps (list): Dependencies of the crate.
+        edition (str): Rust edition to compile with (2015, 2018, 2021, 2024).
+        features (list): Feature cfgs to enable.
+        visibility (list): Visibility declaration.
+    """
+    if not crate_name:
+        crate_name = name.replace('-', '_')
+    feature_args = ' '.join([f'--cfg \'feature="{f}"\'' for f in features]) if features else ''
+    return build_rule(
+        name = name,
+        srcs = {
+            'main': [root],
+            'mods': modules or [],
+        },
+        outs = [name],
+        cmd = ' && '.join([
+            _AGGREGATE_EXTERNCONFIGS,
+            f'$TOOLS_PLEASE_RUST test --suite {name} --externs-from-cwd -- $TOOLS_RUSTDOC $SRCS_MAIN --crate-name {crate_name} --edition {edition} --out-dir $OUT --sysroot $TOOLS_SYSROOT -L . {feature_args}',
+        ]),
+        deps = deps,
+        tools = {
+            'please_rust': [CONFIG.RUST.PLEASE_RUST_TOOL],
+            'rustdoc': ['//third_party/rust:toolchain_rustdoc'],
+            'sysroot': [CONFIG.RUST.SYSROOT],
+        },
         needs_transitive_deps = True,
         visibility = visibility,
         labels = ['rust'],

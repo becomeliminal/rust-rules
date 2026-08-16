@@ -42,3 +42,32 @@ rust_doc_test(
         "src/sub.rs",
     ],
 )
+
+rust_clippy(
+    name = "lint",
+    crate_name = "math",
+    root = "src/lib.rs",
+    modules = [
+        "src/add.rs",
+        "src/sub.rs",
+    ],
+)
+
+rust_fmt_test(
+    name = "fmt_test",
+    srcs = [
+        "src/add.rs",
+        "src/lib.rs",
+        "src/sub.rs",
+    ],
+)
+
+rust_doc(
+    name = "docs",
+    crate_name = "math",
+    root = "src/lib.rs",
+    modules = [
+        "src/add.rs",
+        "src/sub.rs",
+    ],
+)

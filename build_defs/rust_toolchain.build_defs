@@ -57,6 +57,8 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
             'sysroot': [base + sysroot_path],
             'llvm_tools': [base + '/llvm-tools-preview/lib/rustlib/%s-%s/bin' % (arch, os)],
             'llvm_tools_lib': [base + '/llvm-tools-preview/lib/rustlib/%s-%s/lib' % (arch, os)],
+            'clippy_bin': [base + '/clippy-preview/bin/clippy-driver'],
+            'rustfmt_bin': [base + '/rustfmt-preview/bin/rustfmt'],
         },
         cmd = 'tar -xzf $SRCS',
         building_description = 'Extracting...',
@@ -104,6 +106,26 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
         visibility = visibility,
         binary = True,
         deps = [llvm_lib_rule],
+    )
+    # clippy-driver and rustfmt link librustc_driver via RUNPATH $ORIGIN/../lib,
+    # so they are copied next to rustc where that resolves to the staged libs.
+    clippy_rule = build_rule(
+        name = name + '_clippy',
+        srcs = [extract_rule + '|clippy_bin'],
+        outs = [base + '/rustc/bin/clippy-driver'],
+        cmd = 'cp $SRCS $OUT',
+        binary = True,
+        deps = [lib_rule],
+        visibility = visibility,
+    )
+    rustfmt_rule = build_rule(
+        name = name + '_rustfmt',
+        srcs = [extract_rule + '|rustfmt_bin'],
+        outs = [base + '/rustc/bin/rustfmt'],
+        cmd = 'cp $SRCS $OUT',
+        binary = True,
+        deps = [lib_rule],
+        visibility = visibility,
     )
     # For backwards compatibility, stdlib is the lib subdirectory of the
     # sysroot (copied out - it cannot be a nested output of the extract rule).

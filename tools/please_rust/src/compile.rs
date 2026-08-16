@@ -139,6 +139,10 @@ pub struct CompileArgs {
     #[arg(long)]
     pub coverage: bool,
 
+    /// Extra flags passed to rustc verbatim (e.g. -Dwarnings for clippy)
+    #[arg(long = "rustc-flag")]
+    pub rustc_flags: Vec<String>,
+
     /// Pipelined metadata compile: run the full compile but terminate rustc
     /// as soon as the .rmeta artifact is emitted (cargo/rules_rust scheme; a
     /// plain --emit=metadata rmeta lacks the optimized MIR dependents need)
@@ -513,6 +517,9 @@ fn build_command(args: &CompileArgs) -> Result<Command> {
     if args.coverage {
         cmd.arg("-C").arg("instrument-coverage");
     }
+    for flag in &args.rustc_flags {
+        cmd.arg(flag);
+    }
     // Remap the build sandbox cwd out of all embedded paths. This keeps the
     // crate hash (svh) identical across sandbox directories — required for
     // pipelined #rmeta/#link twins to agree — makes artifacts reproducible
@@ -605,6 +612,7 @@ mod command_tests {
             deps: vec![],
             native: vec![],
             coverage: false,
+            rustc_flags: vec![],
             pipeline_rmeta: false,
             features: vec!["std".to_string()],
             renames: vec![],

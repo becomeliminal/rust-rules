@@ -57,9 +57,13 @@ binary-link time.
       path-independent — better remote cache portability for free
 
 ### Tooling rules
-- [ ] `rust_clippy` (clippy-preview is already in the dist tarball) + CI gate
-- [ ] rustfmt exposure + format check rule
-- [ ] `rust_doc` (rustdoc HTML output)
+- [x] `rust_clippy` (clippy-driver from the dist, copied next to rustc for
+      its librustc_driver RUNPATH; metadata-only compile through it, -D
+      warnings by default so findings fail the build; ClippyTool knob)
+- [x] rustfmt exposure (toolchain_rustfmt) + `rust_fmt_test` check rule
+      (RustfmtTool knob)
+- [x] `rust_doc` (rustdoc HTML via the test wrapper's --externs-from-cwd
+      dep resolution)
 - [x] Coverage: `-C instrument-coverage` wired into `plz cover` / llvm-cov
       (profraw → llvm-profdata/llvm-cov → per-file line coverage; paths
       remapped to repo-relative; consumers add `.rs` to `[cover]

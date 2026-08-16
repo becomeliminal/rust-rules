@@ -81,3 +81,15 @@ DefaultValue = false
 Type = bool
 Help = Split each crate into a metadata-only compile that dependents hang off plus a parallel full compile (the rules_rust two-action scheme). Dependency chains build at frontend depth; the frontend runs twice per crate.
 Inherit = true
+
+[PluginConfig "clippy_tool"]
+ConfigKey = ClippyTool
+DefaultValue = //third_party/rust:toolchain_clippy
+Help = Build label of clippy-driver (a rustc-compatible frontend) used by rust_clippy.
+Inherit = true
+
+[PluginConfig "rustfmt_tool"]
+ConfigKey = RustfmtTool
+DefaultValue = //third_party/rust:toolchain_rustfmt
+Help = Build label of rustfmt, used by rust_fmt_test.
+Inherit = true

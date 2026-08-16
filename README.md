@@ -176,6 +176,27 @@ And run the benchmark with Please:
 plz run //path/to/your_benchmark -- --bench
 ```
 
+Clippy, rustfmt and rustdoc ship in the toolchain, with a rule each:
+```python
+rust_clippy(
+    name = "lint",           # plz build //pkg:lint — any clippy finding fails
+    root = "src/lib.rs",
+    modules = ["src/util.rs"],
+    deps = [":lib_deps"],
+)
+
+rust_fmt_test(
+    name = "fmt_test",       # plz test //pkg:fmt_test — fails on unformatted code
+    srcs = glob(["src/*.rs"]),
+)
+
+rust_doc(
+    name = "docs",           # plz build //pkg:docs — rustdoc HTML output
+    root = "src/lib.rs",
+    deps = [":lib_deps"],
+)
+```
+
 ## Configuration
 Plugins are configured through the Plugin section like so:
 ```ini

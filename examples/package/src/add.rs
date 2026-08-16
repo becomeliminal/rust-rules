@@ -1,4 +1,3 @@
-
 /// Adds two to the given number.
 ///
 /// ```
