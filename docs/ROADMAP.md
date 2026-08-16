@@ -33,18 +33,17 @@ diagnostics — which they already are and do. The remaining gaps:
 - **Incremental compilation**: rustc's incremental cache makes small edits
   to a big crate fast under Cargo. We rebuild whole crates (plz caches
   *across* crates perfectly, but not within one). Mitigations: crate
-  splitting is idiomatic in monorepos anyway; an opt-in non-hermetic dev
-  profile persisting rustc's incremental dir is possible later.
-- **fmt / clippy / doc**: `cargo fmt`, `cargo clippy`, `cargo doc` are daily
-  verbs (for humans and agents alike — clippy findings are exactly the kind
-  of thing CI should gate on). All three tools are in the dist tarball we
-  already download — they need exposing plus small rules (`rust_fmt` hook,
-  `rust_lint`, `rust_doc`).
+  splitting is idiomatic in monorepos anyway, and pipelined compilation
+  (done 2026-08, `PipelinedCompilation`) builds dependency chains at
+  frontend depth.
+- ~~fmt / clippy / doc~~ — done 2026-08: `rust_clippy`, `rust_fmt_test`,
+  `rust_doc`, all from the dist tarball's own binaries.
 
 ### 2. Ecosystem long tail
 
-- **`links` / `DEP_<LINKS>_<KEY>` propagation**: parsed but not wired to
-  dependents' build scripts. Blocks `libz-sys → flate2`-style native pairs.
+- ~~`links` / `DEP_<LINKS>_<KEY>` propagation~~ — done 2026-08
+  (test/links proves the pair end to end). bindgen too: `rust_bindgen`,
+  with the bindgen binary built from crates in-graph.
 - **The native build tail**: `cc`-crate builds work (host cc via the cc
   plugin's config). pkg-config, cmake, bindgen (libclang), vendored
   autotools builds are unproven; `ring`/`openssl-sys`/`rocksdb` will fight.
@@ -115,19 +114,18 @@ service.
 
 1. **Workspace importer** — `sync --import-workspace path/to/Cargo.toml`
   emitting first-party BUILD files. (L)
-2. **fmt / clippy / doc rules** — expose the dist components; `rust_fmt`
-  + lint + doc rules with plz-idiomatic wiring. (S–M)
+2. ~~fmt / clippy / doc rules~~ — done 2026-08.
 3. **Profile knobs** — opt-level, lto, panic, codegen-units via plugin
-  config → dbg/opt configs. (M)
-4. **Pilot debt** — subrepo namespacing fix, `lock` feature UX,
-  release-on-tag CI. (M)
+  config → dbg/opt configs. (M; `--rustc-flag` passthrough exists now)
+4. **Pilot debt** — subrepo namespacing fix, `lock` feature UX (bit again
+  during the bindgen import), release-on-tag CI. (M)
 
 **Exit criterion:** a cargo project ports with one command, clippy and fmt
 gate CI, and builds/tests get faster.
 
 ### Phase 2 — Ecosystem depth (stop losing on crates)
 
-6. **`links`/`DEP_*` propagation** through build scripts. (M)
+6. ~~`links`/`DEP_*` propagation~~ — done 2026-08.
 7. **Top-100-crates corpus in CI** — a generated test package that locks and
   builds the most-downloaded crates; the pass-rate is the public metric.
   (M, then continuous)
@@ -139,7 +137,12 @@ gate CI, and builds/tests get faster.
 **Exit criterion:** corpus pass-rate ≥90 of top 100, with the failures
 individually explained.
 
-### Phase 3 — Platform breadth
+### Phase 3 — Platform breadth (parked)
+
+Parked by decision (2026-08): the team is single-platform (linux-amd64),
+so cross-platform work has no consumer to validate it. Revisit when a real
+target appears; the host/target unit split already did the hard part.
+
 
 11. **Multi-target resolution + cross-compilation** (musl, aarch64, wasm)
   on plz's cross-arch machinery — the unit split already did the hard
@@ -149,9 +152,8 @@ individually explained.
 
 ### Phase 4 — Proof (make the "faster than Cargo" claim with numbers)
 
-14. **Benchmark harness**: the same workspace built by Cargo and by
-  rust-rules — clean, incremental, warm-remote-cache, test-rerun. Publish
-  the numbers in the README. (M)
+14. ~~Benchmark harness~~ — done 2026-08: `scripts/benchmark.sh`, numbers
+  in [BENCHMARKS.md](BENCHMARKS.md).
 15. **Remote cache/execution validation** at labs scale. (M)
 16. **Stress**: a 1k+ crate graph through sync/resolve/build. (S)
 

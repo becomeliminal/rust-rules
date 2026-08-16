@@ -259,6 +259,13 @@ FileExtension = .rs
 ```
 
 ## General notes
+Measured against cargo building the identical project with the identical
+rustc, plz is ~1.7x faster on cold builds and caches test results cargo
+always re-runs; cargo keeps a decisive edge on single-crate edit loops.
+The full numbers, methodology and honest caveats are in
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md), reproducible via
+`scripts/benchmark.sh`.
+
 Rust Rules replicates Cargo's build contract without ever invoking Cargo:
 crate tarballs are fetched as verified downloads, `Cargo.toml` files are
 parsed to infer dependencies, features, editions and build scripts, and
