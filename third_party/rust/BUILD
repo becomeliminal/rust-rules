@@ -1378,5 +1378,158 @@ rust_resolve(
         "utf8parse|utf8parse|0.2.2||false|true",
         "winnow|winnow|0.7.14||false|true",
         "zmij|zmij|0.1.9||false|true",
+        "bindgen|bindgen|0.71.1||false|true",
+        "bindgen_cli|bindgen-cli|0.71.1||true|true",
+        "cexpr|cexpr|0.6.0||false|true",
+        "clang_sys|clang-sys|1.9.1||false|true",
+        "env_logger|env_logger|0.10.2||false|true",
+        "glob|glob|0.3.4||false|true",
+        "humantime|humantime|2.4.0||false|true",
+        "minimal_lexical|minimal-lexical|0.2.1||false|true",
+        "nom|nom|7.1.3||false|true",
+        "rustc_hash|rustc-hash|2.1.3||false|true",
+        "termcolor|termcolor|1.4.1||false|true",
+        "aho_corasick|aho-corasick|1.1.5||true|true",
+        "unicode_width-0.1.14|unicode-width|0.1.14||false|true",
+        "clap_complete|clap_complete|4.6.9||true|true",
+        "libloading|libloading|0.8.9||true|true",
+        "annotate_snippets|annotate-snippets|0.11.5||true|true",
+        "unicode_width|unicode-width|0.2.2||false|true",
     ],
+)
+
+# Added by please_rust sync
+rust_repo(
+    name = "bindgen",
+    crate = "bindgen",
+    version = "0.71.1",
+    hashes = ["5f58bf3d7db68cfbac37cfc485a8d711e87e064c3d0fe0435b92f7a407f9d6b3"],
+    indirect = True,
+)
+
+rust_repo(
+    name = "bindgen_cli",
+    crate = "bindgen-cli",
+    version = "0.71.1",
+    hashes = ["fded10ca0956afd0cbe5cf89cc71ae1a679e65b8216c651fca17ba7de8ac54dc"],
+)
+
+rust_repo(
+    name = "cexpr",
+    crate = "cexpr",
+    version = "0.6.0",
+    hashes = ["6fac387a98bb7c37292057cffc56d62ecb629900026402633ae9160df93a8766"],
+    indirect = True,
+)
+
+rust_repo(
+    name = "clang_sys",
+    crate = "clang-sys",
+    version = "1.9.1",
+    hashes = ["157a8ba7b480713b56f4c09fd13fc3e0a22a5dfab8097ba61cbc5feef950788a"],
+    indirect = True,
+)
+
+rust_repo(
+    name = "env_logger",
+    crate = "env_logger",
+    version = "0.10.2",
+    hashes = ["4cd405aab171cb85d6735e5c8d9db038c17d3ca007a4d2c25f337935c3d90580"],
+    indirect = True,
+)
+
+rust_repo(
+    name = "glob",
+    crate = "glob",
+    version = "0.3.4",
+    hashes = ["e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"],
+    indirect = True,
+)
+
+rust_repo(
+    name = "humantime",
+    crate = "humantime",
+    version = "2.4.0",
+    hashes = ["15cdd26707701c53297e2fa6afb323d55fbc1d0810c3aec078ae3ef0424c3c15"],
+    indirect = True,
+)
+
+rust_repo(
+    name = "minimal_lexical",
+    crate = "minimal-lexical",
+    version = "0.2.1",
+    hashes = ["68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"],
+    indirect = True,
+)
+
+rust_repo(
+    name = "nom",
+    crate = "nom",
+    version = "7.1.3",
+    hashes = ["d273983c5a657a70a3e8f2a01329822f3b8c8172b73826411a55751e404a0a4a"],
+    indirect = True,
+)
+
+rust_repo(
+    name = "rustc_hash",
+    crate = "rustc-hash",
+    version = "2.1.3",
+    hashes = ["6b1e7f9a428571be2dc5bc0505c13fb6bf936822b894ec87abf8a08a4e51742d"],
+    indirect = True,
+)
+
+rust_repo(
+    name = "termcolor",
+    crate = "termcolor",
+    version = "1.4.1",
+    hashes = ["06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"],
+    indirect = True,
+)
+
+# Added by please_rust sync
+rust_repo(
+    name = "aho_corasick",
+    crate = "aho-corasick",
+    version = "1.1.5",
+    hashes = ["c982642fa9e8606056828ee9a8505737230110bb1099153c79efe865c59d12ba"],
+)
+
+rust_repo(
+    name = "unicode_width-0.1.14",
+    crate = "unicode-width",
+    version = "0.1.14",
+    hashes = ["7dd6e30e90baa6f72411720665d41d89b9a3d039dc45b8faea1ddd07f617f6af"],
+    indirect = True,
+)
+
+# Added by please_rust sync
+rust_repo(
+    name = "clap_complete",
+    crate = "clap_complete",
+    version = "4.6.9",
+    hashes = ["3be2ad0423bdbbb0e25bc89add796f3559706d4a95e1bc98e4d9662a957b6a19"],
+)
+
+# Added by please_rust sync
+rust_repo(
+    name = "libloading",
+    crate = "libloading",
+    version = "0.8.9",
+    hashes = ["d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"],
+)
+
+# Added by please_rust sync
+rust_repo(
+    name = "annotate_snippets",
+    crate = "annotate-snippets",
+    version = "0.11.5",
+    hashes = ["710e8eae58854cdc1790fcb56cca04d712a17be849eeb81da2a724bf4bae2bc4"],
+)
+
+rust_repo(
+    name = "unicode_width",
+    crate = "unicode-width",
+    version = "0.2.2",
+    hashes = ["b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"],
+    indirect = True,
 )

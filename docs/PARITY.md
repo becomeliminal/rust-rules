@@ -30,7 +30,12 @@ binary-link time.
       open — tracked under the bindgen item
 - [ ] Optional hermetic C toolchain target for CCTool (host cc remains the
       default, per the cc plugin convention)
-- [ ] bindgen rule (needs libclang strategy)
+- [x] bindgen rule: `rust_bindgen` generates bindings from a C header.
+      The bindgen binary is built from crates by rust_repo (bindgen-cli +
+      clang-sys stack — the tool supply chain is in-graph, no prebuilt
+      downloads); libclang comes from the host (LibclangPath knob for a
+      pinned one), matching the host-cc convention. test/bindgen proves
+      header → bindings → rust_test end to end
 
 ### Platforms and configurations
 - [ ] Per-platform toolchain URLs in `rust_toolchain` (darwin-aarch64,
@@ -40,7 +45,11 @@ binary-link time.
       compile with per-target `rust-std`; map onto plz's cross-arch labels
 - [ ] True exec/target artifact split (unit split exists in resolution;
       artifacts currently share one triple — fine while host == target)
-- [ ] wasm32 targets (+ wasm-bindgen rule later)
+- [ ] wasm32 targets (+ wasm-bindgen rule later). Groundwork done: the
+      bindgen-cli pattern (tool built from crates via rust_repo, aliased
+      through a config knob) is exactly how wasm-bindgen-cli will ship;
+      the blocker is --target threading through resolve/generate/compile
+      with a wasm32 rust-std, tracked above
 - [ ] Nightly / channel toolchains policy
 
 ### Build speed

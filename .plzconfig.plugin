@@ -93,3 +93,16 @@ ConfigKey = RustfmtTool
 DefaultValue = //third_party/rust:toolchain_rustfmt
 Help = Build label of rustfmt, used by rust_fmt_test.
 Inherit = true
+
+[PluginConfig "bindgen_tool"]
+ConfigKey = BindgenTool
+DefaultValue = ///third_party/rust/bindgen_cli//:bindgen_bin
+Help = Build label of the bindgen binary used by rust_bindgen. Built from crates via rust_repo (bindgen-cli).
+Inherit = true
+
+[PluginConfig "libclang_path"]
+ConfigKey = LibclangPath
+DefaultValue = 
+Optional = true
+Help = Directory containing libclang.so for rust_bindgen. Empty uses clang-sys's runtime search of standard host locations, matching the host-cc convention.
+Inherit = true

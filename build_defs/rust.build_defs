@@ -563,3 +563,42 @@ def rust_doc(name:str, root:str, crate_name:str="", modules:list=None, deps:list
         visibility = visibility,
         labels = ['rust'],
     )
+
+
+def rust_bindgen(name:str, header:str, srcs:list=[], clang_args:list=[], bindgen_flags:list=[], visibility:list=None):
+    """Generates Rust FFI bindings from a C header via bindgen.
+
+    The output is a single .rs file, usable as a rust_library root or as a
+    module. The bindgen binary itself is built from crates by rust_repo;
+    libclang comes from the host (or the LibclangPath config), matching the
+    host-cc convention.
+
+    Args:
+        name (str): Name of the rule; the output is <name>.rs.
+        header (str): The C header to generate bindings for.
+        srcs (list): Additional headers included by the main one.
+        clang_args (list): Extra arguments passed to clang (after --).
+        bindgen_flags (list): Extra flags passed to bindgen itself.
+        visibility (list): Visibility declaration.
+    """
+    flags = ' '.join(bindgen_flags)
+    cargs = ' '.join(clang_args)
+    clang_sep = f' -- {cargs}' if cargs else ''
+    env = {}
+    if CONFIG.RUST.LIBCLANG_PATH:
+        env['LIBCLANG_PATH'] = CONFIG.RUST.LIBCLANG_PATH
+    return build_rule(
+        name = name,
+        srcs = {
+            'header': [header],
+            'extra': srcs,
+        },
+        outs = [name + '.rs'],
+        cmd = f'$TOOLS_BINDGEN $SRCS_HEADER -o $OUT {flags}{clang_sep}',
+        tools = {
+            'bindgen': [CONFIG.RUST.BINDGEN_TOOL],
+        },
+        env = env,
+        visibility = visibility,
+        labels = ['rust', 'codegen'],
+    )

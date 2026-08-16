@@ -240,7 +240,29 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         "",
         &linked_deps,
         args.pipeline,
+        has_lib,
     );
+
+    // Bin-only crates: the crate-named target aliases the (first) binary so
+    // `:crate` still resolves, and under pipelining a `_crate#rmeta` stub
+    // keeps the rust_repo alias twin's reference valid.
+    if !has_lib && !bins.is_empty() {
+        let crate_ident = crate_name.replace('-', "_");
+        let bin_ident = bins[0].0.replace('-', "_");
+        build_content.push_str("filegroup(\n");
+        build_content.push_str(&format!("    name = \"{}\",\n", crate_ident));
+        build_content.push_str(&format!("    srcs = [\":{}_bin\"],\n", bin_ident));
+        build_content.push_str("    binary = True,\n");
+        build_content.push_str("    visibility = [\"PUBLIC\"],\n");
+        build_content.push_str(")\n\n");
+        if args.pipeline {
+            build_content.push_str("filegroup(\n");
+            build_content.push_str(&format!("    name = \"_{}#rmeta\",\n", crate_ident));
+            build_content.push_str(&format!("    srcs = [\":{}_bin\"],\n", bin_ident));
+            build_content.push_str("    visibility = [\"PUBLIC\"],\n");
+            build_content.push_str(")\n\n");
+        }
+    }
 
     // Binary targets (e.g. protoc plugins). Named <crate>_bin; they link the
     // crate's own lib (when present) plus the same resolved dependencies.
@@ -281,6 +303,7 @@ pub fn run(args: GenerateArgs) -> Result<()> {
             "_host",
             &linked_deps,
             args.pipeline,
+            has_lib,
         ));
     }
 
@@ -522,11 +545,18 @@ fn generate_build_file(
     suffix: &str,
     linked_deps: &[String],
     pipeline: bool,
+    has_lib: bool,
 ) -> String {
     let mut content = String::new();
 
     let crate_ident = crate_name.replace("-", "_");
     let normalized_name = format!("{}{}", crate_ident, suffix);
+
+    // Bin-only crates (e.g. bindgen-cli) have no library to compile; run()
+    // emits an alias to the binary instead.
+    if !has_lib {
+        return content;
+    }
     let edition_str = match edition {
         cargo_toml::Edition::E2015 => "2015",
         cargo_toml::Edition::E2018 => "2018",
@@ -700,7 +730,7 @@ fn generate_rmeta_rule(
     content.push_str(&format!("    name = \"_{}#rmeta\",\n", normalized_name));
     content.push_str("    srcs = {\n");
     content.push_str(&format!("        \"main\": [\"{}\"],\n", lib_path));
-    content.push_str(&format!("        \"mods\": glob([\"src/**\", \"*.rs\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\"], allow_empty=True),\n", lib_path));
+    content.push_str(&format!("        \"mods\": glob([\"src/**\", \"*.rs\", \"**/*.rs\", \"build/**\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\"], allow_empty=True),\n", lib_path));
     content.push_str("        \"data\": glob([\"*.md\", \"LICENSE*\", \"examples/**/*\"], allow_empty=True),\n");
     content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
     if !deps.is_empty() {
@@ -1001,7 +1031,7 @@ fn generate_compile_rule_with_buildscript(
     content.push_str(&format!("    name = \"{}\",\n", rule_name));
     content.push_str("    srcs = {\n");
     content.push_str(&format!("        \"main\": [\"{}\"],\n", lib_path));
-    content.push_str(&format!("        \"mods\": glob([\"src/**\", \"*.rs\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\"], allow_empty=True),\n", lib_path));
+    content.push_str(&format!("        \"mods\": glob([\"src/**\", \"*.rs\", \"**/*.rs\", \"build/**\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\"], allow_empty=True),\n", lib_path));
     content.push_str("        \"data\": glob([\"*.md\", \"LICENSE*\", \"examples/**/*\"], allow_empty=True),\n");
     content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
     if !deps.is_empty() {
@@ -1092,7 +1122,7 @@ fn generate_compile_rule(
     content.push_str(&format!("    name = \"{}\",\n", rule_name));
     content.push_str("    srcs = {\n");
     content.push_str(&format!("        \"main\": [\"{}\"],\n", lib_path));
-    content.push_str(&format!("        \"mods\": glob([\"src/**\", \"*.rs\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\"], allow_empty=True),\n", lib_path));
+    content.push_str(&format!("        \"mods\": glob([\"src/**\", \"*.rs\", \"**/*.rs\", \"build/**\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\"], allow_empty=True),\n", lib_path));
     content.push_str("        \"data\": glob([\"*.md\", \"LICENSE*\", \"examples/**/*\"], allow_empty=True),\n");
     content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
     if !deps.is_empty() {
@@ -1201,6 +1231,7 @@ mod tests {
             suffix,
             &[],
             pipeline,
+            true,
         )
     }
 
@@ -1241,6 +1272,7 @@ mod tests {
             "",
             &["///third_party/rust/libz_sys//:_libz_sys_build_script|buildscript".to_string()],
             false,
+            true,
         );
         assert!(out.contains("\"dep_metadata\": ["));
         assert!(out.contains("///third_party/rust/libz_sys//:_libz_sys_build_script|buildscript"));

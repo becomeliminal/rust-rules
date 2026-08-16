@@ -176,6 +176,22 @@ And run the benchmark with Please:
 plz run //path/to/your_benchmark -- --bench
 ```
 
+FFI bindings come from `rust_bindgen` — the bindgen binary is built from
+crates by `rust_repo` (declare `bindgen-cli` via `lock --add`), and libclang
+comes from the host like the C compiler does (`LibclangPath` pins one):
+```python
+rust_bindgen(
+    name = "ffi_bindings",       # generates ffi_bindings.rs
+    header = "include/mylib.h",
+)
+
+rust_library(
+    name = "mylib_sys",
+    root = "src/lib.rs",
+    modules = [":ffi_bindings"], # or use it as the root directly
+)
+```
+
 Clippy, rustfmt and rustdoc ship in the toolchain, with a rule each:
 ```python
 rust_clippy(
