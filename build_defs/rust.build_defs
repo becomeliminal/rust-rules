@@ -28,10 +28,18 @@ _AGGREGATE_EXTERNCONFIGS = "find . -name '*.externconfig' -type f 2>/dev/null | 
 
 
 def _dep_names(deps:list):
-    """Crate names of direct deps, for --extern filtering (rule name = crate name)."""
+    """Crate names of direct deps, for --extern filtering.
+
+    The rule name is the crate name, except for plz's internal `_name#tag`
+    targets: generated libraries (proto and gRPC stubs, for instance) are
+    exposed that way, and the crate they build is `name`.
+    """
     names = []
     for dep in deps:
         name = canonicalise(dep).split(':')[-1]
+        name = name.split('#')[0]
+        if name.startswith('_'):
+            name = name[1:]
         names += [name.replace('-', '_')]
     return names
 
