@@ -101,6 +101,11 @@ pub struct LockFile {
     /// features (built as <crate>_host)
     #[serde(default)]
     pub host_crates: BTreeMap<String, LockEntry>,
+    /// Dependencies resolution needed but which are not declared. Empty in a
+    /// healthy graph; `lock` uses these to add what a newly enabled feature
+    /// turned on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing: Vec<MissingDep>,
 }
 
 /// Parse a manifest, normalizing deprecated underscore key spellings that
@@ -116,6 +121,18 @@ pub fn parse_manifest(bytes: &[u8]) -> Result<Manifest, cargo_toml::Error> {
         // we implement ourselves, so parse it as 2.
         .replace("resolver = \"3\"", "resolver = \"2\"");
     Manifest::from_slice(text.as_bytes())
+}
+
+/// A dependency resolution needed but which is not declared. Lock uses these
+/// to heal the declaration set automatically.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct MissingDep {
+    /// Crate that wanted it
+    pub requirer: String,
+    /// Real package name
+    pub package: String,
+    /// Requirement string, if the manifest gave one
+    pub req: Option<String>,
 }
 
 impl LockFile {
@@ -317,6 +334,7 @@ pub fn resolve_entries(entries: &[EntryInput], target: &str) -> Result<LockFile>
 
     let mut crates = BTreeMap::new();
     let mut host_crates = BTreeMap::new();
+    let mut missing: Vec<MissingDep> = Vec::new();
     for (i, n) in nodes.iter().enumerate() {
         let target_active = n.unit(Unit::Target).activated;
         let host_active = n.unit(Unit::Host).activated;
@@ -326,20 +344,30 @@ pub fn resolve_entries(entries: &[EntryInput], target: &str) -> Result<LockFile>
         let primary_unit = if target_active { Unit::Target } else { Unit::Host };
         crates.insert(
             n.subrepo.clone(),
-            emit_entry(n, primary_unit, &nodes, &resolver, &dual)?,
+            emit_entry(n, primary_unit, &nodes, &resolver, &dual, &mut missing)?,
         );
         if dual.contains(&i) {
             host_crates.insert(
                 n.subrepo.clone(),
-                emit_entry(n, Unit::Host, &nodes, &resolver, &dual)?,
+                emit_entry(n, Unit::Host, &nodes, &resolver, &dual, &mut missing)?,
             );
         }
+    }
+
+    missing.sort();
+    missing.dedup();
+    for m in &missing {
+        eprintln!(
+            "warning: {}: dependency {} is not declared, skipping",
+            m.requirer, m.package
+        );
     }
 
     Ok(LockFile {
         target: target.to_string(),
         crates,
         host_crates,
+        missing,
     })
 }
 
@@ -621,6 +649,7 @@ fn emit_entry(
     nodes: &[CrateNode],
     resolver: &Resolver,
     dual: &BTreeSet<usize>,
+    missing: &mut Vec<MissingDep>,
 ) -> Result<LockEntry> {
     let mut deps = Vec::new();
     let mut build_deps = Vec::new();
@@ -640,10 +669,11 @@ fn emit_entry(
                         d.req.as_ref().map(|r| r.to_string())
                     );
                 }
-                eprintln!(
-                    "warning: {}: dependency {} is not declared, skipping",
-                    n.crate_name, d.package
-                );
+                missing.push(MissingDep {
+                    requirer: n.crate_name.clone(),
+                    package: d.package.clone(),
+                    req: d.req.as_ref().map(|r| r.to_string()),
+                });
                 continue;
             }
         };
@@ -1073,6 +1103,35 @@ mod tests {
         assert!(lock.host_crates.is_empty());
         let pm_dep = &lock.crates.get("pm").unwrap().deps[0];
         assert_eq!(pm_dep.target_name, "util");
+    }
+
+    #[test]
+    fn undeclared_activated_optional_is_reported_as_missing() {
+        // A feature turning on an optional dependency that nobody declared is
+        // what `lock` heals automatically; resolution must name it rather
+        // than silently dropping it.
+        let lock = Graph::new("missing_opt")
+            .krate(
+                "host",
+                "host",
+                "1.0.0",
+                "[features]\ndefault = []\nextra = [\"dep:helper\"]\n\n[dependencies.helper]\nversion = \"1\"\noptional = true\n",
+            )
+            .root("host", &["extra"], true)
+            .resolve();
+        assert_eq!(lock.missing.len(), 1, "missing: {:?}", lock.missing);
+        assert_eq!(lock.missing[0].package, "helper");
+        assert_eq!(lock.missing[0].requirer, "host");
+    }
+
+    #[test]
+    fn a_closed_graph_reports_nothing_missing() {
+        let lock = Graph::new("closed_graph")
+            .krate("host", "host", "1.0.0", "[dependencies]\nhelper = \"1\"\n")
+            .krate("helper", "helper", "1.2.0", "")
+            .root("host", &[], true)
+            .resolve();
+        assert!(lock.missing.is_empty(), "missing: {:?}", lock.missing);
     }
 
     #[test]

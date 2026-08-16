@@ -1450,6 +1450,7 @@ mod run_tests {
             target: "x86_64-unknown-linux-gnu".to_string(),
             crates,
             host_crates,
+            missing: Vec::new(),
         };
         let path = dir.join("rust.lock");
         fs::write(&path, serde_json::to_string(&lock).unwrap()).unwrap();

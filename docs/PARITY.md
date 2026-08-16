@@ -123,17 +123,20 @@ binary-link time.
 
 ### Dependency management
 - [ ] `sync --upgrade` (`cargo update` parity: bump all to latest compatible)
-- [ ] `lock --add crate@req --features a,b` + auto-fetch of newly-activated
-      optional deps (pilot finding: serde derive needed a manual matching add)
+- [x] `lock --add crate@req --features a,b` + auto-fetch of newly-activated
+      optional deps: resolution reports what it needed but could not find,
+      and lock re-solves to declare it (bounded loop). No more manual
+      matching-version adds
 - [ ] Generic git fetcher (gitlab/self-hosted; github archive URLs work)
 - On-demand only (decided 2026-08): private/alternative registries and
   registry auth. crates.io is effectively universal; git forks and
   download= overrides cover the common private-code cases
 
 ### Build fidelity
-- [ ] Profiles: opt-level 0–3/s/z, lto thin/fat, codegen-units,
-      panic=abort, debug-assertions, overflow-checks, strip; per-dep
-      overrides
+- [x] Profiles: opt-level, lto, codegen-units, panic, strip and
+      debug-assertions via plugin config, mapped onto plz's build configs.
+      Per-dep overrides remain open (rarely used; cargo's own
+      `[profile.*.package]`)
 - [ ] `cargo bench` profile semantics for rust_benchmark
 - [ ] Build-script env completeness audit against cargo docs (rerun as cargo
       versions land; last audit 2026-08 caught error=, rustc-flags,

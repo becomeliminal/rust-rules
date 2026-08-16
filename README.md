@@ -97,6 +97,11 @@ To add a dependency (and everything it needs) straight from crates.io:
 ```ini
 plz run //tools/please_rust -- lock --add serde@1
 ```
+Enable features, and anything they turn on is declared for you:
+```ini
+plz run //tools/please_rust -- lock --add serde@1 --features derive
+```
+
 Version selection is a PubGrub solve over the crates.io index: it backtracks
 rather than failing when a late requirement rules out an earlier choice, and
 it respects `rust-version`, so an older `rust_toolchain` gets the newest
@@ -271,6 +276,20 @@ plugin's default.
 ```ini
 [Plugin "rust"]
 CCTool = //third_party/cc:toolchain
+```
+
+### Profiles
+Cargo's profile settings, mapped onto Please's build configs. The tuning
+knobs apply to optimised builds (`plz build -c opt`); `DebugAssertions`
+applies to both.
+```ini
+[Plugin "rust"]
+OptLevel = 3          ; 0-3, s, z
+LTO = thin            ; thin, fat, off
+CodegenUnits = 1
+Panic = abort         ; unwind, abort
+Strip = symbols       ; none, debuginfo, symbols
+DebugAssertions = false
 ```
 
 ### PipelinedCompilation

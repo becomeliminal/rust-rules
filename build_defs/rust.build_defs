@@ -36,6 +36,35 @@ def _dep_names(deps:list):
     return names
 
 
+def _profile_flags(optimised:bool):
+    """rustc codegen flags from the profile config knobs.
+
+    Cargo's profile settings, mapped onto plz's build configs: the tuning
+    knobs apply to the optimised configs, debug-assertions applies to both.
+    """
+    settings = []
+    if optimised:
+        if CONFIG.RUST.OPT_LEVEL:
+            settings += ['opt-level=' + CONFIG.RUST.OPT_LEVEL]
+        if CONFIG.RUST.LTO:
+            settings += ['lto=' + CONFIG.RUST.LTO]
+        if CONFIG.RUST.PANIC:
+            settings += ['panic=' + CONFIG.RUST.PANIC]
+        if CONFIG.RUST.STRIP:
+            settings += ['strip=' + CONFIG.RUST.STRIP]
+    if CONFIG.RUST.CODEGEN_UNITS:
+        settings += ['codegen-units=' + CONFIG.RUST.CODEGEN_UNITS]
+    if CONFIG.RUST.DEBUG_ASSERTIONS:
+        settings += ['debug-assertions=' + CONFIG.RUST.DEBUG_ASSERTIONS]
+    if not settings:
+        return ''
+    # rustc takes -C and its setting as two arguments
+    args = []
+    for s in settings:
+        args += ['--rustc-flag=-C', '--rustc-flag=' + s]
+    return ' '.join(args) + ' '
+
+
 def _compile_cmds(crate_name:str, edition:str, crate_type:str, emit:str, features:list=None, test:bool=False, write_externconfig:bool=False, manifest:str=None, deps:list=None, lib_file:str='', static:bool=False, cc_deps:list=None, native_files:list=None, main_src:str='$SRCS_MAIN', pipeline_rmeta:bool=False, extra_flags:str=''):
     """Returns the {dbg, opt} command dict for compiling a crate via please_rust.
 
@@ -59,10 +88,12 @@ def _compile_cmds(crate_name:str, edition:str, crate_type:str, emit:str, feature
         externconfig_lines += [f'native={f}']
     echo_lines = '; '.join([f"echo '{line}' >> $OUTS_EXTERNCONFIG" for line in externconfig_lines])
     suffix = f" && {echo_lines}" if write_externconfig else ''
+    dbg_profile = _profile_flags(optimised = False)
+    opt_profile = _profile_flags(optimised = True)
     return {
-        'dbg': f'{base} -g {main_src}{suffix}',
-        'opt': f'{base} -O {main_src}{suffix}',
-        'cover': f'{base} --coverage -g {main_src}{suffix}',
+        'dbg': f'{base} {dbg_profile}-g {main_src}{suffix}',
+        'opt': f'{base} {opt_profile}-O {main_src}{suffix}',
+        'cover': f'{base} {dbg_profile}--coverage -g {main_src}{suffix}',
     }
 
 

@@ -171,6 +171,12 @@ impl Decl {
 }
 
 pub fn run(args: SyncArgs) -> Result<()> {
+    run_reporting(args).map(|_| ())
+}
+
+/// sync, additionally reporting dependencies resolution wanted but which are
+/// not declared. `lock` uses these to heal the declaration set.
+pub fn run_reporting(args: SyncArgs) -> Result<Vec<crate::resolve::MissingDep>> {
     let mut args = args;
 
     // Workspace import: emit first-party BUILD files, scaffold the
@@ -245,6 +251,7 @@ pub fn run(args: SyncArgs) -> Result<()> {
         })
         .collect();
     let mut lock = resolve_entries(&entries, &args.target)?;
+    let mut missing_deps = lock.missing.clone();
 
     // Crates imported this run that did not activate for this target (e.g.
     // windows-only) are dropped again rather than declared dead weight; with
@@ -289,6 +296,7 @@ pub fn run(args: SyncArgs) -> Result<()> {
             })
             .collect();
         lock = resolve_entries(&entries, &args.target)?;
+        missing_deps = lock.missing.clone();
     }
 
     // Resolution lives in the build graph: sync maintains a rust_resolve
@@ -303,7 +311,7 @@ pub fn run(args: SyncArgs) -> Result<()> {
             decls.len(),
             lock.crates.len()
         );
-        return Ok(());
+        return Ok(missing_deps);
     }
 
     fs::write(&args.build_file, new_build)
@@ -320,7 +328,7 @@ pub fn run(args: SyncArgs) -> Result<()> {
         args.build_file.display(),
         lock.crates.len(),
     );
-    Ok(())
+    Ok(missing_deps)
 }
 
 /// Rewrite (or append) the rust_resolve block encoding the declared graph.
@@ -853,6 +861,11 @@ pub struct LockCmdArgs {
     /// default, using the toolchain declared in the third-party BUILD file)
     #[arg(long)]
     pub ignore_msrv: bool,
+
+    /// Features to enable on the crates being added (comma-separated).
+    /// Optional dependencies these turn on are declared automatically.
+    #[arg(long)]
+    pub features: Option<String>,
 }
 
 #[derive(serde::Deserialize, Clone)]
@@ -1184,18 +1197,18 @@ pub fn lock(args: LockCmdArgs) -> Result<()> {
         });
     }
 
-    finish_lock(&args, decls)
+    finish_lock(&args, decls).map(|_| ())
 }
 
 /// Hand over to sync for naming, downloads, feature resolution and writing.
 /// Shared by the greedy and PubGrub paths.
-fn finish_lock(args: &LockCmdArgs, mut decls: Vec<Decl>) -> Result<()> {
+fn finish_lock(args: &LockCmdArgs, mut decls: Vec<Decl>) -> Result<Vec<crate::resolve::MissingDep>> {
     let build_text = fs::read_to_string(&args.build_file)
         .with_context(|| format!("Failed to read {}", args.build_file.display()))?;
     let lines: Vec<String> = build_text.lines().map(|s| s.to_string()).collect();
     let _ = normalize_names(&mut decls)?;
     fs::write(&args.build_file, rewrite_build(&lines, &decls, &[]))?;
-    run(SyncArgs {
+    run_reporting(SyncArgs {
         build_file: args.build_file.clone(),
         third_party_folder: args.third_party_folder.clone(),
         crate_store: None,
@@ -1227,9 +1240,20 @@ fn dirs_cache() -> PathBuf {
 fn lock_with_pubgrub(
     args: &LockCmdArgs,
     index: &Index,
-    mut decls: Vec<Decl>,
+    decls: Vec<Decl>,
     build_text: &str,
 ) -> Result<()> {
+    let missing = lock_round(args, index, decls, build_text)?;
+    heal_missing(args, index, missing)
+}
+
+/// One solve-and-write pass; returns what resolution could not find.
+fn lock_round(
+    args: &LockCmdArgs,
+    index: &Index,
+    mut decls: Vec<Decl>,
+    build_text: &str,
+) -> Result<Vec<crate::resolve::MissingDep>> {
     // Fast path: if every requested addition is already satisfied by a
     // declaration, there is nothing to solve and nothing to fetch. This keeps
     // a no-op `lock --add` working offline with a cold index cache.
@@ -1246,9 +1270,9 @@ fn lock_with_pubgrub(
                     && Version::parse(&d.version).map(|v| req.matches(&v)).unwrap_or(false)
             })
         });
-    if all_satisfied {
+    if all_satisfied && args.features.is_none() {
         eprintln!("lock: nothing to do");
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let source = IndexSource { index, target: &args.target };
@@ -1317,9 +1341,9 @@ fn lock_with_pubgrub(
         eprintln!("lock: ^ {} {} -> {}", name, from, to);
     }
 
-    if newly.is_empty() && upgraded.is_empty() {
+    if newly.is_empty() && upgraded.is_empty() && args.features.is_none() {
         eprintln!("lock: nothing to do");
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let added_names: BTreeSet<String> = args
@@ -1347,7 +1371,91 @@ fn lock_with_pubgrub(
         });
     }
 
-    finish_lock(args, decls)
+    // Requested features land on the crates named in --add
+    if let Some(features) = &args.features {
+        let wanted: Vec<String> = features
+            .split(',')
+            .map(|f| f.trim().to_string())
+            .filter(|f| !f.is_empty())
+            .collect();
+        for add in &args.add {
+            let name = add.split('@').next().unwrap_or(add);
+            if let Some(d) = decls.iter_mut().find(|d| d.crate_name == name) {
+                for f in &wanted {
+                    if !d.features.contains(f) {
+                        d.features.push(f.clone());
+                    }
+                }
+                d.features.sort();
+                d.root = true;
+                eprintln!("lock: {} features = {}", name, d.features.join(","));
+            }
+        }
+    }
+
+    finish_lock(args, decls).map(|m| m)
+}
+
+/// Feed dependencies that feature unification turned on back into the solver
+/// until the declaration set is closed.
+fn heal_missing(
+    args: &LockCmdArgs,
+    index: &Index,
+    mut missing: Vec<crate::resolve::MissingDep>,
+) -> Result<()> {
+    // Resolution runs over the declared set with real feature unification,
+    // which can activate optional dependencies the version solve never saw
+    // (enabling serde's `derive` needs serde_derive declared). Feed anything
+    // it could not find back in and solve again until the graph is closed.
+    for round in 0..8 {
+        if missing.is_empty() {
+            break;
+        }
+        let mut adds: Vec<String> = Vec::new();
+        for m in &missing {
+            let req = m.req.clone().unwrap_or_else(|| "*".to_string());
+            eprintln!(
+                "lock: {} needs {} ({}), which a feature activated; adding it",
+                m.requirer, m.package, req
+            );
+            adds.push(format!("{}@{}", m.package, req));
+        }
+        adds.sort();
+        adds.dedup();
+        let healed = LockCmdArgs {
+            add: adds,
+            features: None,
+            ..clone_lock_args(args)
+        };
+        let build_text = fs::read_to_string(&args.build_file)?;
+        let lines: Vec<String> = build_text.lines().map(|s| s.to_string()).collect();
+        let decls = parse_build(&lines)?;
+        missing = lock_round(&healed, index, decls, &build_text)?;
+        if round == 7 && !missing.is_empty() {
+            eprintln!(
+                "lock: still missing {} dependencies after healing; declare them manually",
+                missing.len()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn clone_lock_args(args: &LockCmdArgs) -> LockCmdArgs {
+    LockCmdArgs {
+        build_file: args.build_file.clone(),
+        third_party_folder: args.third_party_folder.clone(),
+        add: args.add.clone(),
+        index_url: args.index_url.clone(),
+        cache_dir: args.cache_dir.clone(),
+        offline: args.offline,
+        target: args.target.clone(),
+        curl: args.curl.clone(),
+        plz: args.plz.clone(),
+        greedy: args.greedy,
+        ignore_msrv: args.ignore_msrv,
+        features: args.features.clone(),
+    }
 }
 
 fn default_activated_deps(iv: &IndexVersion) -> BTreeSet<String> {
@@ -1836,6 +1944,7 @@ mod lock_cmd_tests {
             plz: "".to_string(),
             greedy: false,
             ignore_msrv: false,
+            features: None,
         })
         .unwrap();
 
@@ -1869,6 +1978,7 @@ mod lock_cmd_tests {
             plz: "".to_string(),
             greedy: false,
             ignore_msrv: false,
+            features: None,
         })
         .unwrap_err();
         assert!(err.to_string().contains("not in index cache"));
@@ -1894,6 +2004,7 @@ mod lock_cmd_tests {
             plz: "".to_string(),
             greedy: false,
             ignore_msrv: false,
+            features: None,
         })
         .unwrap();
         assert_eq!(fs::read_to_string(&build_file).unwrap(), before);

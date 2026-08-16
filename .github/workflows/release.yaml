@@ -1,0 +1,58 @@
+name: Release
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build everything
+        run: ./pleasew build -p -v notice //... --log_file plz-out/log/build.log
+
+      - name: Run tests
+        run: ./pleasew test -p -v notice --log_file plz-out/log/test.log
+
+      # The tool consumers download: statically linked, so it runs anywhere
+      # without matching the builder's libc.
+      - name: Build the please_rust binary
+        run: ./pleasew build -p -v notice -c opt //tools/please_rust:please_rust
+
+      - name: Stage release assets
+        run: |
+          mkdir -p release
+          cp plz-out/bin/tools/please_rust/please_rust release/please_rust-linux_amd64
+          chmod +x release/please_rust-linux_amd64
+          file release/please_rust-linux_amd64
+          (cd release && sha256sum please_rust-linux_amd64 > please_rust-linux_amd64.sha256)
+          cat release/please_rust-linux_amd64.sha256
+
+      # The plugin's config documents the tool's hash; a mismatch means the
+      # release would not verify for consumers, so fail loudly here.
+      - name: Show hash for the release notes
+        run: |
+          echo "PleaseRustTool sha256:"
+          cut -d' ' -f1 release/please_rust-linux_amd64.sha256
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/please_rust-linux_amd64
+            release/please_rust-linux_amd64.sha256
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+
+      - name: Archive logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-logs
+          path: plz-out/log

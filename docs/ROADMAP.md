@@ -116,10 +116,10 @@ service.
   emits member BUILD files and scaffolds the repo config; a bare
   40-crate cargo workspace imports, builds and tests in one command.
 2. ~~fmt / clippy / doc rules~~ — done 2026-08.
-3. **Profile knobs** — opt-level, lto, panic, codegen-units via plugin
-  config → dbg/opt configs. (M; `--rustc-flag` passthrough exists now)
-4. **Pilot debt** — subrepo namespacing fix, `lock` feature UX (bit again
-  during the bindgen import), release-on-tag CI. (M)
+3. ~~Profile knobs~~ — done 2026-08: opt-level, lto, codegen-units,
+  panic, strip, debug-assertions.
+4. **Pilot debt** — ~~`lock` feature UX~~ and ~~release-on-tag CI~~ done
+  2026-08; subrepo namespacing fix remains.
 
 **Exit criterion:** a cargo project ports with one command, clippy and fmt
 gate CI, and builds/tests get faster.
