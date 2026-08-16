@@ -16,6 +16,7 @@ mod compile;
 mod generate;
 mod resolve;
 mod sync;
+mod workspace;
 mod test;
 
 #[derive(Parser)]

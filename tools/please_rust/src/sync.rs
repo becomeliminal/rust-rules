@@ -37,6 +37,12 @@ pub struct SyncArgs {
     #[arg(long)]
     pub import: Option<PathBuf>,
 
+    /// A cargo workspace to import wholesale: writes a BUILD file next to
+    /// every member (rust_library/rust_binary/rust_test), scaffolds the
+    /// third-party BUILD if missing, and imports the workspace's Cargo.lock
+    #[arg(long)]
+    pub import_workspace: Option<PathBuf>,
+
     /// Target triple to resolve for
     #[arg(long, default_value = "x86_64-unknown-linux-gnu")]
     pub target: String,
@@ -60,6 +66,75 @@ pub struct SyncArgs {
     /// Report what would change without writing anything
     #[arg(long)]
     pub dry_run: bool,
+}
+
+/// Scaffolds a minimal third-party BUILD (toolchain + rust_repo subinclude)
+/// for a repo that doesn't have one yet, so a workspace import is a single
+/// command on a fresh cargo repo.
+fn scaffold_third_party_build(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(
+        path,
+        r#"subinclude("///rust//build_defs:rust")
+
+rust_toolchain(
+    name = "toolchain",
+    version = "1.97.1",
+    hashes = ["b4cdbc7cc6b0ee0a2666b1872769fdb2ad8393b28b63952f6493b4b400e4832b"],
+    visibility = ["PUBLIC"],
+)
+
+subinclude("///rust//build_defs:rust_repo")
+"#,
+    )
+    .with_context(|| format!("Failed to write {}", path.display()))?;
+    eprintln!("import-workspace: scaffolded {}", path.display());
+    Ok(())
+}
+
+/// Scaffolds .plzconfig and plugins/BUILD for a repo that has neither, so
+/// `sync --import-workspace` on a bare cargo repo leaves `plz build //...`
+/// one config-review away from working.
+fn scaffold_plz_repo() -> Result<()> {
+    if !Path::new(".plzconfig").exists() {
+        fs::write(
+            ".plzconfig",
+            r#"[please]
+version = 17.27.0
+
+[Parse]
+BlacklistDirs = target
+
+[Plugin "rust"]
+Target = //plugins:rust
+
+; plz only aggregates coverage for known file extensions; .rs is not in
+; its default list
+[cover]
+FileExtension = .rs
+"#,
+        )
+        .context("Failed to write .plzconfig")?;
+        eprintln!("import-workspace: scaffolded .plzconfig");
+    }
+    if !Path::new("plugins/BUILD").exists() {
+        fs::create_dir_all("plugins")?;
+        fs::write(
+            "plugins/BUILD",
+            r#"plugin_repo(
+    name = "rust",
+    owner = "becomeliminal",
+    plugin = "rust-rules",
+    revision = "master",  # pin to a release tag
+)
+"#,
+        )
+        .context("Failed to write plugins/BUILD")?;
+        eprintln!("import-workspace: scaffolded plugins/BUILD");
+    }
+    Ok(())
 }
 
 /// One rust_repo declaration, as parsed from the BUILD file.
@@ -96,6 +171,33 @@ impl Decl {
 }
 
 pub fn run(args: SyncArgs) -> Result<()> {
+    let mut args = args;
+
+    // Workspace import: emit first-party BUILD files, scaffold the
+    // third-party BUILD if this is a fresh repo, and chain the workspace's
+    // Cargo.lock into the ordinary lockfile import below.
+    if let Some(ws) = &args.import_workspace {
+        let result = crate::workspace::import_workspace(ws, &args.third_party_folder)?;
+        eprintln!(
+            "import-workspace: {} members, {} BUILD files written",
+            result.members, result.written
+        );
+        if !args.build_file.exists() {
+            scaffold_third_party_build(&args.build_file)?;
+        }
+        scaffold_plz_repo()?;
+        if args.import.is_none() {
+            if let Some(lock) = result.lockfile {
+                eprintln!("import-workspace: importing {}", lock.display());
+                args.import = Some(lock);
+            } else {
+                eprintln!(
+                    "import-workspace: no Cargo.lock found; declare third-party crates with `lock --add`"
+                );
+            }
+        }
+    }
+
     let build_text = fs::read_to_string(&args.build_file)
         .with_context(|| format!("Failed to read {}", args.build_file.display()))?;
     let lines: Vec<String> = build_text.lines().map(|s| s.to_string()).collect();
@@ -1016,6 +1118,7 @@ pub fn lock(args: LockCmdArgs) -> Result<()> {
         third_party_folder: args.third_party_folder.clone(),
         crate_store: None,
         import: None,
+        import_workspace: None,
         target: args.target.clone(),
         lock_output: None,
         plz: args.plz.clone(),
@@ -1375,6 +1478,7 @@ rust_repo(
             third_party_folder: "third_party/rust".to_string(),
             crate_store: Some(store.clone()),
             import: None,
+            import_workspace: None,
             target: "x86_64-unknown-linux-gnu".to_string(),
             lock_output: None,
             plz: "".to_string(),
@@ -1416,6 +1520,7 @@ rust_repo(
             third_party_folder: "third_party/rust".to_string(),
             crate_store: Some(store),
             import: None,
+            import_workspace: None,
             target: "x86_64-unknown-linux-gnu".to_string(),
             lock_output: None,
             plz: "".to_string(),

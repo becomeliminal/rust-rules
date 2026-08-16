@@ -112,8 +112,9 @@ Phases ordered by leverage. S = hours, M = a day or two, L = up to a week.
 The phase that makes someone *choose* this over Cargo for their next
 service.
 
-1. **Workspace importer** — `sync --import-workspace path/to/Cargo.toml`
-  emitting first-party BUILD files. (L)
+1. ~~Workspace importer~~ — done 2026-08: `sync --import-workspace`
+  emits member BUILD files and scaffolds the repo config; a bare
+  40-crate cargo workspace imports, builds and tests in one command.
 2. ~~fmt / clippy / doc rules~~ — done 2026-08.
 3. **Profile knobs** — opt-level, lto, panic, codegen-units via plugin
   config → dbg/opt configs. (M; `--rustc-flag` passthrough exists now)

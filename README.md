@@ -103,6 +103,18 @@ Or import an existing Cargo project wholesale from its lockfile:
 plz run //tools/please_rust -- sync --import path/to/Cargo.lock
 ```
 
+To port a whole cargo workspace, point the importer at it:
+```ini
+plz run //tools/please_rust -- sync --import-workspace path/to/workspace
+```
+This writes a BUILD file next to every member (`rust_library`,
+`rust_binary`, `rust_test` for unit and integration tests, with path
+dependencies mapped to member labels), scaffolds `third_party/rust/BUILD`,
+`.plzconfig` and `plugins/BUILD` on a fresh repo, and imports the
+workspace's `Cargo.lock` for the third-party graph. Existing BUILD files
+are never overwritten; build scripts, optional features and renames are
+reported for manual follow-up.
+
 Both maintain the `rust_repo` declarations in `third_party/rust/BUILD` for
 you, including sha256 hashes so every download is verified. After editing
 declarations by hand, run `plz run //tools/please_rust -- sync` to re-resolve.

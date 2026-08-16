@@ -80,6 +80,15 @@ binary-link time.
       dep, not srcs — plz excludes test-target srcs from coverage reports)
 
 ### Hardening
+- [ ] Upstream plz WaitForPackage race (found 2026-08): a lost-wakeup
+      TOCTOU on `packageWaits` in src/core/state.go hangs builds when many
+      packages concurrently subinclude the plugin's build_defs — all plz
+      versions incl. master. Reproduced (1/12 cold builds on a 40-package
+      consumer), root-caused, three-line AddOrGet fix written and validated
+      (0/16 with a patched plz). Our own repo dodges it via
+      preloadbuilddefs. Fix + regression test submitted upstream as
+      thought-machine/please#3576; until it lands in a release, large
+      plugin consumers can rarely hit a wedged parse
 - [ ] Remote execution audit (absolute-path canonicalization, cwd walks)
 - [ ] Scale test: 1k+ crate graph through sync/resolve/build
 - [ ] Subrepo name namespacing (`subrepo_name()` prefix — pilot finding)
