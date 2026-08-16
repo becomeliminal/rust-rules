@@ -516,6 +516,11 @@ fn build_command(args: &CompileArgs) -> Result<Command> {
     }
     if args.coverage {
         cmd.arg("-C").arg("instrument-coverage");
+        // Linked C archives (cc_deps) are gcov-instrumented under the cover
+        // config; --coverage makes the cc driver link libgcov for them.
+        if args.crate_type == "bin" || args.test {
+            cmd.arg("-C").arg("link-arg=--coverage");
+        }
     }
     for flag in &args.rustc_flags {
         cmd.arg(flag);
