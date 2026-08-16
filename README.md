@@ -247,6 +247,24 @@ The path to the `stdlib` to be linked by the compiler. Defaults to the toolchain
 StdLib = //third_party/rust:toolchain_stdlib
 ```
 
+### DefaultStatic
+Binaries statically link the C runtime by default, producing self-contained
+executables like Go's. Set to false to default to dynamic linking; either
+way `static = True/False` on a `rust_binary` overrides per rule.
+```ini
+[Plugin "rust"]
+DefaultStatic = false
+```
+
+### CCTool
+Optional build label or path of a C compiler, used by crate build scripts
+and as rustc's linker. Empty uses the host cc via PATH, matching the cc
+plugin's default.
+```ini
+[Plugin "rust"]
+CCTool = //third_party/cc:toolchain
+```
+
 ### PipelinedCompilation
 Splits each library crate into a metadata-only compile that dependents'
 compiles hang off and a full compile that runs in parallel (the scheme
@@ -290,8 +308,19 @@ Contributions are welcome! Please open or submit a pull request with your change
 ### Extra Features for Contribution
 Here are some extra features that would be valuable additions to this project:
 
-- **Crate Types**: `lib`, `rlib`, `proc-macro` and `bin` crates are supported. Adding support for `staticlib`, `dylib` and `cdylib` would be useful.
+- **Hermetic C toolchain target**: build scripts (the `cc` crate, `-sys`
+  crates) and rustc's linker use the host compiler by default, matching the
+  cc plugin's convention. The `CCTool` config accepts a build label, so what
+  is missing is a downloadable toolchain target to point it at.
 
-- **C toolchain**: Build scripts that invoke a C compiler (the `cc` crate, `-sys` crates) currently rely on the host compiler. A declared, hermetic C toolchain would close this gap.
+- **Target (OS and Architecture) Compatibility**: primarily built and tested
+  on x86_64-unknown-linux-gnu. The resolver's host/target unit split is in
+  place, so cross-compilation needs `--target` threading and per-target
+  `rust-std`, not a redesign.
 
-- **Target (OS and Architecture) Compatibility**: This project has primarily been tested on unknown-linux-gnu x86_64 architecture. It would be nice to test and support other targets to ensure cross-platform compatibility.
+- **Resolver depth**: `lock` is greedy max-satisfying with a documented
+  `select()` seam for a backtracking (PubGrub) solver; MSRV-aware resolution
+  (`rust-version`) is not enforced.
+
+- **Private registries**: index and download URL templating for registries
+  other than crates.io.

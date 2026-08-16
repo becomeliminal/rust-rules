@@ -42,15 +42,16 @@ so its *contract* is reimplemented under the build system's control.
 | `rust_toolchain` | rustc/cargo/stdlib fetched from static.rust-lang.org, sha256-pinned | fetch rule only |
 | `rust_repo` | crate tarball fetched from static.crates.io via `remote_file`, sha256-verified | fetch rule only |
 | `please_rust generate` | parses the crate's Cargo.toml, emits BUILD rules into a Please subrepo | none |
-| `please_rust resolve` | semver version routing + cargo resolver-v2 feature unification across the declared graph → checked-in `rust.lock` | none |
+| `please_rust resolve` | semver version routing + cargo resolver-v2 feature unification across the declared graph, computed by the `rust_resolve` rule inside the build graph | none |
 | `please_rust compile` / `build-script` | drives rustc with cargo's full env contract (`CARGO_PKG_*`, `OUT_DIR`, feature cfgs, proc-macro externs, build script directives) | none |
-| `please_rust sync` | maintains the `rust_repo` list: naming, hashes, lock regeneration; imports a cargo `Cargo.lock` wholesale | none |
+| `please_rust sync` | maintains the `rust_repo` list: naming, hashes, pruning; imports a cargo `Cargo.lock` wholesale, or a whole workspace with `--import-workspace` | none |
 | `please_rust lock --add crate@req` | resolves new deps against the crates.io sparse index (cached, `--offline` supported), hashes from index checksums | dev-time only |
 
 The `rust_repo` declarations play the role `go.mod` plays for go-rules: the
-committed, deterministic resolution artifact. `rust.lock` (checked in next to
-the BUILD file) carries the computed feature sets and dependency routing, so
-builds are reproducible byte-for-byte with no resolver in the loop.
+committed, deterministic resolution artifact. The computed feature sets and
+dependency routing are derived from them by the `rust_resolve` rule inside
+the build graph (nothing else is checked in), so builds are reproducible
+with no resolver in the loop and no lockfile to drift.
 
 Multiple versions of a crate coexist: the newest declared version owns the
 plain name (`indexmap`), older duplicates are suffixed (`indexmap-1.9.3`),
@@ -68,6 +69,9 @@ plz run //tools/please_rust -- lock --add axum@0.7
 # Or import an existing cargo project's entire lockfile:
 plz run //tools/please_rust -- sync --import path/to/Cargo.lock
 
+# Or port a whole cargo workspace, BUILD files and all:
+plz run //tools/please_rust -- sync --import-workspace path/to/workspace
+
 # After hand-editing rust_repo declarations, re-resolve:
 plz run //tools/please_rust -- sync
 ```
@@ -78,9 +82,14 @@ transitive is derived.
 
 ## First-party rules
 
-`rust_library`, `rust_binary`, `rust_test`, and `rust_benchmark` (criterion)
-compile through the same `please_rust compile` driver and interoperate with
-`rust_repo` crates in both directions. See `examples/`.
+`rust_library` (all crate types: rlib, proc-macro, dylib, cdylib,
+staticlib), `rust_binary` (statically linked by default), `rust_test` (unit,
+integration and `rust_doc_test` doctests, with per-test reporting and
+`plz cover` support), `rust_benchmark` (criterion), `rust_bindgen`,
+`rust_clippy`, `rust_fmt_test` and `rust_doc` all drive the same
+`please_rust compile` machinery and interoperate with `rust_repo` crates in
+both directions. C interop runs both ways via `cc_deps` and `staticlib`.
+See `examples/` and `test/`.
 
 ```python
 rust_library(
@@ -116,11 +125,6 @@ against go-rules' architecture. What remains open, deliberately:
   hermetic toolchain target can be swapped in without changing any rules;
   such a toolchain is not shipped here. C sources are staged and compile
   (blake3 builds its real asm implementations).
-- **`links` / `DEP_<LINKS>_<KEY>` propagation**: metadata directives are
-  parsed and `CARGO_MANIFEST_LINKS` is set, but a linked crate's metadata is
-  not yet exported to its dependents' build scripts. This only matters for
-  native-library ecosystems (libz-sys and friends), so it lands together
-  with the C toolchain.
 - **`lock` resolution is greedy** max-satisfying with pin preference and
   clear conflict errors; a backtracking (PubGrub) solver can replace its
   `select()` seam without touching anything else.
