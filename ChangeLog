@@ -1,3 +1,11 @@
+Version 0.3.2
+-------------
+  * Resolution never routes a dependency to a version its requirement rules
+    out. The old single-declared-version fallback silently handed crates the
+    wrong major, surfacing as compile errors inside the crate; unsatisfiable
+    requirements are now reported as missing so lock declares what is needed.
+    Six such mis-resolutions in this repo's own graph are fixed.
+
 Version 0.3.1
 -------------
 Fixes two consumer-facing regressions found by the labs pilot.
