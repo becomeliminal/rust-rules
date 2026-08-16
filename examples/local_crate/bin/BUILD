@@ -1,3 +1,5 @@
+subinclude("//build_defs:rust")
+
 rust_binary(
     name = "bin",
     main = "src/main.rs",

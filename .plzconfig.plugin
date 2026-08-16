@@ -148,3 +148,9 @@ DefaultValue =
 Optional = true
 Help = rustc -C debug-assertions (true/false). Empty follows the build config.
 Inherit = true
+
+[PluginConfig "criterion_dep"]
+ConfigKey = CriterionDep
+DefaultValue = //third_party/rust:criterion
+Help = The criterion crate that rust_benchmark rules link against.
+Inherit = true

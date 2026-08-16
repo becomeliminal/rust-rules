@@ -461,7 +461,7 @@ def rust_benchmark(name:str, root:str, modules:list=None, deps:list=[], edition:
     """
     crate_name = name.replace('-', '_')
 
-    deps = deps + ["//third_party/rust:criterion"]
+    deps = deps + [CONFIG.RUST.CRITERION_DEP]
     return build_rule(
         name = name,
         srcs = {

@@ -1,4 +1,4 @@
-subinclude("///cc//build_defs:c")
+subinclude("///cc//build_defs:c", "//build_defs:rust")
 
 # --- Rust depending on C ---
 c_library(

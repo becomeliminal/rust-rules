@@ -93,16 +93,21 @@ binary-link time.
       plugin consumers can rarely hit a wedged parse
 - [ ] Remote execution audit (absolute-path canonicalization, cwd walks)
 - [ ] Scale test: 1k+ crate graph through sync/resolve/build
-- [ ] Subrepo name namespacing (pilot finding). Plugin-internal third_party
-      subrepos register unqualified names (`serde`), which can collide with a
-      consumer's own. Attempted reproduction (2026-08) needs the plugin
-      consumed as a raw path subrepo, and that setup trips the dev .plzconfig
-      preloads first, so the collision has not been isolated in a test. It
-      does not affect the documented path (released binary + plugin_repo at a
-      tag), which the labs pilot exercises. Fixing blind would rewrite every
-      generated label, so this waits for a real repro. go-rules is immune by
-      construction: Go module paths (github.com_pkg_errors) are unique where
-      crate names are not
+- [x] Subrepo name collision, reproduced and fixed (2026-08). plz derives
+      subrepo names from package path + name (`filepath.Join(pkg.Name,
+      name)` in its subrepo builtin) with no qualification by the declaring
+      repo, so a plugin's `third_party/rust/itoa` and a consumer's are one
+      global name. This plugin now keeps its own crates in
+      `third_party/crates`, and `rust_repo` derives both `third_party_path`
+      and `lock` from the package the declarations live in, so relocating
+      them is all it takes. A consumer building its own `itoa` alongside the
+      plugin's tool target is now a regression test. go-rules shares the
+      naming but is never parsed by consumers, so it has not had to solve it
+- [x] Shipped config must not carry dev assumptions: plugin_repo ships this
+      repo's .plzconfig, so `[Parse]` preloads became requirements on every
+      consumer that parsed a plugin package (proto, shell and python plugins
+      declared). Preloads removed and our own BUILD files subinclude
+      explicitly, matching go-rules, whose config has no [Parse] section
 
 ## Track 2: Cargo parity (log)
 

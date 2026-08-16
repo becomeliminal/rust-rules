@@ -1,3 +1,5 @@
+subinclude("//build_defs:rust", "//build_defs:rust_repo")
+
 # A crate fetched from a git forge instead of crates.io (the fork workflow).
 rust_repo(
     name = "anyhow_git",

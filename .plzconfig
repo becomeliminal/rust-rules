@@ -7,35 +7,26 @@ timeout = 2000
 
 [Plugin "rust"]
 Target = //plugins:rust
+; This repo keeps its own crates in third_party/crates so their subrepo
+; names cannot collide with a consumer's third_party/rust ones
+CriterionDep = //third_party/crates:criterion
+BindgenTool = ///third_party/crates/bindgen_cli//:bindgen_bin
 Rustc = //third_party/rust:toolchain_rustc
 StdLib = //third_party/rust:toolchain_stdlib
 RepoRoot = //third_party/rust:toolchain_target
 ; Exercise the pipelined shape in this repo; consumers default to off
 PipelinedCompilation = true
 
-[Parse]
-preloadsubincludes = ///proto//build_defs:proto
-preloadsubincludes = ///shell//build_defs:shell
-preloadsubincludes = ///python//build_defs:python
-preloadbuilddefs = build_defs/rust_toolchain.build_defs
-preloadbuilddefs = build_defs/rust.build_defs
-preloadbuilddefs = build_defs/rust_crate.build_defs
-preloadbuilddefs = build_defs/rust_repo.build_defs
+; No [Parse] preloads: plugin_repo ships this config to consumers, so
+; anything preloaded here becomes a requirement on every repo that parses a
+; package of this plugin (go-rules ships no [Parse] section for the same
+; reason). Our own BUILD files subinclude explicitly instead.
 
 [Plugin "shell"]
 Target = //plugins:shell
 
 [Plugin "cc"]
 Target = //plugins:cc
-
-[Plugin "proto"]
-Target = //plugins:proto
-ProtocTool = //third_party/proto:protoc
-LanguageDef = //build_defs/proto:rust_proto_lang
-
-[Plugin "python"]
-Target = //plugins:python
-DefaultInterpreter = python3
 
 [PluginDefinition]
 Name = rust
@@ -75,26 +66,6 @@ Cmd = run //scripts:cargo_nightly
 Subcommand = ["build", "test", "run", "clean", "check", "new", "rustc"]
 Flag = ["--release", "--verbose", "--manifest-path", "-Z"]
 PositionalLabels = true
-
-[PluginConfig "proto_plugin"]
-ConfigKey = ProtoPlugin
-DefaultValue = ///third_party/rust/protoc_gen_prost//:protoc_gen_prost_bin
-Inherit = true
-
-[PluginConfig "grpc_plugin"]
-ConfigKey = GrpcPlugin
-DefaultValue = ///third_party/rust/protoc_gen_tonic//:protoc_gen_tonic_bin
-Inherit = true
-
-[PluginConfig "proto_dep"]
-ConfigKey = ProtoDep
-DefaultValue = //third_party/rust:prost
-Inherit = true
-
-[PluginConfig "grpc_dep"]
-ConfigKey = GrpcDep
-DefaultValue = //third_party/rust:tonic
-Inherit = true
 
 [PluginConfig "please_rust_tool"]
 ConfigKey = PleaseRustTool
@@ -158,7 +129,7 @@ Inherit = true
 
 [PluginConfig "bindgen_tool"]
 ConfigKey = BindgenTool
-DefaultValue = ///third_party/rust/bindgen_cli//:bindgen_bin
+DefaultValue = ///third_party/crates/bindgen_cli//:bindgen_bin
 Help = Build label of the bindgen binary used by rust_bindgen. Built from crates via rust_repo (bindgen-cli).
 Inherit = true
 
@@ -209,4 +180,10 @@ ConfigKey = DebugAssertions
 DefaultValue = 
 Optional = true
 Help = rustc -C debug-assertions (true/false). Empty follows the build config.
+Inherit = true
+
+[PluginConfig "criterion_dep"]
+ConfigKey = CriterionDep
+DefaultValue = //third_party/rust:criterion
+Help = The criterion crate that rust_benchmark rules link against.
 Inherit = true

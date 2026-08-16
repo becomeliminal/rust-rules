@@ -28,6 +28,8 @@ pub struct GenerateArgs {
     pub subrepo: String,
 
     /// Third-party folder path
+    /// Package holding the third-party declarations; empty means the repo
+    /// root, where subrepo labels carry no package prefix.
     #[arg(long, default_value = "third_party/rust")]
     pub third_party_folder: String,
 
@@ -176,11 +178,10 @@ pub fn run(args: GenerateArgs) -> Result<()> {
                     .unwrap_or(false)
             })
             .map(|d| {
-                format!(
-                    "///{}/{}//:_{}_build_script|buildscript",
-                    args.third_party_folder,
-                    d.subrepo,
-                    d.crate_name.replace('-', "_")
+                subrepo_label(
+                    &args.third_party_folder,
+                    &d.subrepo,
+                    &format!("_{}_build_script|buildscript", d.crate_name.replace('-', "_")),
                 )
             })
             .collect(),
@@ -195,7 +196,7 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         };
         (
             d.name.clone(),
-            format!("///{}/{}//:{}", args.third_party_folder, d.subrepo, target_name),
+            subrepo_label(&args.third_party_folder, &d.subrepo, &target_name),
         )
     };
 
@@ -429,12 +430,7 @@ fn resolve_dependencies(
             .cloned()
             .unwrap_or_else(|| normalized_name.clone());
         if seen.insert(normalized_name.clone()) {
-            let target = format!(
-                "///{}/{}//:{}",
-                third_party_folder,
-                subrepo_name,
-                normalized_name
-            );
+            let target = subrepo_label(third_party_folder, &subrepo_name, &normalized_name);
             deps.push((name.to_string(), target));
         }
     };
@@ -479,12 +475,7 @@ fn resolve_build_dependencies(
     for (name, _dep) in &manifest.build_dependencies {
         let normalized_name = name.replace("-", "_");
         if seen.insert(normalized_name.clone()) {
-            let target = format!(
-                "///{}/{}//:{}",
-                third_party_folder,
-                normalized_name,
-                normalized_name
-            );
+            let target = subrepo_label(third_party_folder, &normalized_name, &normalized_name);
             deps.push((name.clone(), target));
         }
     }
@@ -501,12 +492,7 @@ fn resolve_build_dependencies(
             for (name, _dep) in &target_deps.build_dependencies {
                 let normalized_name = name.replace("-", "_");
                 if seen.insert(normalized_name.clone()) {
-                    let target = format!(
-                        "///{}/{}//:{}",
-                        third_party_folder,
-                        normalized_name,
-                        normalized_name
-                    );
+                    let target = subrepo_label(third_party_folder, &normalized_name, &normalized_name);
                     deps.push((name.clone(), target));
                 }
             }
@@ -514,6 +500,16 @@ fn resolve_build_dependencies(
     }
 
     deps
+}
+
+/// Composes a subrepo label. At the repo root the third-party folder is
+/// empty and the label carries no package prefix.
+fn subrepo_label(folder: &str, subrepo: &str, target: &str) -> String {
+    if folder.is_empty() {
+        format!("///{}//:{}", subrepo, target)
+    } else {
+        format!("///{}/{}//:{}", folder, subrepo, target)
+    }
 }
 
 /// Rewrites a dep target label to its `_name#rmeta` twin.

@@ -1,3 +1,5 @@
+subinclude("//build_defs:rust")
+
 rust_benchmark(
     name = "fibonacci_benchmark",
     root = "src/main.rs",

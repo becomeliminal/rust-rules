@@ -1,3 +1,5 @@
+subinclude("//build_defs:rust")
+
 rust_library(
     name = "package_b",
     modules = [

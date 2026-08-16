@@ -1,3 +1,5 @@
+subinclude("//build_defs:rust", "//build_defs:rust_repo")
+
 # Integration test for links / DEP_<LINKS>_<KEY> metadata propagation:
 # zstub (links = "zstub") exports metadata from its build script; zconsumer's
 # build script asserts it arrives as DEP_ZSTUB_* env vars, and its lib

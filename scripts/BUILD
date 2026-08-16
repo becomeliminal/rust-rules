@@ -1,3 +1,5 @@
+subinclude("///shell//build_defs:shell")
+
 sh_binary(
     name = "rustc",
     main = "rustc.sh",

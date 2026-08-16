@@ -77,10 +77,10 @@ def rust_repo(
     hashes: list = None,
     patch: list = None,
     visibility: list = ["PUBLIC"],
-    third_party_path: str = "third_party/rust",
+    third_party_path: str = "",
     labels: list = [],
     dep_overrides: dict = {},
-    lock: str = "//third_party/rust:rust_lock",
+    lock: str = "auto",
     indirect: bool = False,
     default_features: bool = True,
     bin: bool = False,
@@ -105,13 +105,16 @@ def rust_repo(
         hashes: Optional hashes to verify the download.
         patch: Patch files to apply.
         visibility: Visibility for the install target.
-        third_party_path: Where subrepos are placed.
+        third_party_path: Where subrepos are placed. Defaults to the package
+                          these declarations live in, which is what keeps
+                          subrepo names distinct between repos.
         labels: Labels for the rule.
         dep_overrides: Routes named deps to versioned subrepos, e.g.
                        {"hashbrown": "hashbrown_0_12_3"}. Keys are real crate
                        (package) names, values are subrepo names. Interim
                        mechanism; superseded by the resolved lock file.
-        lock: Label of the resolved lock (the rust_resolve rule). When it
+        lock: Label of the resolved lock (the rust_resolve rule); defaults to
+              the rust_resolve rule in this package. When it
               contains an entry for this subrepo, features and dependency
               routing come from it. Pass an empty string to use heuristic
               resolution (e.g. for a standalone crate outside the lock).
@@ -131,6 +134,17 @@ def rust_repo(
     """
     if not crate:
         fail("crate is required for rust_repo")
+
+    # Subrepo names are package path + name and are registered globally by
+    # plz, with no qualification by the declaring repo. Deriving the paths
+    # from the package these declarations live in therefore keeps a plugin's
+    # own crates from colliding with a consumer's: put them in a package the
+    # consumer does not use and the names differ.
+    pkg_name = package_name()
+    if not third_party_path:
+        third_party_path = pkg_name
+    if lock == "auto":
+        lock = f"//{pkg_name}:rust_lock" if pkg_name else "//:rust_lock"
     if not version:
         fail("version is required for rust_repo")
 
@@ -180,7 +194,6 @@ def rust_repo(
     install_targets = install if install else [crate_normalized]
     install_arg = ",".join(install_targets)
 
-    pkg_name = package_name()
     # At the repo root package_name() is empty; labels must not double-slash
     subrepo_path = f"{pkg_name}/{subrepo_name}" if pkg_name else subrepo_name
     pkg_root = f"{crate}-{version}"
@@ -200,7 +213,7 @@ def rust_repo(
         "rm -rf $SRCS_CRATE/.plzconfig",
         "find $SRCS_CRATE -name BUILD -delete",
         # Run please_rust generate (SRCS_CRATE points directly to the extracted directory)
-        f"$TOOL generate --crate-name {crate} --version {version} --src-root $SRCS_CRATE --subrepo {subrepo_path} --features '{features_arg}' --install '{install_arg}' --third-party-folder {third_party_path} --tool-label {tool_ref} --rustc-label {rustc_ref} --sysroot-label {sysroot_ref} {cc_flag}{lock_flag}{pipeline_flag}" + " ".join([f"--override {k}={v}" for k, v in sorted(dep_overrides.items())]),
+        f"$TOOL generate --crate-name {crate} --version {version} --src-root $SRCS_CRATE --subrepo {subrepo_path} --features '{features_arg}' --install '{install_arg}' --third-party-folder '{third_party_path}' --tool-label {tool_ref} --rustc-label {rustc_ref} --sysroot-label {sysroot_ref} {cc_flag}{lock_flag}{pipeline_flag}" + " ".join([f"--override {k}={v}" for k, v in sorted(dep_overrides.items())]),
         # Move to output
         "mv $SRCS_CRATE $OUT",
     ]
