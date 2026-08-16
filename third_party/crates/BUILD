@@ -1387,6 +1387,15 @@ rust_resolve(
         "thiserror|thiserror|2.0.20||false|true",
         "thiserror_impl|thiserror-impl|2.0.20||false|true",
         "version_ranges|version-ranges|0.1.3||false|true",
+        "base64-0.12.3|base64|0.12.3||true|true",
+        "getrandom-0.1.16|getrandom|0.1.16||false|true",
+        "heck-0.4.1|heck|0.4.1||true|true",
+        "itertools-0.10.5|itertools|0.10.5||true|true",
+        "libsecp256k1_gen_ecmult-0.2.1|libsecp256k1-gen-ecmult|0.2.1||true|true",
+        "libsecp256k1_gen_genmult-0.2.1|libsecp256k1-gen-genmult|0.2.1||true|true",
+        "rand-0.7.3|rand|0.7.3||true|true",
+        "rand_chacha-0.2.2|rand_chacha|0.2.2||false|true",
+        "rand_core-0.5.1|rand_core|0.5.1||false|true",
     ],
 )
 
@@ -1579,5 +1588,72 @@ rust_repo(
     crate = "version-ranges",
     version = "0.1.3",
     hashes = ["31e9bd4e9c9ff6a2a9b5969462ba26216af3e010df0377dad8320ab515262ef8"],
+    indirect = True,
+)
+
+# Added by please_rust sync
+rust_repo(
+    name = "base64-0.12.3",
+    crate = "base64",
+    version = "0.12.3",
+    hashes = ["3441f0f7b02788e948e47f457ca01f1d7e6d92c693bc132c22b087d3141c03ff"],
+)
+
+rust_repo(
+    name = "getrandom-0.1.16",
+    crate = "getrandom",
+    version = "0.1.16",
+    hashes = ["8fc3cb4d91f53b50155bdcfd23f6a4c39ae1969c2ae85982b135750cccaf5fce"],
+    indirect = True,
+)
+
+rust_repo(
+    name = "heck-0.4.1",
+    crate = "heck",
+    version = "0.4.1",
+    hashes = ["95505c38b4572b2d910cecb0281560f54b440a19336cbbcb27bf6ce6adc6f5a8"],
+)
+
+rust_repo(
+    name = "itertools-0.10.5",
+    crate = "itertools",
+    version = "0.10.5",
+    hashes = ["b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"],
+)
+
+rust_repo(
+    name = "libsecp256k1_gen_ecmult-0.2.1",
+    crate = "libsecp256k1-gen-ecmult",
+    version = "0.2.1",
+    hashes = ["ccab96b584d38fac86a83f07e659f0deafd0253dc096dab5a36d53efe653c5c3"],
+)
+
+rust_repo(
+    name = "libsecp256k1_gen_genmult-0.2.1",
+    crate = "libsecp256k1-gen-genmult",
+    version = "0.2.1",
+    hashes = ["67abfe149395e3aa1c48a2beb32b068e2334402df8181f818d3aee2b304c4f5d"],
+)
+
+rust_repo(
+    name = "rand-0.7.3",
+    crate = "rand",
+    version = "0.7.3",
+    hashes = ["6a6b1679d49b24bbfe0c803429aa1874472f50d9b363131f0e89fc356b544d03"],
+)
+
+rust_repo(
+    name = "rand_chacha-0.2.2",
+    crate = "rand_chacha",
+    version = "0.2.2",
+    hashes = ["f4c8ed856279c9737206bf725bf36935d8666ead7aa69b52be55af369d193402"],
+    indirect = True,
+)
+
+rust_repo(
+    name = "rand_core-0.5.1",
+    crate = "rand_core",
+    version = "0.5.1",
+    hashes = ["90bde5296fc891b0cef12a6d03ddccc162ce7b2aff54160af9338f8d40df6d19"],
     indirect = True,
 )

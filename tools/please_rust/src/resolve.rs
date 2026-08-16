@@ -301,6 +301,7 @@ pub fn resolve_entries(entries: &[EntryInput], target: &str) -> Result<LockFile>
     // feature list plus default features, unless the entry opts out with
     // default_features = False. Indirect entries never seed — their features
     // are derived from their dependents.
+    let mut missing: Vec<MissingDep> = Vec::new();
     let mut work: Vec<Work> = Vec::new();
     for (i, e) in entries.iter().enumerate() {
         if e.root {
@@ -314,7 +315,7 @@ pub fn resolve_entries(entries: &[EntryInput], target: &str) -> Result<LockFile>
         }
     }
 
-    process(&mut nodes, &resolver, work)?;
+    process(&mut nodes, &resolver, work, &mut missing)?;
 
     // Emit the lock. Per subrepo:
     // - active in target unit only -> crates
@@ -334,7 +335,6 @@ pub fn resolve_entries(entries: &[EntryInput], target: &str) -> Result<LockFile>
 
     let mut crates = BTreeMap::new();
     let mut host_crates = BTreeMap::new();
-    let mut missing: Vec<MissingDep> = Vec::new();
     for (i, n) in nodes.iter().enumerate() {
         let target_active = n.unit(Unit::Target).activated;
         let host_active = n.unit(Unit::Host).activated;
@@ -377,6 +377,12 @@ struct Resolver {
 
 impl Resolver {
     /// Pick the declared node satisfying a dependency requirement.
+    ///
+    /// A requirement that nothing declared satisfies returns None rather than
+    /// falling back to whatever single version happens to be declared: routing
+    /// a `^0.2` dependency onto a declared 0.4 produces a baffling compile
+    /// error deep in the crate, where returning None reports it as missing and
+    /// lets `lock` declare the version that is actually needed.
     fn select(&self, package: &str, req: Option<&VersionReq>, nodes: &[CrateNode]) -> Option<usize> {
         let candidates = self.index.get(package)?;
         if let Some(req) = req {
@@ -385,9 +391,10 @@ impl Resolver {
                     return Some(i);
                 }
             }
+            return None;
         }
-        // No semver match: a single declared version is used as-is; multiple
-        // versions with no match is an error the caller reports.
+        // No requirement given (a bare declaration): a single declared version
+        // is unambiguous.
         if candidates.len() == 1 {
             return Some(candidates[0]);
         }
@@ -418,7 +425,12 @@ fn edge_unit(parent_unit: Unit, kind: DepKind) -> Unit {
     }
 }
 
-fn process(nodes: &mut Vec<CrateNode>, resolver: &Resolver, mut work: Vec<Work>) -> Result<()> {
+fn process(
+    nodes: &mut Vec<CrateNode>,
+    resolver: &Resolver,
+    mut work: Vec<Work>,
+    missing: &mut Vec<MissingDep>,
+) -> Result<()> {
     while let Some(item) = work.pop() {
         match item {
             Work::ActivateCrate {
@@ -455,16 +467,17 @@ fn process(nodes: &mut Vec<CrateNode>, resolver: &Resolver, mut work: Vec<Work>)
                                 default_features: df,
                                 features: feats,
                             });
-                        } else if resolver.index.contains_key(&package) {
-                            bail!(
-                                "{}: no declared version of {} satisfies {:?}",
-                                nodes[idx].crate_name,
-                                package,
-                                req.map(|r| r.to_string())
-                            );
+                        } else {
+                            // Either undeclared, or declared only at versions
+                            // this requirement rules out. Both are gaps `lock`
+                            // can close by declaring the right version, so
+                            // record rather than fail.
+                            missing.push(MissingDep {
+                                requirer: nodes[idx].crate_name.clone(),
+                                package: package.clone(),
+                                req: req.map(|r| r.to_string()),
+                            });
                         }
-                        // Unknown package: not declared (e.g. platform-only);
-                        // emit warns if it's actually needed.
                     }
                 }
                 if default_features && nodes[idx].manifest.features.contains_key("default") {
@@ -661,14 +674,6 @@ fn emit_entry(
         let child = match resolver.select(&d.package, d.req.as_ref(), nodes) {
             Some(c) => c,
             None => {
-                if resolver.index.contains_key(&d.package) {
-                    bail!(
-                        "{}: no declared version of {} satisfies {:?}",
-                        n.crate_name,
-                        d.package,
-                        d.req.as_ref().map(|r| r.to_string())
-                    );
-                }
                 missing.push(MissingDep {
                     requirer: n.crate_name.clone(),
                     package: d.package.clone(),
@@ -1125,6 +1130,21 @@ mod tests {
     }
 
     #[test]
+    fn incompatible_declared_version_is_not_silently_used() {
+        // The regression: with only x 2.0 declared, a's requirement on ^1 must
+        // not be routed to it. Reported as missing instead.
+        let lock = Graph::new("misroute")
+            .krate("a", "a", "1.0.0", "[dependencies]\nx = \"1\"\n")
+            .krate("x", "x", "2.0.0", "")
+            .root("a", &[], true)
+            .resolve();
+        assert_eq!(lock.missing.len(), 1, "missing: {:?}", lock.missing);
+        assert_eq!(lock.missing[0].package, "x");
+        assert_eq!(lock.missing[0].req.as_deref(), Some("^1"));
+        assert!(!lock.crates.contains_key("x"));
+    }
+
+    #[test]
     fn a_closed_graph_reports_nothing_missing() {
         let lock = Graph::new("closed_graph")
             .krate("host", "host", "1.0.0", "[dependencies]\nhelper = \"1\"\n")
@@ -1230,7 +1250,7 @@ mod run_io_tests {
     }
 
     #[test]
-    fn unsatisfiable_requirement_errors() {
+    fn unsatisfiable_requirement_is_reported_not_misrouted() {
         let dir = std::env::temp_dir().join(format!("please_rust_resolve_conflict_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
@@ -1246,7 +1266,11 @@ mod run_io_tests {
             root,
             default_features: true,
         };
-        let err = resolve_entries(
+        // Nothing declared satisfies a's requirement on x. Rather than
+        // routing it to an arbitrary declared version (which surfaces as a
+        // baffling compile error) or failing outright, resolution reports the
+        // gap so `lock` can declare the version that is needed.
+        let lock = resolve_entries(
             &[
                 mk("a", "a", "1.0.0", "a.toml", true),
                 mk("x1", "x", "1.0.0", "x1.toml", false),
@@ -1254,8 +1278,12 @@ mod run_io_tests {
             ],
             "x86_64-unknown-linux-gnu",
         )
-        .unwrap_err();
-        assert!(err.to_string().contains("no declared version of x"));
+        .unwrap();
+        assert_eq!(lock.missing.len(), 1, "missing: {:?}", lock.missing);
+        assert_eq!(lock.missing[0].package, "x");
+        assert_eq!(lock.missing[0].requirer, "a");
+        assert!(!lock.crates.contains_key("x1"));
+        assert!(!lock.crates.contains_key("x2"));
     }
 
     #[test]
