@@ -55,6 +55,23 @@ rust_test(
     ],
 )
 ```
+Tests report individual results to Please (not just pass/fail). Integration
+tests are `rust_test` rules rooted at a file under `tests/`, depending on the
+library; documentation tests run with `rust_doc_test`:
+```python
+rust_test(
+    name = "integration_test",
+    root = "tests/integration_test.rs",
+    deps = [":lib"],
+)
+
+rust_doc_test(
+    name = "doc_test",
+    crate_name = "lib",
+    root = "src/lib.rs",
+    deps = [":lib"],
+)
+```
 
 You can define third-party crates using `rust_repo`. Only your direct
 dependencies need declaring — versions, features and transitive dependencies
@@ -90,7 +107,27 @@ Both maintain the `rust_repo` declarations in `third_party/rust/BUILD` for
 you, including sha256 hashes so every download is verified. After editing
 declarations by hand, run `plz run //tools/please_rust -- sync` to re-resolve.
 
-To compile a binary, you can use `rust_binary`:
+To use a fork or an unpublished revision, fetch the crate from a git forge
+at a pinned revision instead of crates.io:
+```python
+rust_repo(
+    name = "anyhow",
+    crate = "anyhow",
+    version = "1.0.86",
+    git_repo = "dtolnay/anyhow",
+    git_revision = "1.0.86",
+)
+```
+(`sync --import` translates `git+https://github.com/...` lockfile sources
+automatically.)
+
+`rust_library` builds an `rlib` by default; `crate_type` also supports
+`proc-macro`, `dylib`, `cdylib` and `staticlib` for compiler plugins and
+C-ABI artifacts.
+
+To compile a binary, you can use `rust_binary`. Binaries statically link the
+C runtime by default (like Go), producing self-contained executables; opt out
+per rule with `static = False` or globally with the `DefaultStatic` config:
 ```python
 subinclude("///rust//build_defs:rust")
 

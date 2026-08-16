@@ -36,7 +36,7 @@ def _dep_names(deps:list):
     return names
 
 
-def _compile_cmds(crate_name:str, edition:str, crate_type:str, emit:str, features:list=None, test:bool=False, write_externconfig:bool=False, manifest:str=None, deps:list=None):
+def _compile_cmds(crate_name:str, edition:str, crate_type:str, emit:str, features:list=None, test:bool=False, write_externconfig:bool=False, manifest:str=None, deps:list=None, lib_file:str='', static:bool=False):
     """Returns the {dbg, opt} command dict for compiling a crate via please_rust.
 
     Direct deps get --extern (by crate name, from --dep filtering); transitive
@@ -46,17 +46,19 @@ def _compile_cmds(crate_name:str, edition:str, crate_type:str, emit:str, feature
     test_arg = '--test ' if test else ''
     manifest_arg = '--manifest-path $SRCS_MANIFEST ' if manifest else ''
     dep_args = ' '.join([f'--dep {d}' for d in _dep_names(deps)]) + ' ' if deps else ''
-    links = crate_type == 'bin' or test
+    links = crate_type in ['bin', 'proc-macro', 'dylib', 'cdylib', 'staticlib'] or test
     cc_arg = '--cc $TOOLS_CC ' if links and CONFIG.RUST.CC_TOOL else ''
-    base = f'{_AGGREGATE_EXTERNCONFIGS} && $TOOLS_PLEASE_RUST compile --externconfig externconfig {manifest_arg}{dep_args}{cc_arg}--rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --crate-name {crate_name} --edition {edition} --crate-type {crate_type} --emit {emit} {test_arg}{feature_args}'
-    suffix = f" && echo '{crate_name}=lib{crate_name}.rlib' > $OUTS_EXTERNCONFIG" if write_externconfig else ''
+    static_arg = '--static ' if static else ''
+    base = f'{_AGGREGATE_EXTERNCONFIGS} && $TOOLS_PLEASE_RUST compile --externconfig externconfig {manifest_arg}{dep_args}{cc_arg}{static_arg}--rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --crate-name {crate_name} --edition {edition} --crate-type {crate_type} --emit {emit} {test_arg}{feature_args}'
+    lib_file = lib_file or f'lib{crate_name}.rlib'
+    suffix = f" && echo '{crate_name}={lib_file}' > $OUTS_EXTERNCONFIG" if write_externconfig else ''
     return {
         'dbg': f'{base} -g $SRCS_MAIN{suffix}',
         'opt': f'{base} -O $SRCS_MAIN{suffix}',
     }
 
 
-def rust_library(name:str, root:str, crate_name:str="", modules:list=None, deps:list=[], edition:str="2018", features:list=None, build_root:str=None, build_deps:list|dict=None, target_dir:str=None, visibility:list=None):
+def rust_library(name:str, root:str, crate_name:str="", crate_type:str="rlib", modules:list=None, deps:list=[], edition:str="2018", features:list=None, build_root:str=None, build_deps:list|dict=None, target_dir:str=None, visibility:list=None):
     """Defines a build rule for a Rust library.
 
     Args:
@@ -75,35 +77,61 @@ def rust_library(name:str, root:str, crate_name:str="", modules:list=None, deps:
     if not crate_name:
         crate_name = name.replace('-', '_')
 
+    # Output shape and linkability per crate type
+    emit = 'dep-info,link'
+    rustc_type = crate_type
+    lib_file = ''
+    linkable = False
+    if crate_type == 'rlib':
+        outs = {
+            'rlib': [f'lib{crate_name}.rlib'],
+            'rmeta': [f'lib{crate_name}.rmeta'],
+            'externconfig': [f'{crate_name}.externconfig'],
+        }
+        emit = 'dep-info,link,metadata'
+        rustc_type = 'lib'
+        lib_file = f'lib{crate_name}.rlib'
+        linkable = True
+    elif crate_type in ['proc-macro', 'dylib']:
+        outs = {
+            'so': [f'lib{crate_name}.so'],
+            'externconfig': [f'{crate_name}.externconfig'],
+        }
+        lib_file = f'lib{crate_name}.so'
+        linkable = True
+    elif crate_type == 'cdylib':
+        outs = [f'lib{crate_name}.so']
+    elif crate_type == 'staticlib':
+        outs = [f'lib{crate_name}.a']
+    else:
+        fail(f"rust_library {name}: unsupported crate_type {crate_type}")
+
     return build_rule(
         name = name,
         srcs = {
             'main': [root],
             'mods': modules or [],
         },
-        outs = {
-            'rlib': [f'lib{crate_name}.rlib'],
-            'rmeta': [f'lib{crate_name}.rmeta'],
-            'externconfig': [f'{crate_name}.externconfig'],
-        },
+        outs = outs,
         cmd = _compile_cmds(
             crate_name = crate_name,
             edition = edition,
-            crate_type = 'lib',
-            emit = 'dep-info,link,metadata',
+            crate_type = rustc_type,
+            emit = emit,
             features = features,
-            write_externconfig = True,
+            write_externconfig = linkable,
+            lib_file = lib_file,
             deps = deps,
         ),
         deps = deps,
-        tools = _rust_tools(),
+        tools = _rust_tools(link = crate_type != 'rlib'),
         needs_transitive_deps = True,
         visibility = visibility,
         labels = ['rust'],
     )
 
 
-def rust_binary(name:str, main:str, modules:list=None, deps:list=[], edition:str='2021', features:list=None, manifest:str=None, build_root:str=None, build_deps:list|dict=None, build_compile_env:dict=None, build_run_env:dict=None, target_dir:str=None, visibility:list=None):
+def rust_binary(name:str, main:str, modules:list=None, deps:list=[], edition:str='2021', features:list=None, manifest:str=None, static:bool=None, build_root:str=None, build_deps:list|dict=None, build_compile_env:dict=None, build_run_env:dict=None, target_dir:str=None, visibility:list=None):
     """Defines a build rule for a Rust standalone binary.
 
     Args:
@@ -114,10 +142,15 @@ def rust_binary(name:str, main:str, modules:list=None, deps:list=[], edition:str
         deps (list): Dependencies of this crate (first-party rust_library or third-party rust_repo).
         edition (str): Rust edition to compile with (2015, 2018, 2021, 2024).
         features (list): Feature cfgs to enable.
+        static (bool): Statically link the C runtime (-C target-feature=+crt-static),
+                       producing a self-contained binary like Go's. Defaults to
+                       the DefaultStatic plugin config.
         visibility (list): Visibility declaration.
     """
     if build_root or build_deps:
         fail(f"rust_binary {name}: build scripts are only supported for third-party crates via rust_repo")
+    if static == None:
+        static = CONFIG.RUST.DEFAULT_STATIC
     crate_name = name.replace('-', '_')
 
     srcs = {
@@ -140,6 +173,7 @@ def rust_binary(name:str, main:str, modules:list=None, deps:list=[], edition:str
             features = features,
             manifest = manifest,
             deps = deps,
+            static = static,
         ),
         deps = deps,
         tools = _rust_tools(link = True),

@@ -126,6 +126,10 @@ pub struct CompileArgs {
     #[arg(long = "rename")]
     pub renames: Vec<String>,
 
+    /// Statically link the C runtime (crt-static)
+    #[arg(long = "static")]
+    pub static_crt: bool,
+
     /// Build a test harness (passes --test to rustc)
     #[arg(long)]
     pub test: bool,
@@ -383,6 +387,10 @@ pub fn run(args: CompileArgs) -> Result<()> {
         if let Some((cc, _, _, _)) = crate::build_script::resolve_cc(&args.cc) {
             cmd.arg("-C").arg(format!("linker={}", cc));
         }
+    }
+
+    if args.static_crt {
+        cmd.arg("-C").arg("target-feature=+crt-static");
     }
 
     // Debug/optimize flags

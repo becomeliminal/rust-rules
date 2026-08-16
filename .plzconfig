@@ -112,3 +112,10 @@ DefaultValue =
 Optional = true
 Help = Optional build label of a C compiler used by crate build scripts and as rustc's linker (the go-rules CC_TOOL pattern). Empty uses the host cc via PATH, matching the cc plugin's default.
 Inherit = true
+
+[PluginConfig "default_static"]
+ConfigKey = DefaultStatic
+DefaultValue = true
+Type = bool
+Help = Statically link the C runtime into rust_binary outputs by default, producing self-contained binaries like Go's.
+Inherit = true

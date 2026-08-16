@@ -15,6 +15,7 @@ rust_binary(
         "src/resolve.rs",
         "src/starlark.rs",
         "src/sync.rs",
+        "src/test.rs",
     ],
     edition = "2021",
     manifest = "Cargo.toml",
