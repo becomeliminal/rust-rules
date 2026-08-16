@@ -1,3 +1,22 @@
+Version 0.3.1
+-------------
+Fixes two consumer-facing regressions found by the labs pilot.
+
+  * Subrepo name collision: plz names subrepos package-path + name with no
+    qualification by the declaring repo, so this plugin's own crate
+    subrepos collided with a consumer's identically named ones, breaking
+    any repo that parsed a plugin package. The plugin keeps its crates in
+    third_party/crates now, and rust_repo derives third_party_path and the
+    lock label from the package the declarations live in.
+  * Shipped config carried dev assumptions: plugin_repo ships this repo's
+    .plzconfig, whose Parse preloads became requirements on every consumer.
+    Removed; our own BUILD files subinclude explicitly.
+  * Proto support moves to becomeliminal/rust-proto-rules, which pins these
+    rules by tag. It was what forced the proto and python plugins into the
+    shipped config.
+  * rust_benchmark takes its criterion dependency from a CriterionDep config
+    knob instead of a hardcoded label.
+
 Version 0.3.0
 -------------
 The parity release: PubGrub resolution, coverage, pipelined compilation,
