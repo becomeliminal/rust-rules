@@ -28,8 +28,10 @@ binary-link time.
 - [x] C → Rust dependency edges: c_binary/cc targets link staticlib outputs
       directly (test/cc_interop:uses_rust); cbindgen header generation still
       open — tracked under the bindgen item
-- [ ] Optional hermetic C toolchain target for CCTool (host cc remains the
-      default, per the cc plugin convention)
+- [x] ~~Optional hermetic C toolchain target~~ — dropped by decision
+      (2026-08): go-rules has shipped on host cc via CC_TOOL config
+      forever; the CCTool knob exists for anyone who wants to point it at
+      their own toolchain target
 - [x] bindgen rule: `rust_bindgen` generates bindings from a C header.
       The bindgen binary is built from crates by rust_repo (bindgen-cli +
       clang-sys stack — the tool supply chain is in-graph, no prebuilt
@@ -100,8 +102,14 @@ binary-link time.
       real-world repos, resolve with cargo and with us, diff. Lives in a
       separate corpus repo (rust-rules-corpus), not here; run several repos
       and expand over time
-- [ ] PubGrub backtracking at `lock`'s `select()` seam
-- [ ] MSRV-aware resolution (`rust-version`, Cargo ≥1.84 behavior)
+- [ ] PubGrub backtracking at `lock`'s `select()` seam, via the pubgrub
+      crate (proven at scale by uv). Neither go-rules (Go's MVS needs no
+      backtracking) nor rules_rust (delegates to cargo) has an equivalent;
+      cargo itself uses a bespoke solver, so this would make us the first
+      Rust build tool on PubGrub
+- [ ] MSRV-aware resolution: the sparse index carries rust_version per
+      release, so this is a candidate filter in lock matching cargo >=1.84
+      semantics. Companion to the PubGrub work
 - [ ] Multi-platform lock entries (per-triple resolution outputs)
 
 ### Dependency management
@@ -109,8 +117,9 @@ binary-link time.
 - [ ] `lock --add crate@req --features a,b` + auto-fetch of newly-activated
       optional deps (pilot finding: serde derive needed a manual matching add)
 - [ ] Generic git fetcher (gitlab/self-hosted; github archive URLs work)
-- [ ] Private / alternative registries (index + download URL templating)
-- [ ] Registry auth tokens
+- On-demand only (decided 2026-08): private/alternative registries and
+  registry auth. crates.io is effectively universal; git forks and
+  download= overrides cover the common private-code cases
 
 ### Build fidelity
 - [ ] Profiles: opt-level 0–3/s/z, lto thin/fat, codegen-units,

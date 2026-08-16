@@ -308,19 +308,16 @@ Contributions are welcome! Please open or submit a pull request with your change
 ### Extra Features for Contribution
 Here are some extra features that would be valuable additions to this project:
 
-- **Hermetic C toolchain target**: build scripts (the `cc` crate, `-sys`
-  crates) and rustc's linker use the host compiler by default, matching the
-  cc plugin's convention. The `CCTool` config accepts a build label, so what
-  is missing is a downloadable toolchain target to point it at.
+- **Resolver depth**: `lock` is greedy max-satisfying with a documented
+  `select()` seam for a backtracking (PubGrub) solver; MSRV-aware resolution
+  (`rust-version`) is not yet enforced. Both are planned.
 
 - **Target (OS and Architecture) Compatibility**: primarily built and tested
   on x86_64-unknown-linux-gnu. The resolver's host/target unit split is in
   place, so cross-compilation needs `--target` threading and per-target
-  `rust-std`, not a redesign.
+  `rust-std`, not a redesign. Needs a contributor who runs the target.
 
-- **Resolver depth**: `lock` is greedy max-satisfying with a documented
-  `select()` seam for a backtracking (PubGrub) solver; MSRV-aware resolution
-  (`rust-version`) is not enforced.
-
-- **Private registries**: index and download URL templating for registries
-  other than crates.io.
+C toolchains stay host-provided by convention (the `CCTool` config accepts
+a build label for anyone who wants their own), and private registries are
+on-demand: crates.io plus git forks and `download=` overrides cover the
+common cases.
