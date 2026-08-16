@@ -110,7 +110,11 @@ pub fn parse_manifest(bytes: &[u8]) -> Result<Manifest, cargo_toml::Error> {
     let text = String::from_utf8_lossy(bytes)
         .replace("default_features =", "default-features =")
         .replace("dev_dependencies]", "dev-dependencies]")
-        .replace("build_dependencies]", "build-dependencies]");
+        .replace("build_dependencies]", "build-dependencies]")
+        // cargo_toml 0.20 only knows resolver versions 1 and 2; version 3
+        // (cargo >=1.84) is v2 unification plus MSRV-aware selection, which
+        // we implement ourselves, so parse it as 2.
+        .replace("resolver = \"3\"", "resolver = \"2\"");
     Manifest::from_slice(text.as_bytes())
 }
 
@@ -1069,6 +1073,15 @@ mod tests {
         assert!(lock.host_crates.is_empty());
         let pm_dep = &lock.crates.get("pm").unwrap().deps[0];
         assert_eq!(pm_dep.target_name, "util");
+    }
+
+    #[test]
+    fn parse_manifest_accepts_resolver_three() {
+        let m = parse_manifest(
+            b"[package]\nname = \"t\"\nversion = \"1.0.0\"\nresolver = \"3\"\n",
+        )
+        .unwrap();
+        assert_eq!(m.package.as_ref().unwrap().name, "t");
     }
 
     #[test]

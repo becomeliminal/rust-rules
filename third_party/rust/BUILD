@@ -377,7 +377,7 @@ rust_repo(
 )
 
 rust_repo(
-    name = "log",
+    name = "log-0.4.21",
     crate = "log",
     version = "0.4.21",
     indirect = True,
@@ -1120,7 +1120,7 @@ rust_repo(
 )
 
 rust_repo(
-    name = "syn",
+    name = "syn-2.0.111",
     crate = "syn",
     version = "2.0.111",
     features = ["full", "parsing", "default"],
@@ -1128,7 +1128,7 @@ rust_repo(
 )
 
 rust_repo(
-    name = "thiserror",
+    name = "thiserror-1.0.69",
     crate = "thiserror",
     version = "1.0.69",
     features = ["default"],
@@ -1136,7 +1136,7 @@ rust_repo(
 )
 
 rust_repo(
-    name = "thiserror_impl",
+    name = "thiserror_impl-1.0.69",
     crate = "thiserror-impl",
     version = "1.0.69",
     hashes = ["4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"],
@@ -1268,7 +1268,7 @@ rust_resolve(
         "futures_channel|futures-channel|0.3.30||false|true",
         "heck|heck|0.5.0||false|true",
         "httpdate|httpdate|1.0.3||false|true",
-        "log|log|0.4.21||false|true",
+        "log-0.4.21|log|0.4.21||false|true",
         "multimap|multimap|0.10.0||false|true",
         "tower_layer|tower-layer|0.3.2||false|true",
         "regex_automata|regex-automata|0.4.7||false|true",
@@ -1367,9 +1367,9 @@ rust_resolve(
         "serde_spanned|serde_spanned|0.6.9||false|true",
         "smallvec|smallvec|1.15.2||false|true",
         "strsim|strsim|0.11.1||false|true",
-        "syn|syn|2.0.111|full,parsing,default|true|true",
-        "thiserror|thiserror|1.0.69|default|true|true",
-        "thiserror_impl|thiserror-impl|1.0.69||false|true",
+        "syn-2.0.111|syn|2.0.111|full,parsing,default|true|true",
+        "thiserror-1.0.69|thiserror|1.0.69|default|true|true",
+        "thiserror_impl-1.0.69|thiserror-impl|1.0.69||false|true",
         "toml|toml|0.8.23|default|true|true",
         "toml_datetime|toml_datetime|0.6.11||false|true",
         "toml_edit|toml_edit|0.22.27||false|true",
@@ -1395,6 +1395,13 @@ rust_resolve(
         "libloading|libloading|0.8.9||true|true",
         "annotate_snippets|annotate-snippets|0.11.5||true|true",
         "unicode_width|unicode-width|0.2.2||false|true",
+        "log|log|0.4.33||false|true",
+        "priority_queue|priority-queue|2.7.0||false|true",
+        "pubgrub|pubgrub|0.4.0||true|true",
+        "syn|syn|3.0.3||false|true",
+        "thiserror|thiserror|2.0.20||false|true",
+        "thiserror_impl|thiserror-impl|2.0.20||false|true",
+        "version_ranges|version-ranges|0.1.3||false|true",
     ],
 )
 
@@ -1531,5 +1538,61 @@ rust_repo(
     crate = "unicode-width",
     version = "0.2.2",
     hashes = ["b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"],
+    indirect = True,
+)
+
+# Added by please_rust sync
+rust_repo(
+    name = "log",
+    crate = "log",
+    version = "0.4.33",
+    hashes = ["0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"],
+    indirect = True,
+)
+
+rust_repo(
+    name = "priority_queue",
+    crate = "priority-queue",
+    version = "2.7.0",
+    hashes = ["93980406f12d9f8140ed5abe7155acb10bb1e69ea55c88960b9c2f117445ef96"],
+    indirect = True,
+)
+
+rust_repo(
+    name = "pubgrub",
+    crate = "pubgrub",
+    version = "0.4.0",
+    hashes = ["a1c3256d319f1ed35251223140ab8f29fd6b0528a1216344efd904c651fecd5e"],
+)
+
+rust_repo(
+    name = "syn",
+    crate = "syn",
+    version = "3.0.3",
+    hashes = ["53e9bae58849f64dfa4f5d5ae372c8341f7305f82a3868709269343628b659a3"],
+    indirect = True,
+)
+
+rust_repo(
+    name = "thiserror",
+    crate = "thiserror",
+    version = "2.0.20",
+    hashes = ["ec86235f5fcc2a73650310756d2ac5b138a5780bbbdfae3eeccec992c435ba4f"],
+    indirect = True,
+)
+
+rust_repo(
+    name = "thiserror_impl",
+    crate = "thiserror-impl",
+    version = "2.0.20",
+    hashes = ["bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"],
+    indirect = True,
+)
+
+rust_repo(
+    name = "version_ranges",
+    crate = "version-ranges",
+    version = "0.1.3",
+    hashes = ["31e9bd4e9c9ff6a2a9b5969462ba26216af3e010df0377dad8320ab515262ef8"],
     indirect = True,
 )
