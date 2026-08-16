@@ -51,6 +51,7 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
         srcs = [download_rule],
         outs = {
             'rustc_bin': [base + '/rustc/bin/rustc'],
+            'rustdoc_bin': [base + '/rustc/bin/rustdoc'],
             'rustc_lib': [base + '/rustc/lib'],
             'cargo_bin': [base + '/cargo/bin/cargo'],
             'sysroot': [base + sysroot_path],
@@ -71,6 +72,13 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
     rustc_rule = filegroup(
         name = name + '_rustc',
         srcs = [extract_rule + '|rustc_bin'],
+        visibility = visibility,
+        binary = True,
+        deps = [lib_rule],
+    )
+    rustdoc_rule = filegroup(
+        name = name + '_rustdoc',
+        srcs = [extract_rule + '|rustdoc_bin'],
         visibility = visibility,
         binary = True,
         deps = [lib_rule],

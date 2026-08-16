@@ -176,7 +176,6 @@ def rust_test(name:str, root:str, modules:list=None, deps:list=[], edition:str="
         outs = [crate_name],
         binary = True,
         test = True,
-        no_test_output = True,  # see docstring
         cmd = _compile_cmds(
             crate_name = crate_name,
             edition = edition,
@@ -186,9 +185,53 @@ def rust_test(name:str, root:str, modules:list=None, deps:list=[], edition:str="
             test = True,
             deps = deps,
         ),
+        test_cmd = f'$TOOLS_PLEASE_RUST test --suite {name} -- $TEST',
+        test_tools = {
+            'please_rust': [CONFIG.RUST.PLEASE_RUST_TOOL],
+        },
         deps = deps,
         tools = _rust_tools(link = True),
         needs_transitive_deps = True,
+        visibility = visibility,
+        labels = ['rust'],
+    )
+
+
+def rust_doc_test(name:str, root:str, crate_name:str="", modules:list=None, deps:list=[], edition:str="2018", features:list=None, visibility:list=None):
+    """Runs a library's documentation tests via rustdoc --test.
+
+    Args:
+        name (str): Name of the test.
+        root (str): The library's root source file (typically src/lib.rs).
+        crate_name (str): Name of the crate under test (doctests refer to it
+                          by this name). Defaults to the rule name.
+        modules (list): Local modules that make up the crate.
+        deps (list): The library under test plus its dependencies (doctests
+                     compile as separate crates linking all of them).
+        edition (str): Rust edition to compile with (2015, 2018, 2021, 2024).
+        features (list): Feature cfgs to enable.
+        visibility (list): Visibility declaration.
+    """
+    if not crate_name:
+        crate_name = name.replace('-', '_')
+    feature_args = ' '.join([f'--cfg \'feature="{f}"\'' for f in features]) if features else ''
+    return gentest(
+        name = name,
+        data = {
+            'main': [root],
+            'mods': modules or [],
+            'deps': deps,
+        },
+        no_test_output = False,
+        test_cmd = ' && '.join([
+            _AGGREGATE_EXTERNCONFIGS,
+            f'$TOOLS_PLEASE_RUST test --suite {name} --externs-from-cwd -- $TOOLS_RUSTDOC --test $DATA_MAIN --crate-name {crate_name} --edition {edition} --sysroot $TOOLS_SYSROOT -L . {feature_args}',
+        ]),
+        test_tools = {
+            'please_rust': [CONFIG.RUST.PLEASE_RUST_TOOL],
+            'rustdoc': ['//third_party/rust:toolchain_rustdoc'],
+            'sysroot': [CONFIG.RUST.SYSROOT],
+        },
         visibility = visibility,
         labels = ['rust'],
     )

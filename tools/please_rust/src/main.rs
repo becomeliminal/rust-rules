@@ -19,6 +19,7 @@ mod generate;
 mod resolve;
 mod starlark;
 mod sync;
+mod test;
 
 #[derive(Parser)]
 #[command(name = "please_rust")]
@@ -51,6 +52,9 @@ enum Commands {
 
     /// Resolve new dependency versions from the crates.io sparse index
     Lock(sync::LockCmdArgs),
+
+    /// Run a test command and report per-test results to plz
+    Test(test::TestArgs),
 }
 
 fn main() -> Result<()> {
@@ -64,5 +68,6 @@ fn main() -> Result<()> {
         Commands::Resolve(args) => resolve::run(args),
         Commands::Sync(args) => sync::run(args),
         Commands::Lock(args) => sync::lock(args),
+        Commands::Test(args) => test::run(args),
     }
 }
