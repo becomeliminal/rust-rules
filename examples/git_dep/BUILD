@@ -5,5 +5,5 @@ rust_repo(
     version = "1.0.86",
     git_repo = "dtolnay/anyhow",
     git_revision = "1.0.86",
-    lock = None,
+    lock = "",
 )

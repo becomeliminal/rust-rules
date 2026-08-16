@@ -374,20 +374,22 @@ pub fn package_env(pkg: &cargo_toml::Package) -> Vec<(String, String)> {
         .unwrap_or_else(|_| "0.0.0".to_string());
     env.push(("CARGO_PKG_VERSION".to_string(), version_str.clone()));
 
-    // Parse version components (e.g., "1.2.3-beta.1" -> major=1, minor=2, patch=3, pre=beta.1)
-    let parts: Vec<&str> = version_str.split('.').collect();
-    env.push(("CARGO_PKG_VERSION_MAJOR".to_string(), parts.first().unwrap_or(&"0").to_string()));
-    env.push(("CARGO_PKG_VERSION_MINOR".to_string(), parts.get(1).unwrap_or(&"0").to_string()));
-
-    // Handle patch version which might have pre-release suffix
-    let patch_part = parts.get(2).unwrap_or(&"0");
-    let (patch, pre) = if let Some(idx) = patch_part.find('-') {
-        (&patch_part[..idx], &patch_part[idx + 1..])
-    } else {
-        (*patch_part, "")
-    };
-    env.push(("CARGO_PKG_VERSION_PATCH".to_string(), patch.to_string()));
-    env.push(("CARGO_PKG_VERSION_PRE".to_string(), pre.to_string()));
+    // Version components, parsed properly (splitting on '.' loses the tail
+    // of dotted pre-release identifiers like 1.2.3-beta.1)
+    match semver::Version::parse(&version_str) {
+        Ok(v) => {
+            env.push(("CARGO_PKG_VERSION_MAJOR".to_string(), v.major.to_string()));
+            env.push(("CARGO_PKG_VERSION_MINOR".to_string(), v.minor.to_string()));
+            env.push(("CARGO_PKG_VERSION_PATCH".to_string(), v.patch.to_string()));
+            env.push(("CARGO_PKG_VERSION_PRE".to_string(), v.pre.as_str().to_string()));
+        }
+        Err(_) => {
+            env.push(("CARGO_PKG_VERSION_MAJOR".to_string(), "0".to_string()));
+            env.push(("CARGO_PKG_VERSION_MINOR".to_string(), "0".to_string()));
+            env.push(("CARGO_PKG_VERSION_PATCH".to_string(), "0".to_string()));
+            env.push(("CARGO_PKG_VERSION_PRE".to_string(), "".to_string()));
+        }
+    }
 
     // CARGO_PKG_AUTHORS - deprecated but still used by some build scripts
     let authors = pkg.authors.get().map(|a| a.join(":")).unwrap_or_default();
@@ -614,4 +616,275 @@ fn find_file_in_dir(dir: &Path, filename: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parsed(lines: &[&str]) -> Directives {
+        let mut d = Directives::default();
+        for line in lines {
+            parse_directive(line, &mut d);
+        }
+        d
+    }
+
+    #[test]
+    fn parses_directive_forms() {
+        let d = parsed(&[
+            "cargo:rustc-cfg=old_style",
+            "cargo::rustc-cfg=new_style",
+            "cargo:rustc-env=K=V",
+            "cargo:rustc-link-lib=z",
+            "cargo:rustc-link-search=/dir",
+            "cargo:rustc-link-arg=-s",
+            "cargo:metadata=root=/x",
+            "cargo:warning=heads up",
+            "cargo:error=broken",
+            "not a directive",
+        ]);
+        assert_eq!(d.rustc_cfgs, vec!["old_style", "new_style"]);
+        assert_eq!(d.rustc_envs, vec![("K".to_string(), "V".to_string())]);
+        assert_eq!(d.rustc_link_libs, vec!["z"]);
+        assert_eq!(d.rustc_link_searches, vec!["/dir"]);
+        assert_eq!(d.rustc_link_args, vec!["-s"]);
+        assert_eq!(d.metadata, vec![("root".to_string(), "/x".to_string())]);
+        assert_eq!(d.warnings, vec!["heads up"]);
+        assert_eq!(d.errors, vec!["broken"]);
+    }
+
+    #[test]
+    fn parses_legacy_rustc_flags() {
+        let d = parsed(&["cargo:rustc-flags=-l z -L /a -lfoo -L/b"]);
+        assert_eq!(d.rustc_link_libs, vec!["z", "foo"]);
+        assert_eq!(d.rustc_link_searches, vec!["/a", "/b"]);
+    }
+
+    #[test]
+    fn package_env_versions() {
+        let manifest = crate::resolve::parse_manifest(
+            b"[package]\nname = \"demo\"\nversion = \"1.2.3-beta.1\"\nauthors = [\"A\", \"B\"]\ndescription = \"d\"\nlicense = \"MIT\"\n",
+        )
+        .unwrap();
+        let env: std::collections::HashMap<String, String> =
+            package_env(manifest.package.as_ref().unwrap()).into_iter().collect();
+        assert_eq!(env["CARGO_PKG_NAME"], "demo");
+        assert_eq!(env["CARGO_PKG_VERSION"], "1.2.3-beta.1");
+        assert_eq!(env["CARGO_PKG_VERSION_MAJOR"], "1");
+        assert_eq!(env["CARGO_PKG_VERSION_MINOR"], "2");
+        assert_eq!(env["CARGO_PKG_VERSION_PATCH"], "3");
+        assert_eq!(env["CARGO_PKG_VERSION_PRE"], "beta.1");
+        assert_eq!(env["CARGO_PKG_AUTHORS"], "A:B");
+        assert_eq!(env["CARGO_PKG_LICENSE"], "MIT");
+        assert_eq!(env["CARGO_PKG_HOMEPAGE"], "");
+    }
+
+    #[test]
+    fn resolve_cc_forms() {
+        // Bare command name passes through
+        let (cc, cxx, ar, _) = resolve_cc(&Some(PathBuf::from("cc"))).unwrap();
+        assert_eq!(cc, "cc");
+        assert_eq!(cxx, "c++");
+        assert_eq!(ar, "ar");
+
+        // Directory of wrappers
+        let dir = std::env::temp_dir().join(format!("please_rust_cc_test_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        for t in ["cc", "c++", "ar", "ranlib"] {
+            fs::write(dir.join(t), "").unwrap();
+        }
+        let (cc, _, ar, _) = resolve_cc(&Some(dir.clone())).unwrap();
+        assert!(cc.ends_with("/cc"));
+        assert!(ar.ends_with("/ar"));
+
+        assert!(resolve_cc(&None).is_none());
+    }
+}
+
+#[cfg(test)]
+mod env_tests {
+    use super::*;
+
+    fn args(dir: &Path) -> BuildScriptArgs {
+        BuildScriptArgs {
+            manifest_path: dir.join("Cargo.toml"),
+            build_script: dir.join("build.rs"),
+            out_dir: dir.join("out"),
+            rustc: PathBuf::from("/toolchain/rustc"),
+            target: "x86_64-unknown-linux-gnu".to_string(),
+            host: "x86_64-unknown-linux-gnu".to_string(),
+            features: vec!["std".to_string(), "extra-fast".to_string()],
+            debug: false,
+            optimize: true,
+            output: dir.join("x.buildscript"),
+            sysroot: None,
+            search_paths: vec![],
+            externconfig: None,
+            cc: None,
+        }
+    }
+
+    #[test]
+    fn environment_contract() {
+        let dir = std::env::temp_dir().join(format!("please_rust_env_test_{}", std::process::id()));
+        fs::create_dir_all(dir.join("out")).unwrap();
+        fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.2.0\"\nlinks = \"zlib\"\n",
+        )
+        .unwrap();
+        let a = args(&dir);
+        let manifest = crate::resolve::parse_manifest(&fs::read(&a.manifest_path).unwrap()).unwrap();
+        let pkg = manifest.package.as_ref().unwrap();
+        let out_dir = a.out_dir.canonicalize().unwrap();
+        let env = build_environment(&a, pkg, &out_dir).unwrap();
+
+        assert_eq!(env["CARGO"], "/bin/false");
+        assert!(env["CARGO_MANIFEST_PATH"].ends_with("Cargo.toml"));
+        assert_eq!(env["TARGET"], "x86_64-unknown-linux-gnu");
+        assert_eq!(env["PROFILE"], "release");
+        assert_eq!(env["OPT_LEVEL"], "3");
+        assert_eq!(env["CARGO_FEATURE_STD"], "1");
+        assert_eq!(env["CARGO_FEATURE_EXTRA_FAST"], "1");
+        assert_eq!(env["CARGO_MANIFEST_LINKS"], "zlib");
+        // Target cfgs derived from real target info
+        assert_eq!(env["CARGO_CFG_TARGET_OS"], "linux");
+        assert_eq!(env["CARGO_CFG_TARGET_ARCH"], "x86_64");
+        assert_eq!(env["CARGO_CFG_TARGET_ENV"], "gnu");
+        assert_eq!(env["CARGO_CFG_TARGET_POINTER_WIDTH"], "64");
+        assert_eq!(env["CARGO_CFG_TARGET_ENDIAN"], "little");
+        assert!(env.contains_key("CARGO_CFG_UNIX"));
+        assert_eq!(env["RUSTC"], "/toolchain/rustc");
+    }
+
+    #[test]
+    fn sysroot_sets_rustflags_for_probes() {
+        let dir = std::env::temp_dir().join(format!("please_rust_env_rf_test_{}", std::process::id()));
+        fs::create_dir_all(dir.join("sysroot")).unwrap();
+        fs::create_dir_all(dir.join("out")).unwrap();
+        fs::write(dir.join("Cargo.toml"), "[package]\nname = \"d\"\nversion = \"0.1.0\"\n").unwrap();
+        let mut a = args(&dir);
+        a.sysroot = Some(dir.join("sysroot"));
+        let manifest = crate::resolve::parse_manifest(&fs::read(&a.manifest_path).unwrap()).unwrap();
+        let out_dir = a.out_dir.canonicalize().unwrap();
+        let env = build_environment(&a, manifest.package.as_ref().unwrap(), &out_dir).unwrap();
+        assert!(env["RUSTFLAGS"].starts_with("--sysroot "));
+        assert!(env["CARGO_ENCODED_RUSTFLAGS"].contains('\u{1f}'));
+    }
+
+    #[test]
+    fn write_directives_round_trip() {
+        let dir = std::env::temp_dir().join(format!("please_rust_wd_test_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let out_dir = dir.join("out");
+        fs::create_dir_all(&out_dir).unwrap();
+        let mut d = Directives::default();
+        d.rustc_cfgs.push("has_std".to_string());
+        d.rustc_envs.push(("K".to_string(), "V".to_string()));
+        d.rustc_link_libs.push("z".to_string());
+        d.rustc_link_searches.push("/dir".to_string());
+        d.rustc_link_args.push("-s".to_string());
+        d.metadata.push(("inc".to_string(), "/i".to_string()));
+        let output = dir.join("x.buildscript");
+        write_directives(&output, &d, &out_dir).unwrap();
+
+        // The compile side parses what the build-script side writes
+        let parsed = crate::compile::parse_buildscript(&output).unwrap();
+        assert_eq!(parsed.out_dir.as_deref(), Some(Path::new("out")));
+        assert_eq!(parsed.rustc_cfgs, vec!["has_std"]);
+        assert_eq!(parsed.rustc_envs, vec![("K".to_string(), "V".to_string())]);
+        assert_eq!(parsed.rustc_link_libs, vec!["z"]);
+        assert_eq!(parsed.rustc_link_searches, vec!["/dir"]);
+        assert_eq!(parsed.rustc_link_args, vec!["-s"]);
+    }
+}
+
+#[cfg(test)]
+mod run_e2e_tests {
+    use super::*;
+
+    /// Full pipeline: compile a real build.rs, run it, parse its directives.
+    /// Skips when no rustc is reachable (e.g. inside a build sandbox).
+    #[test]
+    fn compiles_and_runs_a_build_script() {
+        if Command::new("rustc").arg("--version").output().is_err() {
+            eprintln!("skipping: no rustc on PATH");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("please_rust_bs_e2e_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("Cargo.toml"), "[package]\nname = \"demo\"\nversion = \"0.3.0\"\n").unwrap();
+        fs::write(dir.join("wanted.txt"), "").unwrap();
+        fs::write(
+            dir.join("build.rs"),
+            r#"fn main() {
+    // Reads a file relative to the package root (the cargo cwd contract)
+    assert!(std::path::Path::new("wanted.txt").exists());
+    assert_eq!(std::env::var("CARGO_PKG_VERSION").unwrap(), "0.3.0");
+    let out = std::env::var("OUT_DIR").unwrap();
+    std::fs::write(format!("{}/generated.rs", out), "pub const X: u32 = 7;").unwrap();
+    println!("cargo:rustc-cfg=from_script");
+    println!("cargo:rustc-env=GENERATED=yes");
+    println!("cargo:warning=all good");
+}"#,
+        )
+        .unwrap();
+
+        run(BuildScriptArgs {
+            manifest_path: dir.join("Cargo.toml"),
+            build_script: dir.join("build.rs"),
+            out_dir: dir.join("out"),
+            rustc: PathBuf::from("rustc"),
+            target: "x86_64-unknown-linux-gnu".to_string(),
+            host: "x86_64-unknown-linux-gnu".to_string(),
+            features: vec![],
+            debug: false,
+            optimize: false,
+            output: dir.join("demo.buildscript"),
+            sysroot: None,
+            search_paths: vec![],
+            externconfig: None,
+            cc: None,
+        })
+        .unwrap();
+
+        let directives = fs::read_to_string(dir.join("demo.buildscript")).unwrap();
+        assert!(directives.contains("rustc-cfg=from_script"));
+        assert!(directives.contains("rustc-env=GENERATED=yes"));
+        assert!(directives.contains("out-dir=out"));
+        assert!(dir.join("out/generated.rs").exists());
+    }
+
+    #[test]
+    fn error_directive_fails_the_build() {
+        if Command::new("rustc").arg("--version").output().is_err() {
+            eprintln!("skipping: no rustc on PATH");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("please_rust_bs_err_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("Cargo.toml"), "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n").unwrap();
+        fs::write(dir.join("build.rs"), "fn main() { println!(\"cargo::error=nope\"); }").unwrap();
+        let err = run(BuildScriptArgs {
+            manifest_path: dir.join("Cargo.toml"),
+            build_script: dir.join("build.rs"),
+            out_dir: dir.join("out"),
+            rustc: PathBuf::from("rustc"),
+            target: "x86_64-unknown-linux-gnu".to_string(),
+            host: "x86_64-unknown-linux-gnu".to_string(),
+            features: vec![],
+            debug: false,
+            optimize: false,
+            output: dir.join("demo.buildscript"),
+            sysroot: None,
+            search_paths: vec![],
+            externconfig: None,
+            cc: None,
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("reported errors"));
+    }
 }

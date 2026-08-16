@@ -204,3 +204,95 @@ fn collect_externs(root: &str) -> Vec<(String, String)> {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const OUTPUT: &str = "\nrunning 4 tests\ntest add::works ... ok\ntest sub::works ... FAILED\ntest slow_one ... ignored\ntest math::doc (line 4) ... ok\n\nfailures:\n\n---- sub::works stdout ----\nassertion failed: 1 == 2\nnote: extra context\n\n\nfailures:\n    sub::works\n\ntest result: FAILED. 2 passed; 1 failed; 1 ignored\n";
+
+    #[test]
+    fn parses_all_outcomes() {
+        let cases = parse_libtest(OUTPUT);
+        assert_eq!(cases.len(), 4);
+        assert!(cases[0].outcome == Outcome::Pass && cases[0].name == "add::works");
+        assert!(cases[1].outcome == Outcome::Fail);
+        assert!(cases[2].outcome == Outcome::Skip);
+        assert_eq!(cases[3].name, "math::doc (line 4)");
+        assert!(cases[1].details.contains("assertion failed: 1 == 2"));
+        assert!(cases[1].details.contains("extra context"));
+    }
+
+    #[test]
+    fn junit_reflects_results() {
+        let cases = parse_libtest(OUTPUT);
+        let xml = junit_xml("suite<1>", &cases);
+        assert!(xml.contains("tests=\"4\" failures=\"1\" skipped=\"1\""));
+        assert!(xml.contains("name=\"suite&lt;1&gt;\"")); // escaped
+        assert!(xml.contains("<testcase name=\"add::works\"/>"));
+        assert!(xml.contains("<failure>"));
+        assert!(xml.contains("<skipped/>"));
+    }
+
+    #[test]
+    fn escape_covers_specials() {
+        assert_eq!(escape("a<b>&\"c\""), "a&lt;b&gt;&amp;&quot;c&quot;");
+    }
+
+    #[test]
+    fn collect_externs_finds_libs() {
+        let dir = std::env::temp_dir().join(format!("please_rust_externs_test_{}", std::process::id()));
+        let sub = dir.join("nested");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("libx-1_0_0.rlib"), "").unwrap();
+        std::fs::write(sub.join("x.externconfig"), "x=libx-1_0_0.rlib\n").unwrap();
+        std::fs::write(sub.join("missing.externconfig"), "y=libgone.rlib\n").unwrap();
+        let externs = collect_externs(dir.to_str().unwrap());
+        assert_eq!(externs.len(), 1);
+        assert_eq!(externs[0].0, "x");
+        assert!(externs[0].1.ends_with("libx-1_0_0.rlib"));
+    }
+}
+
+#[cfg(test)]
+mod run_wrapper_tests {
+    use super::*;
+
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn wrapper_runs_command_and_writes_results() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("please_rust_wrap_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let results = dir.join("test.results");
+        std::env::set_var("RESULTS_FILE", &results);
+        run(TestArgs {
+            suite: "wrapped".to_string(),
+            externs_from_cwd: false,
+            command: vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "printf 'running 1 test\\ntest it_works ... ok\\n\\ntest result: ok. 1 passed\\n'".to_string(),
+            ],
+        })
+        .unwrap();
+        std::env::remove_var("RESULTS_FILE");
+        let xml = std::fs::read_to_string(&results).unwrap();
+        assert!(xml.contains("tests=\"1\" failures=\"0\""));
+        assert!(xml.contains("it_works"));
+    }
+
+    #[test]
+    fn wrapper_propagates_failure() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("RESULTS_FILE");
+        let err = run(TestArgs {
+            suite: "failing".to_string(),
+            externs_from_cwd: false,
+            command: vec!["sh".to_string(), "-c".to_string(), "exit 3".to_string()],
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("tests failed"));
+    }
+}

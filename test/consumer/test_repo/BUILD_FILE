@@ -1,0 +1,20 @@
+subinclude("///rust//build_defs:rust", "///rust//build_defs:rust_repo")
+
+rust_repo(
+    name = "cfg_if",
+    crate = "cfg-if",
+    version = "1.0.0",
+    lock = "",
+)
+
+rust_binary(
+    name = "hello",
+    main = "src/main.rs",
+    deps = [":cfg_if"],
+)
+
+rust_test(
+    name = "hello_test",
+    root = "src/main.rs",
+    deps = [":cfg_if"],
+)

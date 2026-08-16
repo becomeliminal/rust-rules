@@ -896,14 +896,309 @@ Stdlib = @//third_party/rust:toolchain_stdlib
 "#.to_string()
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn manifest(body: &str) -> Manifest {
+        crate::resolve::parse_manifest(
+            format!("[package]\nname = \"t\"\nversion = \"1.0.0\"\n{}", body).as_bytes(),
+        )
+        .unwrap()
+    }
+
     #[test]
-    fn test_resolve_dependencies() {
-        // Simple test
-        let deps = vec![("serde".to_string(), "serde_dep".to_string())];
+    fn crate_type_detection() {
+        assert_eq!(determine_crate_type(&manifest("")), "lib");
+        assert_eq!(determine_crate_type(&manifest("[lib]\nproc-macro = true\n")), "proc-macro");
+        assert_eq!(determine_crate_type(&manifest("[lib]\ncrate-type = [\"proc-macro\"]\n")), "proc-macro");
+        assert_eq!(determine_crate_type(&manifest("[[bin]]\nname = \"tool\"\n")), "bin");
+    }
+
+    fn gen(
+        crate_type: &str,
+        features: &[&str],
+        deps: &[(&str, &str)],
+        build_script: Option<&str>,
+        suffix: &str,
+    ) -> String {
+        generate_build_file(
+            "my-crate",
+            "1.2.3",
+            &cargo_toml::Edition::E2021,
+            crate_type,
+            &features.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            &deps
+                .iter()
+                .map(|(n, t)| (n.to_string(), t.to_string()))
+                .collect::<Vec<_>>(),
+            &[],
+            build_script,
+            "src/lib.rs",
+            suffix,
+        )
+    }
+
+    #[test]
+    fn plain_lib_rule() {
+        let out = gen("lib", &["std"], &[("dep_a", "///third_party/rust/dep_a//:dep_a")], None, "");
+        assert!(out.contains("name = \"my_crate\""));
+        assert!(out.contains("--crate-name my_crate"));
+        assert!(out.contains("libmy_crate-1_2_3.rlib"));
+        assert!(out.contains("--feature std"));
+        assert!(out.contains("\"///third_party/rust/dep_a//:dep_a|externconfig\""));
+        assert!(out.contains("-C metadata=my_crate-1.2.3"));
+        assert!(!out.contains("_build_script"));
+    }
+
+    #[test]
+    fn build_script_two_stage() {
+        let out = gen("lib", &[], &[], Some("build/main.rs"), "");
+        assert!(out.contains("name = \"_my_crate_build_script\""));
+        assert!(out.contains("\"script\": [\"build/main.rs\"]"));
+        assert!(out.contains("--buildscript $SRCS_BUILDSCRIPT"));
+        assert!(out.contains("\"out\": [\"out\"]"));
+    }
+
+    #[test]
+    fn host_variant_naming() {
+        let out = gen("lib", &["host_feat"], &[], None, "_host");
+        // Rule and file names carry the suffix; the crate identity does not
+        assert!(out.contains("name = \"my_crate_host\""));
+        assert!(out.contains("--crate-name my_crate "));
+        assert!(out.contains("libmy_crate-1_2_3_host.rlib"));
+        assert!(out.contains("echo 'my_crate_host=libmy_crate-1_2_3_host.rlib'"));
+    }
+
+    #[test]
+    fn proc_macro_rule_shape() {
+        let out = gen("proc-macro", &[], &[], None, "");
+        assert!(out.contains("--crate-type proc-macro"));
+        assert!(out.contains("libmy_crate-1_2_3.so"));
+        assert!(!out.contains("rmeta"));
+    }
+
+    #[test]
+    fn renames_emitted_for_mismatched_deps() {
+        let out = gen("lib", &[], &[("alias_name", "///third_party/rust/real//:real")], None, "");
+        assert!(out.contains("--rename alias_name=real"));
+    }
+
+    #[test]
+    fn bin_rule_shape() {
+        let out = generate_bin_rule(
+            "my_crate",
+            "my-tool",
+            "src/main.rs",
+            "1.2.3",
+            &cargo_toml::Edition::E2021,
+            &[],
+            &[("dep_a".to_string(), "///third_party/rust/dep_a//:dep_a".to_string())],
+            true,
+        );
+        assert!(out.contains("name = \"my_tool_bin\""));
+        assert!(out.contains("--crate-name my_tool"));
+        assert!(out.contains("outs = [\"my_tool\"]"));
+        assert!(out.contains("binary = True"));
+        // Links its own lib plus deps
+        assert!(out.contains("\":my_crate|externconfig\""));
+        assert!(out.contains("\"///third_party/rust/dep_a//:dep_a\""));
+    }
+}
+
+#[cfg(test)]
+mod run_tests {
+    use super::*;
+    use crate::resolve::{LockDep, LockEntry, LockFile};
+    use std::collections::BTreeMap;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("please_rust_gen_run_{}_{}", std::process::id(), name));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn crate_dir(root: &PathBuf, manifest: &str, files: &[(&str, &str)]) -> PathBuf {
+        let dir = root.join("demo-1.0.0");
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("Cargo.toml"), manifest).unwrap();
+        for (path, content) in files {
+            let p = dir.join(path);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, content).unwrap();
+        }
+        dir
+    }
+
+    fn args(src_root: PathBuf, lock: Option<PathBuf>) -> GenerateArgs {
+        GenerateArgs {
+            crate_name: "demo".to_string(),
+            version: "1.0.0".to_string(),
+            src_root,
+            subrepo: "third_party/rust/demo".to_string(),
+            third_party_folder: "third_party/rust".to_string(),
+            features: "fallback-feat".to_string(),
+            install: "".to_string(),
+            overrides: vec![],
+            lock,
+            tool_label: "@//custom:tool".to_string(),
+            rustc_label: "@//custom:rustc".to_string(),
+            sysroot_label: "@//custom:sysroot".to_string(),
+            cc_label: "@//custom:cc".to_string(),
+        }
+    }
+
+    fn write_lock(dir: &PathBuf, host: bool) -> PathBuf {
+        let mut crates = BTreeMap::new();
+        crates.insert(
+            "demo".to_string(),
+            LockEntry {
+                crate_name: "demo".to_string(),
+                version: "1.0.0".to_string(),
+                features: vec!["locked-feat".to_string()],
+                deps: vec![LockDep {
+                    name: "dep_a".to_string(),
+                    crate_name: "dep-a".to_string(),
+                    subrepo: "dep_a".to_string(),
+                    target_name: "dep_a".to_string(),
+                }],
+                build_deps: vec![],
+            },
+        );
+        let mut host_crates = BTreeMap::new();
+        if host {
+            host_crates.insert(
+                "demo".to_string(),
+                LockEntry {
+                    crate_name: "demo".to_string(),
+                    version: "1.0.0".to_string(),
+                    features: vec!["host-feat".to_string()],
+                    deps: vec![],
+                    build_deps: vec![],
+                },
+            );
+        }
+        let lock = LockFile {
+            target: "x86_64-unknown-linux-gnu".to_string(),
+            crates,
+            host_crates,
+        };
+        let path = dir.join("rust.lock");
+        fs::write(&path, serde_json::to_string(&lock).unwrap()).unwrap();
+        path
+    }
+
+    #[test]
+    fn lock_driven_generation() {
+        let root = scratch("lock");
+        let src = crate_dir(&root, "[package]\nname = \"demo\"\nversion = \"1.0.0\"\nedition = \"2021\"\n", &[("src/lib.rs", "")]);
+        let lock = write_lock(&root, false);
+        run(args(src.clone(), Some(lock))).unwrap();
+
+        let build = fs::read_to_string(src.join("BUILD")).unwrap();
+        assert!(build.contains("--feature locked-feat"));
+        assert!(!build.contains("fallback-feat"));
+        assert!(build.contains("///third_party/rust/dep_a//:dep_a|externconfig"));
+        // Configured labels substituted everywhere
+        assert!(build.contains("@//custom:tool"));
+        assert!(build.contains("@//custom:rustc"));
+        assert!(!build.contains("@//tools/please_rust:bootstrap"));
+        // .plzconfig written for the subrepo
+        assert!(src.join(".plzconfig").exists());
+    }
+
+    #[test]
+    fn heuristic_fallback_without_lock() {
+        let root = scratch("heuristic");
+        let src = crate_dir(
+            &root,
+            "[package]\nname = \"demo\"\nversion = \"1.0.0\"\n\n[dependencies]\nserde = \"1\"\n",
+            &[("src/lib.rs", "")],
+        );
+        run(args(src.clone(), None)).unwrap();
+        let build = fs::read_to_string(src.join("BUILD")).unwrap();
+        assert!(build.contains("--feature fallback-feat"));
+        assert!(build.contains("///third_party/rust/serde//:serde"));
+    }
+
+    #[test]
+    fn host_variant_and_bin_rules_emitted() {
+        let root = scratch("hostbin");
+        let src = crate_dir(
+            &root,
+            "[package]\nname = \"demo\"\nversion = \"1.0.0\"\n",
+            &[("src/lib.rs", ""), ("src/main.rs", "fn main() {}")],
+        );
+        let lock = write_lock(&root, true);
+        run(args(src.clone(), Some(lock))).unwrap();
+        let build = fs::read_to_string(src.join("BUILD")).unwrap();
+        assert!(build.contains("name = \"demo\""));
+        assert!(build.contains("name = \"demo_host\""));
+        assert!(build.contains("--feature host-feat"));
+        assert!(build.contains("name = \"demo_bin\""));
+    }
+
+    #[test]
+    fn build_script_detected_and_custom_lib_path() {
+        let root = scratch("bs");
+        let src = crate_dir(
+            &root,
+            "[package]\nname = \"demo\"\nversion = \"1.0.0\"\n\n[lib]\npath = \"lib.rs\"\n",
+            &[("lib.rs", ""), ("build.rs", "fn main() {}")],
+        );
+        let lock = write_lock(&root, false);
+        run(args(src.clone(), Some(lock))).unwrap();
+        let build = fs::read_to_string(src.join("BUILD")).unwrap();
+        assert!(build.contains("_demo_build_script"));
+        assert!(build.contains("\"main\": [\"lib.rs\"]"));
+    }
+}
+
+#[cfg(test)]
+mod heuristic_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn manifest(body: &str) -> Manifest {
+        crate::resolve::parse_manifest(
+            format!("[package]\nname = \"t\"\nversion = \"1.0.0\"\n{}", body).as_bytes(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn heuristic_optional_and_overrides() {
+        let m = manifest(
+            "[dependencies]\nplain = \"1\"\n\n[dependencies.opt]\nversion = \"1\"\noptional = true\n\n[dependencies.gated]\nversion = \"1\"\noptional = true\n\n[features]\nwith_gated = [\"dep:gated\"]\n\n[target.'cfg(windows)'.dependencies]\nwinonly = \"1\"\n",
+        );
+        let mut overrides = HashMap::new();
+        overrides.insert("plain".to_string(), "plain-0.9.0".to_string());
+
+        // No features: only the mandatory dep, routed through the override
+        let deps = resolve_dependencies(&m, "third_party/rust", &[], &overrides);
         assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].1, "///third_party/rust/plain-0.9.0//:plain");
+
+        // Feature-gated and name-activated optionals
+        let deps = resolve_dependencies(
+            &m,
+            "third_party/rust",
+            &["with_gated".to_string(), "opt".to_string()],
+            &HashMap::new(),
+        );
+        let names: Vec<&str> = deps.iter().map(|d| d.0.as_str()).collect();
+        assert!(names.contains(&"gated"));
+        assert!(names.contains(&"opt"));
+        assert!(!names.contains(&"winonly"));
+    }
+
+    #[test]
+    fn heuristic_build_deps() {
+        let m = manifest("[build-dependencies]\ncc = \"1\"\n\n[target.'cfg(unix)'.build-dependencies]\nub = \"1\"\n");
+        let deps = resolve_build_dependencies(&m, "third_party/rust");
+        let names: Vec<&str> = deps.iter().map(|d| d.0.as_str()).collect();
+        assert_eq!(names, vec!["cc", "ub"]);
     }
 }

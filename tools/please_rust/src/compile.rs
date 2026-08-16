@@ -149,16 +149,16 @@ pub struct CompileArgs {
 
 /// Parsed build script directives
 #[derive(Debug, Default)]
-struct BuildScriptDirectives {
-    out_dir: Option<PathBuf>,
-    rustc_cfgs: Vec<String>,
-    rustc_envs: Vec<(String, String)>,
-    rustc_link_libs: Vec<String>,
-    rustc_link_searches: Vec<String>,
-    rustc_link_args: Vec<String>,
+pub(crate) struct BuildScriptDirectives {
+    pub(crate) out_dir: Option<PathBuf>,
+    pub(crate) rustc_cfgs: Vec<String>,
+    pub(crate) rustc_envs: Vec<(String, String)>,
+    pub(crate) rustc_link_libs: Vec<String>,
+    pub(crate) rustc_link_searches: Vec<String>,
+    pub(crate) rustc_link_args: Vec<String>,
 }
 
-fn parse_buildscript(path: &Path) -> Result<BuildScriptDirectives> {
+pub(crate) fn parse_buildscript(path: &Path) -> Result<BuildScriptDirectives> {
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read buildscript: {}", path.display()))?;
 
@@ -192,6 +192,23 @@ fn parse_buildscript(path: &Path) -> Result<BuildScriptDirectives> {
 }
 
 pub fn run(args: CompileArgs) -> Result<()> {
+    let mut cmd = build_command(&args)?;
+
+    eprintln!("please_rust compile: {:?}", cmd);
+
+    let status = cmd.status()
+        .with_context(|| format!("Failed to execute rustc: {}", args.rustc.display()))?;
+
+    if !status.success() {
+        anyhow::bail!("rustc failed with exit code: {}", status.code().unwrap_or(-1));
+    }
+
+    Ok(())
+}
+
+/// Assembles the full rustc invocation; separated from run() so flag and
+/// env construction is unit-testable.
+fn build_command(args: &CompileArgs) -> Result<Command> {
     let mut cmd = Command::new(&args.rustc);
 
     // Set sysroot if provided (tells rustc where to find std/core)
@@ -406,14 +423,242 @@ pub fn run(args: CompileArgs) -> Result<()> {
         cmd.arg(src);
     }
 
-    eprintln!("please_rust compile: {:?}", cmd);
+    Ok(cmd)
+}
 
-    let status = cmd.status()
-        .with_context(|| format!("Failed to execute rustc: {}", args.rustc.display()))?;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    if !status.success() {
-        anyhow::bail!("rustc failed with exit code: {}", status.code().unwrap_or(-1));
+    #[test]
+    fn parses_buildscript_directives() {
+        let dir = std::env::temp_dir().join(format!("please_rust_compile_test_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("x.buildscript");
+        fs::write(&path, "# comment\nout-dir=out\nrustc-cfg=has_std\nrustc-env=FOO=bar\nrustc-link-lib=static=z\nrustc-link-search=native=/some/dir\nrustc-link-arg=-Wl,-z,now\nmetadata=include=/inc\n").unwrap();
+        let d = parse_buildscript(&path).unwrap();
+        assert_eq!(d.out_dir.as_deref(), Some(Path::new("out")));
+        assert_eq!(d.rustc_cfgs, vec!["has_std"]);
+        assert_eq!(d.rustc_envs, vec![("FOO".to_string(), "bar".to_string())]);
+        assert_eq!(d.rustc_link_libs, vec!["static=z"]);
+        assert_eq!(d.rustc_link_searches, vec!["native=/some/dir"]);
+        assert_eq!(d.rustc_link_args, vec!["-Wl,-z,now"]);
     }
 
-    Ok(())
+    #[test]
+    fn out_dir_resolves_relative_to_buildscript() {
+        let dir = std::env::temp_dir().join(format!("please_rust_outdir_test_{}", std::process::id()));
+        let out = dir.join("out");
+        fs::create_dir_all(&out).unwrap();
+        let bs = dir.join("x.buildscript");
+        fs::write(&bs, "").unwrap();
+        let resolved = resolve_out_dir(Path::new("out"), Some(&bs)).unwrap();
+        assert_eq!(resolved, out.canonicalize().unwrap());
+        assert!(resolve_out_dir(Path::new("nonexistent"), Some(&bs)).is_none());
+    }
+
+    #[test]
+    fn find_file_searches_recursively() {
+        let dir = std::env::temp_dir().join(format!("please_rust_find_test_{}", std::process::id()));
+        let deep = dir.join("a/b");
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("needle.rlib"), "").unwrap();
+        let found = find_file_recursive(dir.to_str().unwrap(), "needle.rlib").unwrap();
+        assert!(found.ends_with("a/b/needle.rlib"));
+        assert!(find_file_recursive(dir.to_str().unwrap(), "haystack.rlib").is_none());
+    }
+}
+
+#[cfg(test)]
+mod command_tests {
+    use super::*;
+
+    // Tests that chdir must not run concurrently (cwd is process-global)
+    static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn base_args(dir: &Path) -> CompileArgs {
+        CompileArgs {
+            externconfig: Some(dir.join("externconfig")),
+            buildscript: None,
+            manifest_path: None,
+            rustc: PathBuf::from("rustc"),
+            sysroot: Some(PathBuf::from("/sysroot")),
+            crate_name: "demo".to_string(),
+            edition: "2021".to_string(),
+            crate_type: "lib".to_string(),
+            emit: "dep-info,link,metadata".to_string(),
+            search_paths: vec![],
+            codegen: vec!["metadata=demo-1.0.0".to_string()],
+            cap_lints: Some("allow".to_string()),
+            cc: None,
+            deps: vec![],
+            features: vec!["std".to_string()],
+            renames: vec![],
+            static_crt: false,
+            test: false,
+            debug: false,
+            optimize: true,
+            sources: vec![PathBuf::from("src/lib.rs")],
+        }
+    }
+
+    fn fixture(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("please_rust_cmd_test_{}_{}", std::process::id(), name));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("liba-1_0_0.rlib"), "").unwrap();
+        std::fs::write(dir.join("libb-2_0_0.rlib"), "").unwrap();
+        std::fs::write(dir.join("externconfig"), "a=liba-1_0_0.rlib\nb=libb-2_0_0.rlib\n").unwrap();
+        dir
+    }
+
+    fn argv(cmd: &Command) -> Vec<String> {
+        cmd.get_args().map(|a| a.to_string_lossy().to_string()).collect()
+    }
+
+    fn joined(cmd: &Command) -> String {
+        argv(cmd).join(" ")
+    }
+
+    fn envs(cmd: &Command) -> std::collections::HashMap<String, String> {
+        cmd.get_envs()
+            .filter_map(|(k, v)| v.map(|v| (k.to_string_lossy().to_string(), v.to_string_lossy().to_string())))
+            .collect()
+    }
+
+    #[test]
+    fn basic_flags() {
+        let _guard = CWD_LOCK.lock().unwrap();
+        let dir = fixture("basic");
+        let old = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        let cmd = build_command(&base_args(&dir)).unwrap();
+        std::env::set_current_dir(old).unwrap();
+        let s = joined(&cmd);
+        assert!(s.contains("--sysroot /sysroot"));
+        assert!(s.contains("--crate-name=demo"));
+        assert!(s.contains("--edition=2021"));
+        assert!(s.contains("--crate-type=lib"));
+        assert!(s.contains("--cap-lints=allow"));
+        assert!(s.contains("-C metadata=demo-1.0.0"));
+        assert!(s.contains("--cfg feature=\"std\""));
+        assert!(s.contains("-O"));
+        assert!(!s.contains(" -g"));
+        // All externconfig entries become externs when no --dep filter
+        assert!(s.contains("--extern a="));
+        assert!(s.contains("--extern b="));
+        assert_eq!(envs(&cmd)["CARGO_CRATE_NAME"], "demo");
+    }
+
+    #[test]
+    fn dep_filter_limits_externs() {
+        let _guard = CWD_LOCK.lock().unwrap();
+        let dir = fixture("depfilter");
+        let mut args = base_args(&dir);
+        args.deps = vec!["a".to_string()];
+        let old = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        let cmd = build_command(&args).unwrap();
+        std::env::set_current_dir(old).unwrap();
+        let s = joined(&cmd);
+        assert!(s.contains("--extern a="));
+        assert!(!s.contains("--extern b="));
+        // Transitive crates stay reachable through -L
+        assert!(s.contains("-L"));
+    }
+
+    #[test]
+    fn renames_add_aliased_externs() {
+        let _guard = CWD_LOCK.lock().unwrap();
+        let dir = fixture("renames");
+        let mut args = base_args(&dir);
+        args.renames = vec!["alias=a".to_string()];
+        let old = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        let cmd = build_command(&args).unwrap();
+        std::env::set_current_dir(old).unwrap();
+        assert!(joined(&cmd).contains("--extern alias="));
+    }
+
+    #[test]
+    fn test_harness_replaces_crate_type() {
+        let dir = fixture("test_flag");
+        let mut args = base_args(&dir);
+        args.test = true;
+        args.crate_type = "bin".to_string();
+        let cmd = build_command(&args).unwrap();
+        let s = joined(&cmd);
+        assert!(s.contains("--test"));
+        assert!(!s.contains("--crate-type"));
+    }
+
+    #[test]
+    fn proc_macro_gets_compiler_extern() {
+        let dir = fixture("pm");
+        let mut args = base_args(&dir);
+        args.crate_type = "proc-macro".to_string();
+        let cmd = build_command(&args).unwrap();
+        assert!(joined(&cmd).contains("--extern proc_macro"));
+    }
+
+    #[test]
+    fn static_and_linker_flags() {
+        let dir = fixture("static");
+        let mut args = base_args(&dir);
+        args.crate_type = "bin".to_string();
+        args.static_crt = true;
+        args.cc = Some(PathBuf::from("cc"));
+        let cmd = build_command(&args).unwrap();
+        let s = joined(&cmd);
+        assert!(s.contains("-C target-feature=+crt-static"));
+        assert!(s.contains("-C linker=cc"));
+    }
+
+    #[test]
+    fn linker_not_applied_to_rlibs() {
+        let dir = fixture("rlib_nolink");
+        let mut args = base_args(&dir);
+        args.cc = Some(PathBuf::from("cc"));
+        let cmd = build_command(&args).unwrap();
+        assert!(!joined(&cmd).contains("-C linker="));
+    }
+
+    #[test]
+    fn buildscript_directives_apply() {
+        let dir = fixture("bs");
+        std::fs::create_dir_all(dir.join("out")).unwrap();
+        std::fs::write(
+            dir.join("demo.buildscript"),
+            "out-dir=out\nrustc-cfg=has_std\nrustc-env=GEN=1\nrustc-link-lib=z\nrustc-link-search=native=/nat\nrustc-link-arg=-s\n",
+        )
+        .unwrap();
+        let mut args = base_args(&dir);
+        args.buildscript = Some(dir.join("demo.buildscript"));
+        let cmd = build_command(&args).unwrap();
+        let s = joined(&cmd);
+        assert!(s.contains("--cfg has_std"));
+        assert!(s.contains("-l z"));
+        assert!(s.contains("-L /nat"));
+        assert!(s.contains("-C link-arg=-s"));
+        let e = envs(&cmd);
+        assert_eq!(e["GEN"], "1");
+        assert!(e["OUT_DIR"].ends_with("/out"));
+    }
+
+    #[test]
+    fn manifest_sets_pkg_env() {
+        let dir = fixture("manifest");
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"3.1.4\"\n",
+        )
+        .unwrap();
+        let mut args = base_args(&dir);
+        args.manifest_path = Some(dir.join("Cargo.toml"));
+        args.crate_type = "bin".to_string();
+        let cmd = build_command(&args).unwrap();
+        let e = envs(&cmd);
+        assert_eq!(e["CARGO_PKG_VERSION"], "3.1.4");
+        assert_eq!(e["CARGO_BIN_NAME"], "demo");
+        assert!(e.contains_key("CARGO_MANIFEST_DIR"));
+    }
 }

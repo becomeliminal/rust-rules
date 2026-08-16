@@ -59,6 +59,14 @@ def rust_git_download(name:str, crate:str, version:str, repo:str, revision:str, 
     )
 
 
+def _subrepo_ref(value:str):
+    """A config value as seen from inside a generated subrepo: host-repo
+    labels need the @ prefix; file paths (config overrides) pass through."""
+    if value.startswith("//") or value.startswith(":"):
+        return f"@{value}"
+    return value
+
+
 def rust_repo(
     name: str = None,
     crate: str = "",
@@ -105,7 +113,8 @@ def rust_repo(
                        mechanism; superseded by the resolved lock file.
         lock: Label of the resolved lock (the rust_resolve rule). When it
               contains an entry for this subrepo, features and dependency
-              routing come from it. Pass None to use heuristic resolution.
+              routing come from it. Pass an empty string to use heuristic
+              resolution (e.g. for a standalone crate outside the lock).
         indirect: True for machine-added transitive dependencies (maintained
                   by `please_rust sync`); their features are derived, never
                   user requests, and sync may prune them when unused.
@@ -172,19 +181,25 @@ def rust_repo(
     install_arg = ",".join(install_targets)
 
     pkg_name = package_name()
+    # At the repo root package_name() is empty; labels must not double-slash
+    subrepo_path = f"{pkg_name}/{subrepo_name}" if pkg_name else subrepo_name
     pkg_root = f"{crate}-{version}"
 
     # Generate BUILD files
     # Note: remote_file with extract=True extracts contents into a directory named after the crate
     lock_flag = "--lock $SRCS_LOCK " if lock else ""
     cc_is_label = CONFIG.RUST.CC_TOOL and (CONFIG.RUST.CC_TOOL.startswith("//") or CONFIG.RUST.CC_TOOL.startswith(":"))
-    cc_flag = f"--cc-label @{CONFIG.RUST.CC_TOOL} " if cc_is_label else ""
+    cc_ref = _subrepo_ref(CONFIG.RUST.CC_TOOL) if CONFIG.RUST.CC_TOOL else ""
+    cc_flag = f"--cc-label {cc_ref} " if cc_is_label else ""
+    tool_ref = _subrepo_ref(CONFIG.RUST.PLEASE_RUST_TOOL)
+    rustc_ref = _subrepo_ref(CONFIG.RUST.RUSTC)
+    sysroot_ref = _subrepo_ref(CONFIG.RUST.SYSROOT)
     cmds = [
         # Remove any existing BUILD files or plzconfig
         "rm -rf $SRCS_CRATE/.plzconfig",
         "find $SRCS_CRATE -name BUILD -delete",
         # Run please_rust generate (SRCS_CRATE points directly to the extracted directory)
-        f"$TOOL generate --crate-name {crate} --version {version} --src-root $SRCS_CRATE --subrepo {pkg_name}/{subrepo_name} --features '{features_arg}' --install '{install_arg}' --third-party-folder {third_party_path} --tool-label @{CONFIG.RUST.PLEASE_RUST_TOOL} --rustc-label @{CONFIG.RUST.RUSTC} --sysroot-label @{CONFIG.RUST.SYSROOT} {cc_flag}{lock_flag}" + " ".join([f"--override {k}={v}" for k, v in sorted(dep_overrides.items())]),
+        f"$TOOL generate --crate-name {crate} --version {version} --src-root $SRCS_CRATE --subrepo {subrepo_path} --features '{features_arg}' --install '{install_arg}' --third-party-folder {third_party_path} --tool-label {tool_ref} --rustc-label {rustc_ref} --sysroot-label {sysroot_ref} {cc_flag}{lock_flag}" + " ".join([f"--override {k}={v}" for k, v in sorted(dep_overrides.items())]),
         # Move to output
         "mv $SRCS_CRATE $OUT",
     ]
@@ -224,14 +239,14 @@ def rust_repo(
         return filegroup(
             name = name,
             binary = True,
-            exported_deps = [f"///{pkg_name}/{subrepo_name}//:{crate_normalized}_bin"],
+            exported_deps = [f"///{subrepo_path}//:{crate_normalized}_bin"],
             visibility = visibility,
             labels = labels,
         )
     return filegroup(
         name = name,
         visibility = visibility,
-        exported_deps = [f"///{pkg_name}/{subrepo_name}//:{crate_normalized}"],
+        exported_deps = [f"///{subrepo_path}//:{crate_normalized}"],
         labels = labels,
     )
 

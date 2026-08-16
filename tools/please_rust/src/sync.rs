@@ -1080,3 +1080,499 @@ fn target_applies(target_cfg: &str, triple: &str) -> bool {
         target_cfg == triple
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(text: &str) -> Vec<Decl> {
+        let lines: Vec<String> = text.lines().map(|s| s.to_string()).collect();
+        parse_build(&lines).unwrap()
+    }
+
+    const BUILD: &str = r#"subinclude("//build_defs:rust")
+
+rust_toolchain(
+    name = "toolchain",
+    version = "1.97.1",
+)
+
+# A load-bearing comment (with parens) about serde
+rust_repo(
+    name = "serde",
+    crate = "serde",
+    version = "1.0.228",
+    features = ["derive", "default"],
+    hashes = ["abc123"],
+    visibility = ["PUBLIC"],
+)
+
+rust_repo(
+    name = "itoa",
+    crate = "itoa",
+    version = "1.0.11",
+    indirect = True,
+)
+
+rust_repo(
+    name = "quirky",
+    crate = "quirky-crate",
+    version = "0.1.0",
+    default_features = False,
+    git_repo = "someone/quirky",
+    git_revision = "abcdef",
+)
+"#;
+
+    #[test]
+    fn parses_declarations() {
+        let decls = parse(BUILD);
+        assert_eq!(decls.len(), 3);
+
+        let serde = &decls[0];
+        assert_eq!(serde.name.as_deref(), Some("serde"));
+        assert_eq!(serde.crate_name, "serde");
+        assert_eq!(serde.version, "1.0.228");
+        assert_eq!(serde.features, vec!["derive", "default"]);
+        assert_eq!(serde.hashes, vec!["abc123"]);
+        assert!(serde.root);
+        assert!(serde.default_features);
+        assert_eq!(serde.passthrough, vec!["    visibility = [\"PUBLIC\"]"]);
+        assert_eq!(serde.leading_comments.len(), 1);
+
+        let itoa = &decls[1];
+        assert!(!itoa.root);
+
+        let quirky = &decls[2];
+        assert!(!quirky.default_features);
+        assert_eq!(quirky.git_repo, "someone/quirky");
+        assert_eq!(quirky.git_revision, "abcdef");
+    }
+
+    #[test]
+    fn emit_parse_round_trip() {
+        let decls = parse(BUILD);
+        let emitted: String = decls.iter().map(emit_decl).collect::<Vec<_>>().join("\n");
+        let reparsed = parse(&emitted);
+        assert_eq!(decls.len(), reparsed.len());
+        for (a, b) in decls.iter().zip(&reparsed) {
+            assert_eq!(a.subrepo(), b.subrepo());
+            assert_eq!(a.crate_name, b.crate_name);
+            assert_eq!(a.version, b.version);
+            assert_eq!(a.root, b.root);
+            assert_eq!(a.default_features, b.default_features);
+            assert_eq!(a.hashes, b.hashes);
+            assert_eq!(a.git_repo, b.git_repo);
+            // Indirect entries never emit features (derived data)
+            if a.root {
+                assert_eq!(a.features, b.features);
+            }
+        }
+    }
+
+    #[test]
+    fn indirect_entries_emit_no_features() {
+        let mut decls = parse(BUILD);
+        decls[1].features = vec!["stale".to_string()];
+        let text = emit_decl(&decls[1]);
+        assert!(!text.contains("stale"));
+        assert!(text.contains("indirect = True"));
+    }
+
+    #[test]
+    fn rewrite_replaces_in_place_and_deletes() {
+        let lines: Vec<String> = BUILD.lines().map(|s| s.to_string()).collect();
+        let mut decls = parse_build(&lines).unwrap();
+
+        // Drop itoa, keeping its span for deletion
+        let deleted = vec![decls[1].span.unwrap()];
+        decls.remove(1);
+        // Add a new entry (no span -> appended)
+        decls.push(Decl {
+            name: Some("newbie".to_string()),
+            crate_name: "newbie".to_string(),
+            version: "0.1.0".to_string(),
+            features: vec![],
+            hashes: vec![],
+            passthrough: vec![],
+            leading_comments: vec![],
+            span: None,
+            imported: false,
+            root: true,
+            default_features: true,
+            git_repo: String::new(),
+            git_revision: String::new(),
+        });
+
+        let out = rewrite_build(&lines, &decls, &deleted);
+        assert!(!out.contains("itoa"));
+        assert!(out.contains("newbie"));
+        assert!(out.contains("rust_toolchain")); // untouched content survives
+        assert!(out.contains("load-bearing comment"));
+
+        // Idempotency: rewriting the rewrite changes nothing
+        let lines2: Vec<String> = out.lines().map(|s| s.to_string()).collect();
+        let decls2 = parse_build(&lines2).unwrap();
+        let out2 = rewrite_build(&lines2, &decls2, &[]);
+        assert_eq!(out, out2);
+    }
+
+    #[test]
+    fn resolve_block_is_idempotent() {
+        let decls = parse(BUILD);
+        let one = write_resolve_block(BUILD, &decls, "x86_64-unknown-linux-gnu");
+        let two = write_resolve_block(&one, &decls, "x86_64-unknown-linux-gnu");
+        assert_eq!(one, two);
+        assert_eq!(one.matches("rust_resolve(").count(), 1);
+        assert!(one.contains("serde|serde|1.0.228|derive,default|true|true"));
+    }
+
+    #[test]
+    fn normalize_names_versions() {
+        let mut decls = parse(BUILD);
+        decls.push(Decl {
+            name: Some("serde_old".to_string()),
+            crate_name: "serde".to_string(),
+            version: "1.0.100".to_string(),
+            features: vec![],
+            hashes: vec![],
+            passthrough: vec![],
+            leading_comments: vec![],
+            span: None,
+            imported: false,
+            root: false,
+            default_features: true,
+            git_repo: String::new(),
+            git_revision: String::new(),
+        });
+        let renames = normalize_names(&mut decls).unwrap();
+        assert_eq!(renames.get("serde_old").unwrap(), "serde-1.0.100");
+        // The newest keeps the plain name
+        assert!(decls.iter().any(|d| d.version == "1.0.228" && d.subrepo() == "serde"));
+    }
+
+    #[test]
+    fn import_lockfile_sources() {
+        let dir = std::env::temp_dir().join(format!("please_rust_sync_test_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("Cargo.lock"), r#"
+[[package]]
+name = "serde"
+version = "1.0.228"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "feedface"
+
+[[package]]
+name = "fresh"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cafebabe"
+
+[[package]]
+name = "forked"
+version = "0.5.0"
+source = "git+https://github.com/owner/forked?rev=abc#abcdef123456"
+
+[[package]]
+name = "elsewhere"
+version = "0.1.0"
+source = "git+https://gitlab.example.com/x/y#deadbeef"
+
+[[package]]
+name = "local_thing"
+version = "0.0.1"
+"#).unwrap();
+        fs::write(dir.join("Cargo.toml"), r#"
+[package]
+name = "ws"
+version = "0.0.0"
+
+[dependencies]
+fresh = { version = "2", features = ["extra"] }
+"#).unwrap();
+
+        let mut decls = parse(BUILD);
+        // serde already declared but without this hash
+        decls[0].hashes.clear();
+        import_cargo_lock(&dir.join("Cargo.lock"), &mut decls).unwrap();
+
+        // Existing entry got the hash attached
+        assert_eq!(decls.iter().find(|d| d.crate_name == "serde").unwrap().hashes, vec!["feedface"]);
+        // New registry crate imported with hash, marked root via workspace manifest
+        let fresh = decls.iter().find(|d| d.crate_name == "fresh").unwrap();
+        assert_eq!(fresh.hashes, vec!["cafebabe"]);
+        assert!(fresh.root);
+        assert!(fresh.features.contains(&"extra".to_string()));
+        assert!(fresh.features.contains(&"default".to_string()));
+        // Github git source imported with repo/revision
+        let forked = decls.iter().find(|d| d.crate_name == "forked").unwrap();
+        assert_eq!(forked.git_repo, "owner/forked");
+        assert_eq!(forked.git_revision, "abcdef123456");
+        // Non-github git and local path crates skipped
+        assert!(!decls.iter().any(|d| d.crate_name == "elsewhere"));
+        assert!(!decls.iter().any(|d| d.crate_name == "local_thing"));
+    }
+
+    #[test]
+    fn repo_root_walks_to_plzconfig() {
+        let dir = std::env::temp_dir().join(format!("please_rust_root_test_{}", std::process::id()));
+        let nested = dir.join("third_party/rust");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(dir.join(".plzconfig"), "").unwrap();
+        fs::write(nested.join("BUILD"), "").unwrap();
+        assert_eq!(repo_root(&nested.join("BUILD")), dir.canonicalize().unwrap());
+    }
+}
+
+#[cfg(test)]
+mod run_tests {
+    use super::*;
+
+    /// A full sync round-trip against a scratch repo: fixtures on disk,
+    /// resolution, prune, rewrite, and idempotency on the second pass.
+    #[test]
+    fn full_sync_round_trip() {
+        let dir = std::env::temp_dir().join(format!("please_rust_sync_run_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let store = dir.join("store");
+        fs::create_dir_all(&store).unwrap();
+        fs::write(dir.join(".plzconfig"), "").unwrap();
+
+        for (name, version, manifest) in [
+            ("app", "1.0.0", "[package]\nname = \"app\"\nversion = \"1.0.0\"\n\n[dependencies]\nutil = \"1\"\n"),
+            ("util", "1.5.0", "[package]\nname = \"util\"\nversion = \"1.5.0\"\n"),
+            ("unused", "0.1.0", "[package]\nname = \"unused\"\nversion = \"0.1.0\"\n"),
+        ] {
+            let cdir = store.join(format!("{}-{}", name, version));
+            fs::create_dir_all(&cdir).unwrap();
+            fs::write(cdir.join("Cargo.toml"), manifest).unwrap();
+        }
+
+        let build_file = dir.join("BUILD");
+        fs::write(&build_file, r#"rust_repo(
+    name = "app",
+    crate = "app",
+    version = "1.0.0",
+)
+
+rust_repo(
+    name = "util_old_name",
+    crate = "util",
+    version = "1.5.0",
+    indirect = True,
+)
+
+rust_repo(
+    name = "unused",
+    crate = "unused",
+    version = "0.1.0",
+    indirect = True,
+)
+"#).unwrap();
+
+        let args = || SyncArgs {
+            build_file: build_file.clone(),
+            third_party_folder: "third_party/rust".to_string(),
+            crate_store: Some(store.clone()),
+            import: None,
+            target: "x86_64-unknown-linux-gnu".to_string(),
+            lock_output: None,
+            plz: "".to_string(),
+            no_rename: false,
+            prune: true,
+            dry_run: false,
+        };
+        run(args()).unwrap();
+
+        let out = fs::read_to_string(&build_file).unwrap();
+        // Naming normalized, inactive indirect pruned, resolve block written
+        assert!(out.contains("name = \"util\""));
+        assert!(!out.contains("util_old_name"));
+        assert!(!out.contains("\"unused\""));
+        assert!(out.contains("rust_resolve("));
+        assert!(out.contains("app|app|1.0.0||true|true"));
+
+        // Second pass is a fixed point
+        run(args()).unwrap();
+        assert_eq!(fs::read_to_string(&build_file).unwrap(), out);
+
+        // Dry run changes nothing
+        let mut dry = args();
+        dry.dry_run = true;
+        run(dry).unwrap();
+        assert_eq!(fs::read_to_string(&build_file).unwrap(), out);
+    }
+
+    #[test]
+    fn missing_manifest_without_plz_errors() {
+        let dir = std::env::temp_dir().join(format!("please_rust_sync_missing_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let store = dir.join("store");
+        fs::create_dir_all(&store).unwrap();
+        let build_file = dir.join("BUILD");
+        fs::write(&build_file, "rust_repo(\n    name = \"ghost\",\n    crate = \"ghost\",\n    version = \"1.0.0\",\n)\n").unwrap();
+        let err = run(SyncArgs {
+            build_file,
+            third_party_folder: "third_party/rust".to_string(),
+            crate_store: Some(store),
+            import: None,
+            target: "x86_64-unknown-linux-gnu".to_string(),
+            lock_output: None,
+            plz: "".to_string(),
+            no_rename: true,
+            prune: false,
+            dry_run: false,
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("not downloaded"));
+    }
+
+    #[test]
+    fn index_path_layout() {
+        assert_eq!(Index::path_for("a"), "1/a");
+        assert_eq!(Index::path_for("ab"), "2/ab");
+        assert_eq!(Index::path_for("abc"), "3/a/abc");
+        assert_eq!(Index::path_for("Serde"), "se/rd/serde");
+    }
+
+    #[test]
+    fn default_feature_dep_activation() {
+        let iv = IndexVersion {
+            vers: "1.0.0".to_string(),
+            deps: vec![],
+            cksum: "x".to_string(),
+            features: [
+                ("default".to_string(), vec!["std".to_string(), "dep:mandatory_opt".to_string()]),
+                ("std".to_string(), vec!["helper/fast".to_string()]),
+            ]
+            .into_iter()
+            .collect(),
+            features2: Some([("weakling".to_string(), vec!["other?/x".to_string()])].into_iter().collect()),
+            yanked: false,
+        };
+        let activated = default_activated_deps(&iv);
+        assert!(activated.contains("mandatory_opt"));
+        assert!(activated.contains("helper"));
+        assert!(!activated.contains("other")); // weak, and feature not defaulted
+    }
+
+    #[test]
+    fn target_cfg_matching() {
+        assert!(target_applies("cfg(unix)", "x86_64-unknown-linux-gnu"));
+        assert!(!target_applies("cfg(windows)", "x86_64-unknown-linux-gnu"));
+        assert!(target_applies("x86_64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"));
+        assert!(!target_applies("cfg(broken", "x86_64-unknown-linux-gnu"));
+    }
+}
+
+#[cfg(test)]
+mod lock_cmd_tests {
+    use super::*;
+
+    /// The lock command end to end, fully offline: index responses come from
+    /// a pre-populated cache directory, downloads from a fake crate store.
+    #[test]
+    fn lock_add_resolves_from_cached_index() {
+        let dir = std::env::temp_dir().join(format!("please_rust_lock_e2e_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(".plzconfig"), "").unwrap();
+
+        // Sparse-index cache: hexlib 0.4.3 (yanked 0.4.4 must be skipped),
+        // with a mandatory dep on tinydep ^1
+        let cache = dir.join("index-cache");
+        fs::create_dir_all(cache.join("he")).unwrap();
+        fs::create_dir_all(cache.join("he/xl")).unwrap();
+        fs::write(cache.join("he/xl/hexlib"), concat!(
+            r#"{"name":"hexlib","vers":"0.4.3","deps":[{"name":"tinydep","req":"^1","features":[],"optional":false,"default_features":true,"target":null,"kind":"normal"}],"cksum":"aaa111","features":{}}"#, "\n",
+            r#"{"name":"hexlib","vers":"0.4.4","deps":[],"cksum":"bbb222","features":{},"yanked":true}"#, "\n",
+        )).unwrap();
+        fs::create_dir_all(cache.join("ti/ny")).unwrap();
+        fs::write(cache.join("ti/ny/tinydep"),
+            concat!(r#"{"name":"tinydep","vers":"1.2.0","deps":[],"cksum":"ccc333","features":{}}"#, "\n")).unwrap();
+
+        // Crate store so the post-lock sync can resolve manifests
+        let store = dir.join("plz-out/gen/third_party/rust");
+        for (name, ver) in [("hexlib", "0.4.3"), ("tinydep", "1.2.0")] {
+            let cdir = store.join(format!("{}-{}", name, ver));
+            fs::create_dir_all(&cdir).unwrap();
+            let manifest = if name == "hexlib" {
+                format!("[package]\nname = \"{}\"\nversion = \"{}\"\n\n[dependencies]\ntinydep = \"1\"\n", name, ver)
+            } else {
+                format!("[package]\nname = \"{}\"\nversion = \"{}\"\n", name, ver)
+            };
+            fs::write(cdir.join("Cargo.toml"), manifest).unwrap();
+        }
+
+        let build_file = dir.join("BUILD");
+        fs::write(&build_file, "").unwrap();
+
+        lock(LockCmdArgs {
+            build_file: build_file.clone(),
+            third_party_folder: "third_party/rust".to_string(),
+            add: vec!["hexlib@0.4".to_string()],
+            index_url: "https://index.invalid".to_string(),
+            cache_dir: Some(cache),
+            offline: true,
+            target: "x86_64-unknown-linux-gnu".to_string(),
+            curl: "false".to_string(),
+            plz: "".to_string(),
+        })
+        .unwrap();
+
+        let out = fs::read_to_string(&build_file).unwrap();
+        // Yanked 0.4.4 skipped; 0.4.3 chosen as a root with its index hash
+        assert!(out.contains("version = \"0.4.3\""));
+        assert!(out.contains("hashes = [\"aaa111\"]"));
+        // Transitive dep declared indirect with its hash
+        assert!(out.contains("\"tinydep\""));
+        assert!(out.contains("hashes = [\"ccc333\"]"));
+        assert!(out.contains("indirect = True"));
+        assert!(out.contains("rust_resolve("));
+    }
+
+    #[test]
+    fn lock_offline_without_cache_errors() {
+        let dir = std::env::temp_dir().join(format!("please_rust_lock_offline_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let build_file = dir.join("BUILD");
+        fs::write(&build_file, "").unwrap();
+        let err = lock(LockCmdArgs {
+            build_file,
+            third_party_folder: "third_party/rust".to_string(),
+            add: vec!["ghost@1".to_string()],
+            index_url: "https://index.invalid".to_string(),
+            cache_dir: Some(dir.join("empty-cache")),
+            offline: true,
+            target: "x86_64-unknown-linux-gnu".to_string(),
+            curl: "false".to_string(),
+            plz: "".to_string(),
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("not in index cache"));
+    }
+
+    #[test]
+    fn lock_nothing_to_do_when_satisfied() {
+        let dir = std::env::temp_dir().join(format!("please_rust_lock_noop_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let build_file = dir.join("BUILD");
+        fs::write(&build_file, "rust_repo(\n    name = \"present\",\n    crate = \"present\",\n    version = \"1.0.0\",\n)\n").unwrap();
+        let before = fs::read_to_string(&build_file).unwrap();
+        lock(LockCmdArgs {
+            build_file: build_file.clone(),
+            third_party_folder: "third_party/rust".to_string(),
+            add: vec!["present@1".to_string()],
+            index_url: "https://index.invalid".to_string(),
+            cache_dir: Some(dir.join("cache")),
+            offline: true,
+            target: "x86_64-unknown-linux-gnu".to_string(),
+            curl: "false".to_string(),
+            plz: "".to_string(),
+        })
+        .unwrap();
+        assert_eq!(fs::read_to_string(&build_file).unwrap(), before);
+    }
+}

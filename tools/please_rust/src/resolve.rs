@@ -67,7 +67,7 @@ fn entry_default_true() -> bool {
     true
 }
 
-#[derive(Serialize, Deserialize, Clone, Default)]
+#[derive(Serialize, Deserialize, Clone, Default, Debug)]
 pub struct LockEntry {
     pub crate_name: String,
     pub version: String,
@@ -76,7 +76,7 @@ pub struct LockEntry {
     pub build_deps: Vec<LockDep>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct LockDep {
     /// Name as declared by the dependent (the rename, if any)
     pub name: String,
@@ -88,7 +88,7 @@ pub struct LockDep {
     pub target_name: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct LockFile {
     pub target: String,
     /// Primary entry per subrepo (target unit; host unit if host-only)
@@ -730,5 +730,464 @@ fn cfg_applies(cfg: &str, target_info: &cfg_expr::targets::TargetInfo) -> bool {
     } else {
         // A literal target triple
         cfg == target_info.triple.as_str()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    /// Writes manifests to a scratch dir and builds EntryInputs for them.
+    struct Graph {
+        dir: PathBuf,
+        entries: Vec<EntryInput>,
+    }
+
+    impl Graph {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "please_rust_resolve_test_{}_{}",
+                std::process::id(),
+                name
+            ));
+            fs::create_dir_all(&dir).unwrap();
+            Graph {
+                dir,
+                entries: Vec::new(),
+            }
+        }
+
+        fn krate(&mut self, subrepo: &str, name: &str, version: &str, manifest_body: &str) -> &mut Self {
+            let manifest = format!(
+                "[package]\nname = \"{}\"\nversion = \"{}\"\nedition = \"2021\"\n{}",
+                name, version, manifest_body
+            );
+            let path = self.dir.join(format!("{}.toml", subrepo));
+            fs::write(&path, manifest).unwrap();
+            self.entries.push(EntryInput {
+                subrepo: subrepo.to_string(),
+                crate_name: name.to_string(),
+                version: version.to_string(),
+                manifest: path,
+                features: vec![],
+                root: false,
+                default_features: true,
+            });
+            self
+        }
+
+        fn root(&mut self, subrepo: &str, features: &[&str], default_features: bool) -> &mut Self {
+            let e = self
+                .entries
+                .iter_mut()
+                .find(|e| e.subrepo == subrepo)
+                .unwrap();
+            e.root = true;
+            e.features = features.iter().map(|s| s.to_string()).collect();
+            e.default_features = default_features;
+            self
+        }
+
+        fn resolve(&self) -> LockFile {
+            resolve_entries(&self.entries, "x86_64-unknown-linux-gnu").unwrap()
+        }
+    }
+
+    fn features(lock: &LockFile, subrepo: &str) -> Vec<String> {
+        lock.crates.get(subrepo).unwrap().features.clone()
+    }
+
+    fn dep_names(lock: &LockFile, subrepo: &str) -> Vec<String> {
+        lock.crates.get(subrepo).unwrap().deps.iter().map(|d| d.name.clone()).collect()
+    }
+
+    #[test]
+    fn mandatory_deps_activate() {
+        let mut g = Graph::new("mandatory");
+        g.krate("a", "a", "1.0.0", "[dependencies]\nb = \"1\"\n")
+            .krate("b", "b", "1.2.0", "")
+            .root("a", &[], true);
+        let lock = g.resolve();
+        assert!(lock.crates.contains_key("a"));
+        assert!(lock.crates.contains_key("b"));
+        assert_eq!(dep_names(&lock, "a"), vec!["b"]);
+    }
+
+    #[test]
+    fn non_root_does_not_activate() {
+        let mut g = Graph::new("nonroot");
+        g.krate("a", "a", "1.0.0", "").krate("b", "b", "1.0.0", "");
+        g.root("a", &[], true);
+        let lock = g.resolve();
+        assert!(lock.crates.contains_key("a"));
+        assert!(!lock.crates.contains_key("b"));
+    }
+
+    #[test]
+    fn default_features_expand() {
+        let mut g = Graph::new("defaults");
+        g.krate(
+            "a", "a", "1.0.0",
+            "[features]\ndefault = [\"std\"]\nstd = []\n",
+        )
+        .root("a", &[], true);
+        let lock = g.resolve();
+        let f = features(&lock, "a");
+        assert!(f.contains(&"default".to_string()));
+        assert!(f.contains(&"std".to_string()));
+    }
+
+    #[test]
+    fn default_features_opt_out() {
+        let mut g = Graph::new("no_defaults");
+        g.krate(
+            "a", "a", "1.0.0",
+            "[features]\ndefault = [\"std\"]\nstd = []\nextra = []\n",
+        )
+        .root("a", &["extra"], false);
+        let lock = g.resolve();
+        let f = features(&lock, "a");
+        assert!(!f.contains(&"std".to_string()));
+        assert!(f.contains(&"extra".to_string()));
+    }
+
+    #[test]
+    fn edge_default_features_flow_to_deps() {
+        let mut g = Graph::new("edge_defaults");
+        g.krate("a", "a", "1.0.0", "[dependencies]\nb = \"1\"\n")
+            .krate("b", "b", "1.0.0", "[features]\ndefault = [\"fast\"]\nfast = []\n")
+            .root("a", &[], true);
+        let lock = g.resolve();
+        assert!(features(&lock, "b").contains(&"fast".to_string()));
+    }
+
+    #[test]
+    fn edge_no_default_features() {
+        let mut g = Graph::new("edge_no_defaults");
+        g.krate(
+            "a", "a", "1.0.0",
+            "[dependencies.b]\nversion = \"1\"\ndefault-features = false\n",
+        )
+        .krate("b", "b", "1.0.0", "[features]\ndefault = [\"fast\"]\nfast = []\n")
+        .root("a", &[], true);
+        let lock = g.resolve();
+        assert!(!features(&lock, "b").contains(&"fast".to_string()));
+    }
+
+    #[test]
+    fn optional_dep_not_activated_without_feature() {
+        let mut g = Graph::new("optional_off");
+        g.krate(
+            "a", "a", "1.0.0",
+            "[dependencies.b]\nversion = \"1\"\noptional = true\n",
+        )
+        .krate("b", "b", "1.0.0", "")
+        .root("a", &[], true);
+        let lock = g.resolve();
+        assert!(!lock.crates.contains_key("b"));
+        assert!(dep_names(&lock, "a").is_empty());
+    }
+
+    #[test]
+    fn dep_colon_activates_optional() {
+        let mut g = Graph::new("dep_colon");
+        g.krate(
+            "a", "a", "1.0.0",
+            "[dependencies.b]\nversion = \"1\"\noptional = true\n\n[features]\nwith_b = [\"dep:b\"]\n",
+        )
+        .krate("b", "b", "1.0.0", "")
+        .root("a", &["with_b"], true);
+        let lock = g.resolve();
+        assert!(lock.crates.contains_key("b"));
+        assert_eq!(dep_names(&lock, "a"), vec!["b"]);
+        // Namespaced: dep:b means no implicit feature cfg "b"
+        assert!(!features(&lock, "a").contains(&"b".to_string()));
+        assert!(features(&lock, "a").contains(&"with_b".to_string()));
+    }
+
+    #[test]
+    fn implicit_optional_dep_feature() {
+        let mut g = Graph::new("implicit");
+        g.krate(
+            "a", "a", "1.0.0",
+            "[dependencies.b]\nversion = \"1\"\noptional = true\n",
+        )
+        .krate("b", "b", "1.0.0", "")
+        .root("a", &["b"], true);
+        let lock = g.resolve();
+        assert!(lock.crates.contains_key("b"));
+        // No dep: usage anywhere, so the implicit feature cfg exists
+        assert!(features(&lock, "a").contains(&"b".to_string()));
+    }
+
+    #[test]
+    fn strong_dep_slash_feature() {
+        let mut g = Graph::new("strong_slash");
+        g.krate(
+            "a", "a", "1.0.0",
+            "[dependencies.b]\nversion = \"1\"\noptional = true\n\n[features]\nf = [\"b/fast\"]\n",
+        )
+        .krate("b", "b", "1.0.0", "[features]\nfast = []\n")
+        .root("a", &["f"], true);
+        let lock = g.resolve();
+        assert!(lock.crates.contains_key("b"));
+        assert!(features(&lock, "b").contains(&"fast".to_string()));
+    }
+
+    #[test]
+    fn weak_dep_feature_deferred() {
+        let mut g = Graph::new("weak");
+        g.krate(
+            "a", "a", "1.0.0",
+            "[dependencies.b]\nversion = \"1\"\noptional = true\n\n[features]\nf = [\"b?/fast\"]\ng = [\"dep:b\"]\n",
+        )
+        .krate("b", "b", "1.0.0", "[features]\nfast = []\n");
+
+        // Weak alone: dep stays off
+        g.root("a", &["f"], true);
+        let lock = g.resolve();
+        assert!(!lock.crates.contains_key("b"));
+
+        // Weak + activation: feature applies
+        g.root("a", &["f", "g"], true);
+        let lock = g.resolve();
+        assert!(lock.crates.contains_key("b"));
+        assert!(features(&lock, "b").contains(&"fast".to_string()));
+    }
+
+    #[test]
+    fn version_routing_semver() {
+        let mut g = Graph::new("routing");
+        g.krate("old", "x", "1.9.3", "")
+            .krate("new", "x", "2.2.6", "")
+            .krate("a", "a", "1.0.0", "[dependencies]\nx = \"1\"\n")
+            .krate("b", "b", "1.0.0", "[dependencies]\nx = \"2\"\n")
+            .root("a", &[], true)
+            .root("b", &[], true);
+        let lock = g.resolve();
+        assert_eq!(lock.crates.get("a").unwrap().deps[0].subrepo, "old");
+        assert_eq!(lock.crates.get("b").unwrap().deps[0].subrepo, "new");
+    }
+
+    #[test]
+    fn renamed_dep_keeps_declared_name() {
+        let mut g = Graph::new("rename");
+        g.krate(
+            "a", "a", "1.0.0",
+            "[dependencies.libc_errno]\nversion = \"1\"\npackage = \"errno\"\n",
+        )
+        .krate("errno", "errno", "1.0.0", "")
+        .root("a", &[], true);
+        let lock = g.resolve();
+        let dep = &lock.crates.get("a").unwrap().deps[0];
+        assert_eq!(dep.name, "libc_errno");
+        assert_eq!(dep.crate_name, "errno");
+    }
+
+    #[test]
+    fn rustc_std_workspace_skipped() {
+        let mut g = Graph::new("std_workspace");
+        g.krate(
+            "a", "a", "1.0.0",
+            "[dependencies.alloc]\nversion = \"1\"\npackage = \"rustc-std-workspace-alloc\"\n",
+        )
+        .root("a", &[], true);
+        let lock = g.resolve();
+        assert!(dep_names(&lock, "a").is_empty());
+    }
+
+    #[test]
+    fn platform_deps_filtered() {
+        let mut g = Graph::new("platform");
+        g.krate(
+            "a", "a", "1.0.0",
+            "[target.'cfg(unix)'.dependencies]\nu = \"1\"\n\n[target.'cfg(windows)'.dependencies]\nw = \"1\"\n",
+        )
+        .krate("u", "u", "1.0.0", "")
+        .krate("w", "w", "1.0.0", "")
+        .root("a", &[], true);
+        let lock = g.resolve();
+        assert!(lock.crates.contains_key("u"));
+        assert!(!lock.crates.contains_key("w"));
+    }
+
+    #[test]
+    fn build_deps_are_host_units() {
+        let mut g = Graph::new("host_build");
+        g.krate("a", "a", "1.0.0", "[build-dependencies]\nb = \"1\"\n")
+            .krate("b", "b", "1.0.0", "")
+            .root("a", &[], true);
+        let lock = g.resolve();
+        // b active (host-only), placed in primary map, no dual variant
+        assert!(lock.crates.contains_key("b"));
+        assert!(lock.host_crates.is_empty());
+        assert_eq!(lock.crates.get("a").unwrap().build_deps[0].name, "b");
+    }
+
+    #[test]
+    fn proc_macro_deps_resolve_in_host_unit() {
+        let mut g = Graph::new("proc_macro_host");
+        g.krate(
+            "pm", "pm", "1.0.0",
+            "[lib]\nproc-macro = true\n\n[dependencies.util]\nversion = \"1\"\nfeatures = [\"host_only\"]\n",
+        )
+        .krate("util", "util", "1.0.0", "[features]\nhost_only = []\ntarget_only = []\n")
+        .krate(
+            "a", "a", "1.0.0",
+            "[dependencies]\npm = \"1\"\n\n[dependencies.util]\nversion = \"1\"\nfeatures = [\"target_only\"]\n",
+        )
+        .root("a", &[], true);
+        let lock = g.resolve();
+        // util needed by both units with different features -> dual
+        assert!(lock.host_crates.contains_key("util"));
+        assert!(features(&lock, "util").contains(&"target_only".to_string()));
+        assert!(!features(&lock, "util").contains(&"host_only".to_string()));
+        let host = lock.host_crates.get("util").unwrap();
+        assert!(host.features.contains(&"host_only".to_string()));
+        // pm's edge routes to the host variant
+        let pm_dep = &lock.crates.get("pm").unwrap().deps[0];
+        assert_eq!(pm_dep.target_name, "util_host");
+        // a's edge routes to the target build
+        let a_util = lock.crates.get("a").unwrap().deps.iter().find(|d| d.name == "util").unwrap();
+        assert_eq!(a_util.target_name, "util");
+    }
+
+    #[test]
+    fn identical_units_share_one_artifact() {
+        let mut g = Graph::new("shared_units");
+        g.krate("pm", "pm", "1.0.0", "[lib]\nproc-macro = true\n\n[dependencies]\nutil = \"1\"\n")
+            .krate("util", "util", "1.0.0", "")
+            .krate("a", "a", "1.0.0", "[dependencies]\npm = \"1\"\nutil = \"1\"\n")
+            .root("a", &[], true);
+        let lock = g.resolve();
+        assert!(lock.host_crates.is_empty());
+        let pm_dep = &lock.crates.get("pm").unwrap().deps[0];
+        assert_eq!(pm_dep.target_name, "util");
+    }
+
+    #[test]
+    fn parse_manifest_normalizes_underscore_keys() {
+        let m = parse_manifest(
+            b"[package]\nname = \"t\"\nversion = \"1.0.0\"\n\n[dependencies.x]\nversion = \"1\"\ndefault_features = false\n",
+        )
+        .unwrap();
+        let dep = m.dependencies.get("x").unwrap();
+        assert!(!dep.detail().unwrap().default_features);
+    }
+
+    #[test]
+    fn cfg_applies_evaluates_target() {
+        let info = cfg_expr::targets::get_builtin_target_by_triple("x86_64-unknown-linux-gnu").unwrap();
+        assert!(cfg_applies("cfg(unix)", info));
+        assert!(!cfg_applies("cfg(windows)", info));
+        assert!(cfg_applies("cfg(target_os = \"linux\")", info));
+        assert!(cfg_applies("x86_64-unknown-linux-gnu", info));
+        assert!(!cfg_applies("aarch64-apple-darwin", info));
+        assert!(!cfg_applies("cfg(invalid syntax", info));
+    }
+
+    #[test]
+    fn inline_entry_parsing() {
+        let e = parse_inline_entry("sub|my-crate|1.2.3|a,b|true|false", Path::new("/m")).unwrap();
+        assert_eq!(e.subrepo, "sub");
+        assert_eq!(e.crate_name, "my-crate");
+        assert_eq!(e.features, vec!["a", "b"]);
+        assert!(e.root);
+        assert!(!e.default_features);
+        assert_eq!(e.manifest, Path::new("/m/sub.manifest.toml"));
+        assert!(parse_inline_entry("too|few|fields", Path::new("/m")).is_err());
+    }
+}
+
+#[cfg(test)]
+mod run_io_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn run_reads_entries_json_and_writes_lock() {
+        let dir = std::env::temp_dir().join(format!("please_rust_resolve_run_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let manifest = dir.join("a.toml");
+        fs::write(&manifest, "[package]\nname = \"a\"\nversion = \"1.0.0\"\n").unwrap();
+        let entries = dir.join("entries.json");
+        fs::write(
+            &entries,
+            format!(
+                r#"[{{"subrepo": "a", "crate_name": "a", "version": "1.0.0", "manifest": "{}", "root": true}}]"#,
+                manifest.display()
+            ),
+        )
+        .unwrap();
+        let output = dir.join("rust.lock");
+        run(ResolveArgs {
+            entries: Some(entries),
+            inline_entries: vec![],
+            manifest_dir: PathBuf::from("."),
+            target: "x86_64-unknown-linux-gnu".to_string(),
+            output: output.clone(),
+        })
+        .unwrap();
+        let lock = LockFile::load(&output).unwrap();
+        assert!(lock.crates.contains_key("a"));
+    }
+
+    #[test]
+    fn run_accepts_inline_entries() {
+        let dir = std::env::temp_dir().join(format!("please_rust_resolve_inline_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("a.manifest.toml"), "[package]\nname = \"a\"\nversion = \"1.0.0\"\n").unwrap();
+        let output = dir.join("rust.lock");
+        run(ResolveArgs {
+            entries: None,
+            inline_entries: vec!["a|a|1.0.0||true|true".to_string()],
+            manifest_dir: dir.clone(),
+            target: "x86_64-unknown-linux-gnu".to_string(),
+            output: output.clone(),
+        })
+        .unwrap();
+        assert!(LockFile::load(&output).unwrap().crates.contains_key("a"));
+    }
+
+    #[test]
+    fn unsatisfiable_requirement_errors() {
+        let dir = std::env::temp_dir().join(format!("please_rust_resolve_conflict_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("a.toml"), "[package]\nname = \"a\"\nversion = \"1.0.0\"\n\n[dependencies]\nx = \"3\"\n").unwrap();
+        fs::write(dir.join("x1.toml"), "[package]\nname = \"x\"\nversion = \"1.0.0\"\n").unwrap();
+        fs::write(dir.join("x2.toml"), "[package]\nname = \"x\"\nversion = \"2.0.0\"\n").unwrap();
+        let mk = |sub: &str, name: &str, ver: &str, file: &str, root: bool| EntryInput {
+            subrepo: sub.to_string(),
+            crate_name: name.to_string(),
+            version: ver.to_string(),
+            manifest: dir.join(file),
+            features: vec![],
+            root,
+            default_features: true,
+        };
+        let err = resolve_entries(
+            &[
+                mk("a", "a", "1.0.0", "a.toml", true),
+                mk("x1", "x", "1.0.0", "x1.toml", false),
+                mk("x2", "x", "2.0.0", "x2.toml", false),
+            ],
+            "x86_64-unknown-linux-gnu",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("no declared version of x"));
+    }
+
+    #[test]
+    fn lockfile_load_errors() {
+        assert!(LockFile::load(Path::new("/nonexistent/rust.lock")).is_err());
+        let dir = std::env::temp_dir().join(format!("please_rust_lock_bad_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let bad = dir.join("rust.lock");
+        fs::write(&bad, "not json").unwrap();
+        assert!(LockFile::load(&bad).is_err());
     }
 }

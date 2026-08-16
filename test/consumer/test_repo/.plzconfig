@@ -1,0 +1,9 @@
+[Please]
+Version = 17.27.0
+
+[Parse]
+BuildFileName = BUILD_FILE
+BuildFileName = BUILD
+
+[Plugin "rust"]
+Target = //plugins:rust

@@ -183,7 +183,7 @@ def rust_binary(name:str, main:str, modules:list=None, deps:list=[], edition:str
     )
 
 
-def rust_test(name:str, root:str, modules:list=None, deps:list=[], edition:str="2018", features:list=None, visibility:list=None):
+def rust_test(name:str, root:str, modules:list=None, deps:list=[], edition:str="2018", features:list=None, manifest:str=None, visibility:list=None):
     """Defines a test rule for a Rust library.
 
     Note that the Rust test runner has no ability to output in a format plz
@@ -201,12 +201,16 @@ def rust_test(name:str, root:str, modules:list=None, deps:list=[], edition:str="
     """
     crate_name = name.replace('-', '_') + '_test'
 
+    srcs = {
+        'main': [root],
+        'mods': modules or [],
+    }
+    if manifest:
+        srcs['manifest'] = [manifest]
+
     return build_rule(
         name = name,
-        srcs = {
-            'main': [root],
-            'mods': modules or [],
-        },
+        srcs = srcs,
         outs = [crate_name],
         binary = True,
         test = True,
@@ -217,6 +221,7 @@ def rust_test(name:str, root:str, modules:list=None, deps:list=[], edition:str="
             emit = 'dep-info,link',
             features = features,
             test = True,
+            manifest = manifest,
             deps = deps,
         ),
         test_cmd = f'$TOOLS_PLEASE_RUST test --suite {name} -- $TEST',
