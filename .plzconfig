@@ -123,3 +123,14 @@ Inherit = true
 [Plugin "e2e"]
 Target = //plugins:e2e
 PleaseVersion = 17.27.0
+
+[PluginConfig "llvm_tools"]
+ConfigKey = LlvmTools
+DefaultValue = //third_party/rust:toolchain_llvm_tools
+Help = Build label of the llvm-tools directory (llvm-profdata, llvm-cov) used for coverage.
+Inherit = true
+
+; plz only aggregates coverage for known file extensions; .rs is not in its
+; default list. Consuming repos need this too (documented in the README).
+[cover]
+fileextension = .rs

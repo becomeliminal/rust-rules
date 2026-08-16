@@ -198,6 +198,18 @@ The path to the `stdlib` to be linked by the compiler. Defaults to the toolchain
 StdLib = //third_party/rust:toolchain_stdlib
 ```
 
+### Coverage
+`plz cover` works out of the box: tests are compiled with
+`-C instrument-coverage` and the profiles are converted per-file line
+coverage via the toolchain's bundled llvm tools (the `LlvmTools` option
+overrides where those come from). The one thing a consuming repo must add is
+`.rs` to Please's coverage extension list, which doesn't include it by
+default:
+```ini
+[cover]
+FileExtension = .rs
+```
+
 ## General notes
 Rust Rules replicates Cargo's build contract without ever invoking Cargo:
 crate tarballs are fetched as verified downloads, `Cargo.toml` files are

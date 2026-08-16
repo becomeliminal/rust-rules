@@ -19,6 +19,15 @@ pub struct TestArgs {
     #[arg(long)]
     pub externs_from_cwd: bool,
 
+    /// Collect coverage: run with LLVM_PROFILE_FILE, then merge and convert
+    /// the profile to a test.coverage file plz can parse
+    #[arg(long)]
+    pub coverage: bool,
+
+    /// Directory containing llvm-profdata and llvm-cov (for --coverage)
+    #[arg(long)]
+    pub llvm_tools: Option<std::path::PathBuf>,
+
     /// The command to run (test binary and its args)
     #[arg(trailing_var_arg = true, required = true)]
     pub command: Vec<String>,
@@ -51,6 +60,15 @@ pub fn run(args: TestArgs) -> Result<()> {
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::inherit());
 
+    let cov_dir = std::path::PathBuf::from("coverage-profiles");
+    if args.coverage {
+        std::fs::create_dir_all(&cov_dir)?;
+        cmd.env(
+            "LLVM_PROFILE_FILE",
+            cov_dir.join("test-%p.profraw"),
+        );
+    }
+
     let mut child = cmd
         .spawn()
         .with_context(|| format!("Failed to run {}", args.command[0]))?;
@@ -71,10 +89,98 @@ pub fn run(args: TestArgs) -> Result<()> {
             .with_context(|| format!("Failed to write {}", results_file))?;
     }
 
+    if args.coverage && status.success() {
+        if let Some(tools) = &args.llvm_tools {
+            write_coverage(tools, &cov_dir, &args.command[0])?;
+        } else {
+            eprintln!("warning: --coverage without --llvm-tools; skipping coverage report");
+        }
+    }
+
     if !status.success() {
         anyhow::bail!("tests failed");
     }
     Ok(())
+}
+
+/// Merges raw profiles and writes line coverage in go-cover format (which
+/// plz parses natively) to test.coverage.
+fn write_coverage(llvm_tools: &std::path::Path, cov_dir: &std::path::Path, binary: &str) -> Result<()> {
+    let profraws: Vec<std::path::PathBuf> = std::fs::read_dir(cov_dir)?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().map(|e| e == "profraw").unwrap_or(false))
+        .collect();
+    if profraws.is_empty() {
+        eprintln!("warning: no coverage profiles produced");
+        return Ok(());
+    }
+
+    let profdata = cov_dir.join("merged.profdata");
+    let merge = Command::new(llvm_tools.join("llvm-profdata"))
+        .arg("merge")
+        .arg("-sparse")
+        .args(&profraws)
+        .arg("-o")
+        .arg(&profdata)
+        .output()
+        .context("Failed to run llvm-profdata")?;
+    if !merge.status.success() {
+        anyhow::bail!(
+            "llvm-profdata merge failed: {}",
+            String::from_utf8_lossy(&merge.stderr)
+        );
+    }
+
+    let out = Command::new(llvm_tools.join("llvm-cov"))
+        .args(["export", "-format=lcov", "-instr-profile"])
+        .arg(&profdata)
+        .arg(binary)
+        .output()
+        .context("Failed to run llvm-cov")?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "llvm-cov export failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    let go_cover = lcov_to_go_cover(&String::from_utf8_lossy(&out.stdout));
+    let cover_path =
+        std::env::var("COVERAGE_FILE").unwrap_or_else(|_| "test.coverage".to_string());
+    std::fs::write(&cover_path, go_cover)
+        .with_context(|| format!("Failed to write {cover_path}"))?;
+    Ok(())
+}
+
+/// Converts LCOV line records (SF:/DA:) to go-cover format, skipping
+/// out-of-repo sources (stdlib, registry crates staged in the sandbox).
+fn lcov_to_go_cover(lcov: &str) -> String {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let mut out = String::from("mode: count
+");
+    let mut current: Option<String> = None;
+    for line in lcov.lines() {
+        if let Some(path) = line.strip_prefix("SF:") {
+            let p = std::path::Path::new(path);
+            let rel = p.strip_prefix(&cwd).unwrap_or(p);
+            current = if rel.is_absolute() || path.starts_with("/rustc/") {
+                None
+            } else {
+                Some(rel.display().to_string())
+            };
+        } else if let Some(da) = line.strip_prefix("DA:") {
+            if let Some(file) = &current {
+                if let Some((ln, count)) = da.split_once(',') {
+                    out.push_str(&format!("{}:{}.1,{}.999 1 {}
+", file, ln, ln, count.trim()));
+                }
+            }
+        } else if line == "end_of_record" {
+            current = None;
+        }
+    }
+    out
 }
 
 /// Parses `test <name> ... ok|FAILED|ignored` lines plus the
@@ -270,6 +376,8 @@ mod run_wrapper_tests {
         run(TestArgs {
             suite: "wrapped".to_string(),
             externs_from_cwd: false,
+            coverage: false,
+            llvm_tools: None,
             command: vec![
                 "sh".to_string(),
                 "-c".to_string(),
@@ -290,9 +398,26 @@ mod run_wrapper_tests {
         let err = run(TestArgs {
             suite: "failing".to_string(),
             externs_from_cwd: false,
+            coverage: false,
+            llvm_tools: None,
             command: vec!["sh".to_string(), "-c".to_string(), "exit 3".to_string()],
         })
         .unwrap_err();
         assert!(err.to_string().contains("tests failed"));
+    }
+}
+
+#[cfg(test)]
+mod coverage_tests {
+    use super::*;
+
+    #[test]
+    fn lcov_conversion() {
+        let lcov = "SF:src/lib.rs\nDA:3,5\nDA:4,0\nend_of_record\nSF:/rustc/abc/library/std/src/io.rs\nDA:1,9\nend_of_record\n";
+        let out = lcov_to_go_cover(lcov);
+        assert!(out.starts_with("mode: count\n"));
+        assert!(out.contains("src/lib.rs:3.1,3.999 1 5"));
+        assert!(out.contains("src/lib.rs:4.1,4.999 1 0"));
+        assert!(!out.contains("rustc"));
     }
 }

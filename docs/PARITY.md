@@ -53,7 +53,11 @@ binary-link time.
 - [ ] `rust_clippy` (clippy-preview is already in the dist tarball) + CI gate
 - [ ] rustfmt exposure + format check rule
 - [ ] `rust_doc` (rustdoc HTML output)
-- [ ] Coverage: `-C instrument-coverage` wired into `plz cover` / llvm-cov
+- [x] Coverage: `-C instrument-coverage` wired into `plz cover` / llvm-cov
+      (profraw → llvm-profdata/llvm-cov → per-file line coverage; paths
+      remapped to repo-relative; consumers add `.rs` to `[cover]
+      FileExtension`. Note: rust_test routes sources through a filegroup
+      dep, not srcs — plz excludes test-target srcs from coverage reports)
 
 ### Hardening
 - [ ] Remote execution audit (absolute-path canonicalization, cwd walks)

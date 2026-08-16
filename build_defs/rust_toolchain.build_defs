@@ -55,6 +55,8 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
             'rustc_lib': [base + '/rustc/lib'],
             'cargo_bin': [base + '/cargo/bin/cargo'],
             'sysroot': [base + sysroot_path],
+            'llvm_tools': [base + '/llvm-tools-preview/lib/rustlib/%s-%s/bin' % (arch, os)],
+            'llvm_tools_lib': [base + '/llvm-tools-preview/lib/rustlib/%s-%s/lib' % (arch, os)],
         },
         cmd = 'tar -xzf $SRCS',
         building_description = 'Extracting...',
@@ -87,6 +89,21 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
         name = name + '_sysroot',
         srcs = [extract_rule + '|sysroot'],
         visibility = visibility,
+    )
+    # The llvm tools have RUNPATH $ORIGIN/../lib pointing at libLLVM, so the
+    # sibling lib directory must stay staged next to the bin directory.
+    llvm_lib_rule = filegroup(
+        name = name,
+        tag = 'llvm_lib',
+        srcs = [extract_rule + '|llvm_tools_lib'],
+        binary = True,
+    )
+    llvm_tools_rule = filegroup(
+        name = name + '_llvm_tools',
+        srcs = [extract_rule + '|llvm_tools'],
+        visibility = visibility,
+        binary = True,
+        deps = [llvm_lib_rule],
     )
     # For backwards compatibility, stdlib is the lib subdirectory of the
     # sysroot (copied out - it cannot be a nested output of the extract rule).

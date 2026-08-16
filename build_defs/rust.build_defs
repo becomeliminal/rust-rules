@@ -36,7 +36,7 @@ def _dep_names(deps:list):
     return names
 
 
-def _compile_cmds(crate_name:str, edition:str, crate_type:str, emit:str, features:list=None, test:bool=False, write_externconfig:bool=False, manifest:str=None, deps:list=None, lib_file:str='', static:bool=False, cc_deps:list=None, native_files:list=None):
+def _compile_cmds(crate_name:str, edition:str, crate_type:str, emit:str, features:list=None, test:bool=False, write_externconfig:bool=False, manifest:str=None, deps:list=None, lib_file:str='', static:bool=False, cc_deps:list=None, native_files:list=None, main_src:str='$SRCS_MAIN'):
     """Returns the {dbg, opt} command dict for compiling a crate via please_rust.
 
     Direct deps get --extern (by crate name, from --dep filtering); transitive
@@ -58,8 +58,9 @@ def _compile_cmds(crate_name:str, edition:str, crate_type:str, emit:str, feature
     echo_lines = '; '.join([f"echo '{line}' >> $OUTS_EXTERNCONFIG" for line in externconfig_lines])
     suffix = f" && {echo_lines}" if write_externconfig else ''
     return {
-        'dbg': f'{base} -g $SRCS_MAIN{suffix}',
-        'opt': f'{base} -O $SRCS_MAIN{suffix}',
+        'dbg': f'{base} -g {main_src}{suffix}',
+        'opt': f'{base} -O {main_src}{suffix}',
+        'cover': f'{base} --coverage -g {main_src}{suffix}',
     }
 
 
@@ -224,14 +225,34 @@ def rust_test(name:str, root:str, modules:list=None, deps:list=[], cc_deps:list=
     """
     crate_name = name.replace('-', '_') + '_test'
 
-    srcs = {
-        'main': [root],
-        'mods': modules or [],
-    }
+    srcs = {}
     if manifest:
         srcs['manifest'] = [manifest]
     if cc_deps:
         srcs['native'] = cc_deps
+
+    test_cmd = f'$TOOLS_PLEASE_RUST test --suite {name} -- $TEST'
+    test_tools = {
+        'please_rust': [CONFIG.RUST.PLEASE_RUST_TOOL],
+    }
+    # Only `plz cover` needs the llvm tools (llvm-profdata / llvm-cov), so
+    # gate the dependency on the build config like go-rules does.
+    if CONFIG.BUILD_CONFIG == 'cover':
+        test_cmd = f'$TOOLS_PLEASE_RUST test --suite {name} --coverage --llvm-tools $TOOLS_LLVM -- $TEST'
+        test_tools['llvm'] = [CONFIG.RUST.LLVM_TOOLS]
+
+    # plz excludes a test target's own srcs from coverage reports, but Rust
+    # unit tests recompile the library sources (tests live inside them), so
+    # they'd be dropped. Route the sources in through a non-test filegroup
+    # dep instead of srcs; they stage at the same paths, and the compile
+    # references the root by literal path. Not tag()-named: `_name#tag` deps
+    # are internal to plz and skipped by the coverage walk.
+    test_srcs = filegroup(
+        name = '_%s_srcs' % name,
+        srcs = [root] + (modules or []),
+    )
+    pkg = package_name()
+    main_src = f'{pkg}/{root}' if pkg else root
 
     return build_rule(
         name = name,
@@ -249,12 +270,11 @@ def rust_test(name:str, root:str, modules:list=None, deps:list=[], cc_deps:list=
             manifest = manifest,
             deps = deps,
             cc_deps = cc_deps,
+            main_src = main_src,
         ),
-        test_cmd = f'$TOOLS_PLEASE_RUST test --suite {name} -- $TEST',
-        test_tools = {
-            'please_rust': [CONFIG.RUST.PLEASE_RUST_TOOL],
-        },
-        deps = deps + cc_deps,
+        test_cmd = test_cmd,
+        test_tools = test_tools,
+        deps = deps + cc_deps + [test_srcs],
         tools = _rust_tools(link = True),
         needs_transitive_deps = True,
         visibility = visibility,

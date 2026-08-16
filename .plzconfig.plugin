@@ -68,3 +68,9 @@ DefaultValue = true
 Type = bool
 Help = Statically link the C runtime into rust_binary outputs by default, producing self-contained binaries like Go's.
 Inherit = true
+
+[PluginConfig "llvm_tools"]
+ConfigKey = LlvmTools
+DefaultValue = //third_party/rust:toolchain_llvm_tools
+Help = Build label of the llvm-tools directory (llvm-profdata, llvm-cov) used for coverage.
+Inherit = true

@@ -815,6 +815,7 @@ fn generate_compile_rule_with_buildscript(
     content.push_str("    cmd = {\n");
     content.push_str(&format!("        \"dbg\": \"{}\",\n", cmd_dbg));
     content.push_str(&format!("        \"opt\": \"{}\",\n", cmd_opt));
+    content.push_str(&format!("        \"cover\": \"{}\",\n", cmd_dbg));
     content.push_str("    },\n");
     content.push_str("    outs = {\n");
     content.push_str(&format!("        \"rlib\": [\"{}\"],\n", out_rlib));
@@ -900,6 +901,7 @@ fn generate_compile_rule(
     content.push_str("    cmd = {\n");
     content.push_str(&format!("        \"dbg\": \"{}\",\n", cmd_dbg));
     content.push_str(&format!("        \"opt\": \"{}\",\n", cmd_opt));
+    content.push_str(&format!("        \"cover\": \"{}\",\n", cmd_dbg));
     content.push_str("    },\n");
     content.push_str("    outs = {\n");
     content.push_str(&format!("        \"rlib\": [\"{}\"],\n", out_rlib));

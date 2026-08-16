@@ -135,6 +135,10 @@ pub struct CompileArgs {
     #[arg(long = "static")]
     pub static_crt: bool,
 
+    /// Instrument for coverage (-C instrument-coverage)
+    #[arg(long)]
+    pub coverage: bool,
+
     /// Build a test harness (passes --test to rustc)
     #[arg(long)]
     pub test: bool,
@@ -449,6 +453,14 @@ fn build_command(args: &CompileArgs) -> Result<Command> {
     if args.static_crt {
         cmd.arg("-C").arg("target-feature=+crt-static");
     }
+    if args.coverage {
+        cmd.arg("-C").arg("instrument-coverage");
+        // Coverage mappings record sources joined onto the absolute build
+        // sandbox cwd; remap it away so llvm-cov reports repo-relative paths.
+        if let Ok(cwd) = std::env::current_dir() {
+            cmd.arg(format!("--remap-path-prefix={}=", cwd.display()));
+        }
+    }
 
     // Debug/optimize flags
     if args.debug {
@@ -533,6 +545,7 @@ mod command_tests {
             cc: None,
             deps: vec![],
             native: vec![],
+            coverage: false,
             features: vec!["std".to_string()],
             renames: vec![],
             static_crt: false,
