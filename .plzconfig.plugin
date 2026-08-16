@@ -1,39 +1,7 @@
-[Please]
-version = 17.27.0
-
-[Build]
-path = /opt/rust-rules/toolchain/1.0/bin/:/bin:/usr/bin:/usr/local/bin
-timeout = 2000
-
-[Plugin "rust"]
-Target = //plugins:rust
-Rustc = //third_party/rust:toolchain_rustc
-StdLib = //third_party/rust:toolchain_stdlib
-RepoRoot = //third_party/rust:toolchain_target
-
-[Parse]
-preloadsubincludes = ///proto//build_defs:proto
-preloadsubincludes = ///shell//build_defs:shell
-preloadsubincludes = ///python//build_defs:python
-preloadbuilddefs = build_defs/rust_toolchain.build_defs
-preloadbuilddefs = build_defs/rust.build_defs
-preloadbuilddefs = build_defs/rust_crate.build_defs
-preloadbuilddefs = build_defs/rust_repo.build_defs
-
-[Plugin "shell"]
-Target = //plugins:shell
-
-[Plugin "cc"]
-Target = //plugins:cc
-
-[Plugin "proto"]
-Target = //plugins:proto
-ProtocTool = //third_party/proto:protoc
-LanguageDef = //build_defs/proto:rust_proto_lang
-
-[Plugin "python"]
-Target = //plugins:python
-DefaultInterpreter = python3
+; The config consumers of this plugin see (exported as .plzconfig by
+; //test:export and used by plugin releases). Dev-only config lives in
+; .plzconfig, which must keep these sections in sync (the e2e test catches
+; drift).
 
 [PluginDefinition]
 Name = rust
@@ -54,25 +22,6 @@ DefaultValue = //third_party/rust:toolchain_target
 Help = An absolute filepath of the repo root. Used for linking external dependencies.
 Inherit = true
 Optional = true
-
-[alias "rustc"]
-Desc = Runs the rustc binary and sets required env vars.
-Cmd = run //scripts:rustc
-Flag = ["--version", "-vV", "--explain"]
-
-[alias "cargo"]
-Desc = Runs the cargo binary and sets required env vars.
-Cmd = run //scripts:cargo
-Subcommand = ["build", "test", "run", "clean", "check", "new", "rustc"]
-Flag = ["--release", "--verbose", "--manifest-path"]
-PositionalLabels = true
-
-[alias "cargo-nightly"]
-Desc = Runs the cargo binary and sets required env vars.
-Cmd = run //scripts:cargo_nightly
-Subcommand = ["build", "test", "run", "clean", "check", "new", "rustc"]
-Flag = ["--release", "--verbose", "--manifest-path", "-Z"]
-PositionalLabels = true
 
 [PluginConfig "proto_plugin"]
 ConfigKey = ProtoPlugin
@@ -119,7 +68,3 @@ DefaultValue = true
 Type = bool
 Help = Statically link the C runtime into rust_binary outputs by default, producing self-contained binaries like Go's.
 Inherit = true
-
-[Plugin "e2e"]
-Target = //plugins:e2e
-PleaseVersion = 17.27.0

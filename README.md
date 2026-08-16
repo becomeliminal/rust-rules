@@ -6,7 +6,7 @@ First add the plugin to your project. In `plugins/BUILD`:
 ```python
 plugin_repo(
     name = "rust",
-    owner = "odonate",
+    owner = "becomeliminal",
     revision = "<Some git tag, commit, or other reference>",
 )
 ```
@@ -55,46 +55,79 @@ rust_test(
     ],
 )
 ```
-
-You can define third-party crates using `rust_crate`:
+Tests report individual results to Please (not just pass/fail). Integration
+tests are `rust_test` rules rooted at a file under `tests/`, depending on the
+library; documentation tests run with `rust_doc_test`:
 ```python
-subinclude("///rust//build_defs:rust")
-
-rust_crate(
-    name="libc",
-    crate="libc",
-    version="0.2.155",
-    build_script="build.rs",
-    edition="2015",
+rust_test(
+    name = "integration_test",
+    root = "tests/integration_test.rs",
+    deps = [":lib"],
 )
 
-rust_crate(
-    name="cfg_if",
-    crate="cfg-if",
-    version="1.0.0",
-    edition="2018",
-)
-
-rust_crate(
-    name="getrandom",
-    crate="getrandom",
-    version="0.2.15",
-    edition="2018",
-    features=["std"],
-    deps=[":cfg_if", ":libc"],
-)
-
-rust_crate(
-    name="rand_core",
-    crate="rand_core",
-    version="0.6.4",
-    edition="2018",
-    features=["alloc", "getrandom", "std"],
-    deps = [":getrandom"],
+rust_doc_test(
+    name = "doc_test",
+    crate_name = "lib",
+    root = "src/lib.rs",
+    deps = [":lib"],
 )
 ```
 
-To compile a binary, you can use `rust_binary`:
+You can define third-party crates using `rust_repo`. Only your direct
+dependencies need declaring — versions, features and transitive dependencies
+are resolved from each crate's `Cargo.toml`, the same way Cargo would:
+```python
+subinclude("///rust//build_defs:rust")
+
+rust_repo(
+    name = "serde",
+    crate = "serde",
+    version = "1.0.228",
+    features = ["derive"],
+)
+
+rust_repo(
+    name = "rand",
+    crate = "rand",
+    version = "0.8.5",
+)
+```
+
+To add a dependency (and everything it needs) straight from crates.io:
+```ini
+plz run //tools/please_rust -- lock --add serde@1
+```
+
+Or import an existing Cargo project wholesale from its lockfile:
+```ini
+plz run //tools/please_rust -- sync --import path/to/Cargo.lock
+```
+
+Both maintain the `rust_repo` declarations in `third_party/rust/BUILD` for
+you, including sha256 hashes so every download is verified. After editing
+declarations by hand, run `plz run //tools/please_rust -- sync` to re-resolve.
+
+To use a fork or an unpublished revision, fetch the crate from a git forge
+at a pinned revision instead of crates.io:
+```python
+rust_repo(
+    name = "anyhow",
+    crate = "anyhow",
+    version = "1.0.86",
+    git_repo = "dtolnay/anyhow",
+    git_revision = "1.0.86",
+)
+```
+(`sync --import` translates `git+https://github.com/...` lockfile sources
+automatically.)
+
+`rust_library` builds an `rlib` by default; `crate_type` also supports
+`proc-macro`, `dylib`, `cdylib` and `staticlib` for compiler plugins and
+C-ABI artifacts.
+
+To compile a binary, you can use `rust_binary`. Binaries statically link the
+C runtime by default (like Go), producing self-contained executables; opt out
+per rule with `static = False` or globally with the `DefaultStatic` config:
 ```python
 subinclude("///rust//build_defs:rust")
 
@@ -103,7 +136,7 @@ rust_binary(
     main = "src/main.rs",
     deps = [
         ":lib",
-        "//third_party/rust:<rust_crate_name>",
+        "//third_party/rust:<rust_repo_name>",
     ],
 )
 ```
@@ -166,7 +199,11 @@ StdLib = //third_party/rust:toolchain_stdlib
 ```
 
 ## General notes
-Rust Rules is based heavily on Cargo in its invocation of the `rustc` compiler. Care should be taken when defining third-party crates to ensure the correct depencies and their versions are supplied, required conditional compilation features are set, and correct Rust editions are used. This information can be found in the `Cargo.toml` file of the third-party crate. Unfortunately, at present, Rust Rules does not parse the `Cargo.toml` file to infer this information, so it must be supplied manually.
+Rust Rules replicates Cargo's build contract without ever invoking Cargo:
+crate tarballs are fetched as verified downloads, `Cargo.toml` files are
+parsed to infer dependencies, features, editions and build scripts, and
+resolution happens deterministically inside the build graph. See
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how this works internally.
 
 ## Contributing
 Contributions are welcome! Please open or submit a pull request with your changes. Ensure that your code follows the existing style and includes tests where applicable.
@@ -174,12 +211,8 @@ Contributions are welcome! Please open or submit a pull request with your change
 ### Extra Features for Contribution
 Here are some extra features that would be valuable additions to this project:
 
-- **Crate Types**: The `rust_crate` rule currently supports the following crate types `lib`, `rlib`, `proc-macro` and `bin`. Adding support for other crate types, would be useful. Other types to support: `staticlib`, `dylib`, `cdylib`.
+- **Crate Types**: `lib`, `rlib`, `proc-macro` and `bin` crates are supported. Adding support for `staticlib`, `dylib` and `cdylib` would be useful.
 
-- **Improved Linking**: Currently, there is a hacky method for getting the dependency directory for linking crates with the -L flag. A cleaner solution would enhance the build process.
-
-- **Codegen Flags**: Implementing support for the codegen `-C metadata` and `-C extra-filename` flags would better align with how Cargo fingerprints external crates and dependencies.
-
-- **Build Script Outputs**: Currently, only `cargo:rustc-cfg:` is supported in build scripts. Adding support for other outputs like `cargo:rustc-rerun-if-xxx`, `cargo:rustc-link-xxx`, and `cargo:rustc-env` would be beneficial. Additionally, parsing the `Cargo.toml` to check if any values should be overridden would provide more comprehensive functionality.
+- **C toolchain**: Build scripts that invoke a C compiler (the `cc` crate, `-sys` crates) currently rely on the host compiler. A declared, hermetic C toolchain would close this gap.
 
 - **Target (OS and Architecture) Compatibility**: This project has primarily been tested on unknown-linux-gnu x86_64 architecture. It would be nice to test and support other targets to ensure cross-platform compatibility.

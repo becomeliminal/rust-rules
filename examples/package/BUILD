@@ -25,3 +25,20 @@ rust_test(
         "src/sub.rs",
     ],  
 )
+
+rust_test(
+    name = "integration_test",
+    root = "tests/integration_test.rs",
+    deps = [":math"],
+)
+
+rust_doc_test(
+    name = "doc_test",
+    crate_name = "math",
+    root = "src/lib.rs",
+    deps = [":math"],
+    modules = [
+        "src/add.rs",
+        "src/sub.rs",
+    ],
+)

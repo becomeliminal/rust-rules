@@ -1,4 +1,9 @@
 
+/// Adds two to the given number.
+///
+/// ```
+/// assert_eq!(math::add::add_two(2), 4);
+/// ```
 pub fn add_two(a: i32) -> i32 {
     a + 2
 }
