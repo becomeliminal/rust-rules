@@ -647,14 +647,15 @@ fn generate_build_file(
     let crate_ident = lib_name.replace("-", "_");
     let normalized_name = format!("{}{}", crate_name.replace("-", "_"), suffix);
 
-    // The key a dependent names this crate by. The crate identity, not the
-    // package: it becomes the name passed to --extern, which is what the
-    // dependent's source writes. The qualifier says which declaration.
-    let crate_key = format!("{}{}", crate_ident, suffix);
+    // The key a dependent names this crate by. The crate identity alone, with
+    // no unit suffix: a build script writes `use cc::...` whether it is given
+    // the host unit or the target one, so a host unit calling itself cc_host
+    // is a crate nothing can import. The unit belongs in the qualifier, which
+    // is what tells two entries of the same crate apart.
     let ec_key = if qualifier.is_empty() {
-        crate_key.clone()
+        crate_ident.clone()
     } else {
-        format!("{}@{}", crate_key, qualifier)
+        format!("{}@{}{}", crate_ident, qualifier, suffix)
     };
 
 
@@ -1466,6 +1467,16 @@ mod tests {
         assert!(out.contains("glob([\"*\", \"**/*\"]"), "{}", out);
     }
 
+    /// A build script writes `use cc::...` whatever unit it is given, so the
+    /// host unit has to be the crate `cc` and not `cc_host`. 82 build scripts
+    /// in a hundred-crate graph failed on this one.
+    #[test]
+    fn host_unit_keeps_the_crate_name() {
+        let out = gen("lib", &[], &[], None, "_host");
+        assert!(out.contains("echo 'my_crate@third_party/crates/my_crate_host="), "{}", out);
+        assert!(!out.contains("echo 'my_crate_host@"), "{}", out);
+    }
+
     #[test]
     fn build_script_two_stage() {
         let out = gen("lib", &[], &[], Some("build/main.rs"), "");
@@ -1583,7 +1594,9 @@ mod tests {
         assert!(out.contains("name = \"my_crate_host\""));
         assert!(out.contains("--crate-name my_crate "));
         assert!(out.contains("libmy_crate-1_2_3_host.rlib"));
-        assert!(out.contains("echo 'my_crate_host@third_party/crates/my_crate=libmy_crate-1_2_3_host.rlib'"));
+        // The host unit is still the crate `my_crate`; only the qualifier and the
+        // artifact say it is the host one.
+        assert!(out.contains("echo 'my_crate@third_party/crates/my_crate_host=libmy_crate-1_2_3_host.rlib'"));
     }
 
     #[test]
