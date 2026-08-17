@@ -1395,6 +1395,7 @@ rust_resolve(
         "rand-0.7.3|rand|0.7.3||true|true",
         "rand_chacha-0.2.2|rand_chacha|0.2.2||false|true",
         "rand_core-0.5.1|rand_core|0.5.1||false|true",
+        "errno|errno|0.3.14||true|true",
     ],
 )
 
@@ -1655,4 +1656,12 @@ rust_repo(
     version = "0.5.1",
     hashes = ["90bde5296fc891b0cef12a6d03ddccc162ce7b2aff54160af9338f8d40df6d19"],
     indirect = True,
+)
+
+# Added by please_rust sync
+rust_repo(
+    name = "errno",
+    crate = "errno",
+    version = "0.3.14",
+    hashes = ["39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"],
 )

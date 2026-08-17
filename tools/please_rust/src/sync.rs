@@ -289,6 +289,19 @@ pub fn run_reporting(args: SyncArgs) -> Result<Vec<crate::resolve::MissingDep>> 
             Ok(other) => {
                 active_anywhere.extend(other.crates.keys().cloned());
                 active_anywhere.extend(other.host_crates.keys().cloned());
+                // A dependency only another platform reaches is missing there
+                // and nowhere here, so resolving one triple cannot see it.
+                // rustix needs errno on macOS and linux-raw-sys on linux; a
+                // linux-only view of the graph declares one and not the other.
+                for m in other.missing {
+                    if !missing_deps.iter().any(|d| d.package == m.package && d.requirer == m.requirer) {
+                        eprintln!(
+                            "sync: {} needs {} on {}, which is not declared",
+                            m.requirer, m.package, triple
+                        );
+                        missing_deps.push(m);
+                    }
+                }
             }
             Err(e) => eprintln!("sync: could not resolve for {}: {:#}", triple, e),
         }
