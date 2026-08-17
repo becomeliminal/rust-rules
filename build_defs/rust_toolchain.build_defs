@@ -84,6 +84,16 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
         binary = True,
         deps = [lib_rule],
     )
+    # rustc loads librustc_driver from ../lib next to the binary. Locally that
+    # comes along as a dependency of the rule above, but a remote worker stages
+    # only what an action names, so anything invoking rustc remotely needs to
+    # ask for this directly.
+    rustc_lib_rule = filegroup(
+        name = name + '_rustc_lib',
+        srcs = [extract_rule + '|rustc_lib'],
+        visibility = visibility,
+        binary = True,
+    )
     rustdoc_rule = filegroup(
         name = name + '_rustdoc',
         srcs = [extract_rule + '|rustdoc_bin'],

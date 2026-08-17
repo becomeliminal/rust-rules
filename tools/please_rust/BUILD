@@ -1,5 +1,29 @@
 subinclude("//build_defs:rust")
 
+def _bootstrap_tools():
+    tools = {
+        "rustc": [CONFIG.RUST.RUSTC],
+        "sysroot": [CONFIG.RUST.SYSROOT],
+        "cargo": [_cargo_tool()],
+    }
+    lib = _rustc_lib()
+    if lib:
+        tools["rustc_lib"] = [lib]
+    return tools
+
+
+def _rustc_lib():
+    """The directory holding librustc_driver, a sibling target of rustc.
+
+    Empty when rustc is configured as a filesystem path rather than a label,
+    in which case its libraries are wherever that path's toolchain put them.
+    """
+    rustc = CONFIG.RUST.RUSTC
+    if not rustc.startswith("//") and not rustc.startswith(":") and not rustc.startswith("@"):
+        return ""
+    return rustc.replace("_rustc", "_rustc_lib")
+
+
 def _cargo_tool():
     """Cargo for the bootstrap.
 
@@ -104,7 +128,9 @@ genrule(
         # resolves locally through the extracted toolchain's own layout, but a
         # remote worker stages only what the rule asks for, so point the
         # loader at it explicitly.
-        export LD_LIBRARY_PATH="$(dirname $TOOLS_RUSTC)/../lib:${LD_LIBRARY_PATH:-}"
+        # $TOOLS_RUSTC_LIB is the staged rustc/lib directory; the dirname
+        # fallback covers a rustc configured as a plain path.
+        export LD_LIBRARY_PATH="${TOOLS_RUSTC_LIB:-$(dirname $TOOLS_RUSTC)/../lib}:${LD_LIBRARY_PATH:-}"
 
         # Build release binary from the source directory
         $TOOLS_CARGO build --release --manifest-path tools/please_rust/Cargo.toml --target-dir $TMP_DIR/target 2>&1
@@ -116,11 +142,7 @@ genrule(
     # Take the toolchain from config rather than naming this repo's own: a
     # consumer building the tool from source already has a Rust toolchain, and
     # hardcoding ours made them download a second one.
-    tools = {
-        "rustc": [CONFIG.RUST.RUSTC],
-        "sysroot": [CONFIG.RUST.SYSROOT],
-        "cargo": [_cargo_tool()],
-    },
+    tools = _bootstrap_tools(),
     visibility = ["PUBLIC"],
 )
 
