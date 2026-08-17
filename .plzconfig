@@ -190,6 +190,7 @@ Inherit = true
 
 [PluginConfig "cargo_tool"]
 ConfigKey = CargoTool
-DefaultValue = //third_party/rust:toolchain_cargo
-Help = Cargo from the toolchain, used only by the bootstrap that breaks the egg (nothing else runs cargo).
+DefaultValue =
+Optional = true
+Help = Cargo from the toolchain, used only by the bootstrap that breaks the egg (nothing else runs cargo). Empty derives it from Rustc, whose sibling it is, so the bootstrap uses whichever toolchain you configured rather than downloading another.
 Inherit = true
