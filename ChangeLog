@@ -1,3 +1,13 @@
+Version 0.4.1
+-------------
+  * The bootstrap takes rustc, the sysroot and cargo from config rather than
+    naming this repo's own toolchain, so a consumer building the tool from
+    source no longer downloads a second Rust toolchain.
+  * README and TROUBLESHOOTING recommend pinning the released binary for CI
+    and remote execution: the from-source default runs the cargo bootstrap,
+    which wants network, and parsing a package that touches a crate subrepo
+    has to build the tool first.
+
 Version 0.4.0
 -------------
 Consumer-side plumbing, from the labs integration.
