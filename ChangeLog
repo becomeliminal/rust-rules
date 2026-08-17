@@ -1,3 +1,9 @@
+Version 0.4.5
+-------------
+  * Every action that runs rustc stages its driver library, not just the
+    bootstrap: crate compiles and build scripts failed with exit 127 on a
+    remote worker, which stages only what an action names.
+
 Version 0.4.4
 -------------
   * rust_toolchain exposes <name>_rustc_lib, and the bootstrap names it as a
