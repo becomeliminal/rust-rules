@@ -40,9 +40,12 @@ binary-link time.
       header → bindings → rust_test end to end
 
 ### Platforms and configurations
-- [ ] Per-platform toolchain URLs in `rust_toolchain` (darwin-aarch64,
-      darwin-x86_64, linux-aarch64) + macOS CI validation (plz itself is
-      cross-platform; this is toolchain plumbing)
+- [ ] macOS validation. The toolchain URL follows the host and a
+      declaration carries a hash per platform, so a Mac fetches the tarball
+      it can run; the release workflow builds on macos-latest, which is how
+      the two bugs that made a Mac checkout unbuildable were found. Still
+      wanted: a green native macOS build of the whole repo, not just of the
+      tool. darwin_amd64 is not built (macos-13 runners are retiring)
 - [x] Cross-compilation: `plz build --arch darwin_arm64 //...`.
       `rust_toolchain` installs the `rust-std` for whatever `--arch` names
       (plus anything in `architectures`), and the triple threads through
@@ -111,15 +114,15 @@ binary-link time.
       it; asked of the labs pilot on 2026-08-17. The entry-point toolchain
       makes the rustdoc and llvm cases structurally the same as the compile
       path that was verified remotely, which is an argument, not a run
-- [ ] Upstream plz WaitForPackage race (found 2026-08): a lost-wakeup
+- [x] Upstream plz WaitForPackage race (found 2026-08): a lost-wakeup
       TOCTOU on `packageWaits` in src/core/state.go hangs builds when many
       packages concurrently subinclude the plugin's build_defs — all plz
       versions incl. master. Reproduced (1/12 cold builds on a 40-package
       consumer), root-caused, three-line AddOrGet fix written and validated
       (0/16 with a patched plz). Our own repo dodges it via
       preloadbuilddefs. Fix + regression test submitted upstream as
-      thought-machine/please#3576; until it lands in a release, large
-      plugin consumers can rarely hit a wedged parse
+      thought-machine/please#3576 and **merged**; until it lands in a
+      released plz, large plugin consumers can rarely hit a wedged parse
 - [ ] Remote execution audit (absolute-path canonicalization, cwd walks)
 - [ ] Scale test: 1k+ crate graph through sync/resolve/build
 - [x] Subrepo name collision, reproduced and fixed (2026-08). plz derives
@@ -162,7 +165,10 @@ binary-link time.
       `--ignore-msrv` opts out. Verified end to end: clap resolves to the
       4.5 line on rustc 1.97 and to 4.0.32 with the older dependency stack
       on rustc 1.63
-- [ ] Multi-platform lock entries (per-triple resolution outputs)
+- [ ] Multi-platform lock entries (per-triple resolution outputs). The
+      declaration set already covers every platform in `--targets`; what is
+      missing is carrying more than one triple's resolved entries in the
+      lock, so a build for another platform reads rather than re-solves
 
 ### Dependency management
 - [ ] `sync --upgrade` (`cargo update` parity: bump all to latest compatible)

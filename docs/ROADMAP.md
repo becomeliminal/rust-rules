@@ -73,9 +73,10 @@ diagnostics — which they already are and do. The remaining gaps:
   overflow-checks, strip, per-dep overrides. Plan: profile knobs on the
   plugin config mapped into plz's dbg/opt configurations, with per-target
   overrides.
-- **Cross-compilation / more targets**: wasm, musl, aarch64, embedded
-  (per-target `rust-std`, `build-std`). plz has native cross-arch labels to
-  hang this on.
+- **More targets**: wasm, musl, embedded (`build-std`). Cross-compilation
+  itself shipped in v0.5.0 — `--arch` picks the platform, `rust_toolchain`
+  installs its `rust-std` — so each new target is a matter of a `rust-std`
+  and, for wasm, the bindgen-shaped rule around it.
 - **Nightly / channel toolchains**: the toolchain rule takes any version;
   channels with moving hashes need a policy.
 
@@ -145,10 +146,12 @@ so cross-platform work has no consumer to validate it. Revisit when a real
 target appears; the host/target unit split already did the hard part.
 
 
-11. **Multi-target resolution + cross-compilation** (musl, aarch64, wasm)
-  on plz's cross-arch machinery — the unit split already did the hard
-  part. (L)
-12. **macOS host support**, validated in CI. (M)
+11. **More targets** (musl, wasm, embedded) now that cross-compilation
+  itself works: each needs a `rust-std` and, for wasm, a bindgen-shaped
+  rule. (M)
+12. **macOS host support**: the release workflow builds there and the
+  toolchain resolves per host; what is missing is a green native build of
+  the whole repo. (M)
 13. **Nightly/channel toolchains.** (S)
 
 ### Phase 4 — Proof (make the "faster than Cargo" claim with numbers)
