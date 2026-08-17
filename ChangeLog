@@ -1,3 +1,21 @@
+Version 0.4.0
+-------------
+Consumer-side plumbing, from the labs integration.
+
+  * Generated subrepo configs carry no cross-repo build labels. Resolving
+    those while reading a subrepo config crashes Please under remote
+    execution; they were also unread, and hardcoded both the third-party
+    path and a toolchain name prefix.
+  * Config values that already name a subrepo are no longer rewritten into
+    the consuming repo, so the PleaseRustTool default resolves and consumers
+    need no prebuilt tool pin of their own.
+  * rust_toolchain maps arm64 to aarch64 (Apple Silicon).
+  * rust_resolve derives the host triple instead of defaulting to linux, and
+    sync no longer writes one into the rule.
+  * Platform-gated dependencies in the standalone path are evaluated with
+    cfg-expr rather than substring matching.
+  * sync names declarations no root reaches.
+
 Version 0.3.4
 -------------
   * Declarations no root reaches are built with their default features,
