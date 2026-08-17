@@ -322,11 +322,15 @@ CCTool = //third_party/cc:toolchain
 ```
 
 ### PleaseRustTool
-The `please_rust` binary. The default builds it from source inside the
-plugin, which needs a Rust toolchain and, because that bootstrap is the
-cargo egg-breaker, network access at build time. That is fine for trying
-the plugin out, but for CI — especially with remote execution — pin the
-released binary instead, which is hash-verified and downloads in seconds:
+The `please_rust` binary. The default is a hash-pinned download of a
+released one, per platform, the way go-rules ships `please_go`: nothing to
+build, no toolchain, no cargo, and it works under remote execution. A
+platform with no published binary yet falls back to building it from
+source, which is a cargo build needing network access — correct, but slow
+enough that you will notice.
+
+Point it at your own build or your own pin if you would rather not depend
+on the release:
 
 ```python
 # third_party/rust/BUILD
