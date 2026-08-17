@@ -102,21 +102,35 @@ def _dep_names(deps:list):
         if name.startswith('_'):
             name = name[1:]
         parts = name.split('-')
-        version = ''
         if len(parts) > 1 and parts[-1][0] in '0123456789':
-            version = parts[-1]
             name = '-'.join(parts[:-1])
         crate = name.replace('-', '_')
-        if version:
-            # Name the artifact, not just the crate: with two versions of one
-            # crate in the graph both answer to `syn`, and picking by name
-            # alone links against whichever was listed last rather than the
-            # one this rule asked for.
-            tag = version.replace('.', '_')
-            names += ['%s=lib%s-%s' % (crate, crate, tag)]
-        else:
-            names += [crate]
+        # Name the declaration, not just the crate. Two versions of one crate
+        # both answer to `hashbrown`, so a bare name cannot say which this
+        # rule asked for, and the choice falls to whichever entry came last.
+        # The qualifier is the dep's own package and name, which is what the
+        # crate wrote into its externconfig.
+        label = canonicalise(dep)
+        label_parts = label.split(':')
+        pkg_parts = label_parts[0].split('//')
+        pkg = pkg_parts[-1]
+        target_parts = label_parts[-1].split('#')
+        target = target_parts[0]
+        if target.startswith('_'):
+            target = target.replace('_', '', 1)
+        qualifier = pkg + '/' + target if pkg else target
+        names += ['%s@%s' % (crate, qualifier)]
     return names
+
+
+def _self_qualifier(name:str):
+    """How dependents will name this rule: its package and rule name.
+
+    A dependent derives the same string from the label it wrote, so the two
+    agree without either having to know the other's version.
+    """
+    pkg = package_name()
+    return pkg + '/' + name if pkg else name
 
 
 def _profile_flags(optimised:bool):
@@ -148,7 +162,7 @@ def _profile_flags(optimised:bool):
     return ' '.join(args) + ' '
 
 
-def _compile_cmds(crate_name:str, edition:str, crate_type:str, emit:str, features:list=None, test:bool=False, write_externconfig:bool=False, manifest:str=None, deps:list=None, lib_file:str='', static:bool=False, cc_deps:list=None, native_files:list=None, main_src:str='$SRCS_MAIN', pipeline_rmeta:bool=False, extra_flags:str=''):
+def _compile_cmds(crate_name:str, edition:str, crate_type:str, emit:str, features:list=None, test:bool=False, write_externconfig:bool=False, manifest:str=None, deps:list=None, lib_file:str='', static:bool=False, cc_deps:list=None, native_files:list=None, main_src:str='$SRCS_MAIN', pipeline_rmeta:bool=False, extra_flags:str='', qualifier:str=''):
     """Returns the {dbg, opt} command dict for compiling a crate via please_rust.
 
     Direct deps get --extern (by crate name, from --dep filtering); transitive
@@ -167,7 +181,10 @@ def _compile_cmds(crate_name:str, edition:str, crate_type:str, emit:str, feature
     target_arg = target_flag(crate_type)
     base = f'{_AGGREGATE_EXTERNCONFIGS} && $TOOLS_PLEASE_RUST compile --externconfig externconfig {rmeta_arg}{target_arg}{extra_args}{manifest_arg}{dep_args}{cc_arg}{static_arg}{native_arg}--rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --crate-name {crate_name} --edition {edition} --crate-type {crate_type} --emit {emit} {test_arg}{feature_args}'
     lib_file = lib_file or f'lib{crate_name}.rlib'
-    externconfig_lines = [f'{crate_name}={lib_file}']
+    # Qualified by the rule that produced it, so a dependent naming this
+    # target gets this crate rather than another version of the same name.
+    key = f'{crate_name}@{qualifier}' if qualifier else crate_name
+    externconfig_lines = [f'{key}={lib_file}']
     for f in (native_files or []):
         externconfig_lines += [f'native={f}']
     echo_lines = '; '.join([f"echo '{line}' >> $OUTS_EXTERNCONFIG" for line in externconfig_lines])
@@ -279,6 +296,7 @@ def rust_library(name:str, root:str, crate_name:str="", crate_type:str="rlib", m
                 deps = deps,
                 cc_deps = cc_deps,
                 native_files = native_files,
+                qualifier = _self_qualifier(name),
             ),
             deps = deps + cc_deps,
             requires = ['rust_rmeta'],
@@ -303,6 +321,7 @@ def rust_library(name:str, root:str, crate_name:str="", crate_type:str="rlib", m
                 lib_file = f'lib{crate_name}.rmeta',
                 deps = deps,
                 pipeline_rmeta = True,
+                qualifier = _self_qualifier(name),
             ),
             deps = deps,
             requires = ['rust_rmeta'],
@@ -338,6 +357,7 @@ def rust_library(name:str, root:str, crate_name:str="", crate_type:str="rlib", m
             deps = deps,
             cc_deps = cc_deps,
             native_files = native_files,
+            qualifier = _self_qualifier(name),
         ),
         deps = deps + cc_deps,
         tools = _rust_tools(link = crate_type != 'rlib'),

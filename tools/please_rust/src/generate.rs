@@ -130,6 +130,15 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         .unwrap_or_else(|| "src/lib.rs".to_string());
     let has_lib = manifest.lib.is_some() || args.src_root.join(&lib_path).exists();
 
+    // Cargo names the crate after [lib] name when it is set, not after the
+    // package: md-5 builds a crate called md5, and a dependent writing
+    // `use md5::...` finds nothing if the package name is used instead.
+    let lib_name = manifest
+        .lib
+        .as_ref()
+        .and_then(|l| l.name.clone())
+        .unwrap_or_else(|| crate_name.to_string());
+
     // Binaries: explicit [[bin]] entries plus cargo's auto-discovered src/main.rs
     let mut bins: Vec<(String, String)> = Vec::new();
     for b in &manifest.bin {
@@ -279,6 +288,7 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         &build_target,
         cross,
         &qualifier,
+        &lib_name,
     );
 
     // Bin-only crates: the crate-named target aliases the (first) binary so
@@ -345,6 +355,7 @@ pub fn run(args: GenerateArgs) -> Result<()> {
             &build_target,
             false,
             &qualifier,
+            &lib_name,
         ));
     }
 
@@ -608,6 +619,7 @@ fn generate_build_file(
     build_target: &str,
     cross: bool,
     qualifier: &str,
+    lib_name: &str,
 ) -> String {
     let mut content = String::new();
     // Proc macros are loaded into rustc itself, so they are built for the
@@ -619,15 +631,21 @@ fn generate_build_file(
     };
     let target_arg = target_arg.as_str();
 
-    let crate_ident = crate_name.replace("-", "_");
-    let normalized_name = format!("{}{}", crate_ident, suffix);
+    // Two identities, deliberately: the rules and subrepos are named for the
+    // package (which is what a dependent writes as a label), while rustc, the
+    // artifacts and the externconfig key use the crate name (which is what a
+    // dependent writes in its source).
+    let crate_ident = lib_name.replace("-", "_");
+    let normalized_name = format!("{}{}", crate_name.replace("-", "_"), suffix);
 
-    // The key a dependent names this crate by: crate name for anyone who does
-    // not care which declaration, crate@subrepo for anyone who does.
+    // The key a dependent names this crate by. The crate identity, not the
+    // package: it becomes the name passed to --extern, which is what the
+    // dependent's source writes. The qualifier says which declaration.
+    let crate_key = format!("{}{}", crate_ident, suffix);
     let ec_key = if qualifier.is_empty() {
-        normalized_name.clone()
+        crate_key.clone()
     } else {
-        format!("{}@{}", normalized_name, qualifier)
+        format!("{}@{}", crate_key, qualifier)
     };
 
 
@@ -1352,6 +1370,7 @@ mod tests {
             "x86_64-unknown-linux-gnu",
             false,
             "third_party/crates/my_crate",
+            "my-crate",
         )
     }
 
@@ -1389,6 +1408,39 @@ mod tests {
             externconfig_name("libserde_derive-1_0_229_host.so", ""),
             "serde_derive-1_0_229_host.externconfig"
         );
+    }
+
+    /// Cargo names a crate after [lib] name when it is set, not after the
+    /// package. md-5 builds a crate called md5, and postgres-protocol writes
+    /// `use md5::...` - naming it after the package makes that unresolvable
+    /// while everything still looks correctly wired.
+    #[test]
+    fn lib_name_overrides_the_package_name() {
+        let out = generate_build_file(
+            "md-5",
+            "0.11.0",
+            &cargo_toml::Edition::E2021,
+            "lib",
+            &[],
+            &[],
+            &[],
+            None,
+            "src/lib.rs",
+            "",
+            &[],
+            false,
+            true,
+            "x86_64-unknown-linux-gnu",
+            false,
+            "third_party/crates/md_5",
+            "md5",
+        );
+        // rustc, the artifact and the extern name all use the crate identity
+        assert!(out.contains("--crate-name md5"), "{}", out);
+        assert!(out.contains("libmd5-0_11_0.rlib"), "{}", out);
+        assert!(out.contains("echo 'md5@third_party/crates/md_5=libmd5-0_11_0.rlib'"), "{}", out);
+        // ...while the rule keeps the package name, which is what a label says
+        assert!(out.contains("name = \"md_5\""), "{}", out);
     }
 
     #[test]
@@ -1435,6 +1487,7 @@ mod tests {
             "aarch64-apple-darwin",
             true,
             "third_party/crates/my_crate",
+            "my-crate",
         )
     }
 
@@ -1493,6 +1546,7 @@ mod tests {
             "x86_64-unknown-linux-gnu",
             false,
             "third_party/crates/my_crate",
+            "my-crate",
         );
         assert!(out.contains("\"dep_metadata\": ["));
         assert!(out.contains("///third_party/rust/libz_sys//:_libz_sys_build_script|buildscript"));

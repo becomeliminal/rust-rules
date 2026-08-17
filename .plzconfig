@@ -7,6 +7,10 @@ timeout = 2000
 
 [Plugin "rust"]
 Target = //plugins:rust
+; Build the tool from source while the rules and the tool are changing
+; together. A pinned release cannot generate rules for a version of the rules
+; that is not released yet, and releases are for when everything works.
+PleaseRustTool = //tools/please_rust:bootstrap
 ; This repo keeps its own crates in third_party/crates so their subrepo
 ; names cannot collide with a consumer's third_party/rust ones
 CriterionDep = //third_party/crates:criterion
