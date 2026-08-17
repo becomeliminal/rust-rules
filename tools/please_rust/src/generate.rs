@@ -558,11 +558,15 @@ fn resolve_build_dependencies(
     let mut deps = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
-    // Process build-dependencies
-    for (name, _dep) in &manifest.build_dependencies {
-        let normalized_name = name.replace("-", "_");
-        if seen.insert(normalized_name.clone()) {
-            let target = subrepo_label(third_party_folder, &normalized_name, &normalized_name);
+    // Process build-dependencies. A renamed one (package = "...") is declared
+    // under the real package but imported under the alias, exactly as for
+    // ordinary dependencies - wasm-bindgen's build script imports
+    // rustversion_compat, which is the rustversion crate.
+    for (name, dep) in &manifest.build_dependencies {
+        let package_name = dep.package().unwrap_or(name);
+        let normalized_pkg = package_name.replace("-", "_");
+        if seen.insert(name.replace("-", "_")) {
+            let target = subrepo_label(third_party_folder, &normalized_pkg, &normalized_pkg);
             deps.push((name.clone(), target));
         }
     }
@@ -572,10 +576,11 @@ fn resolve_build_dependencies(
         let applies = crate::sync::target_applies(target_cfg, target_triple);
 
         if applies {
-            for (name, _dep) in &target_deps.build_dependencies {
-                let normalized_name = name.replace("-", "_");
-                if seen.insert(normalized_name.clone()) {
-                    let target = subrepo_label(third_party_folder, &normalized_name, &normalized_name);
+            for (name, dep) in &target_deps.build_dependencies {
+                let package_name = dep.package().unwrap_or(name);
+                let normalized_pkg = package_name.replace("-", "_");
+                if seen.insert(name.replace("-", "_")) {
+                    let target = subrepo_label(third_party_folder, &normalized_pkg, &normalized_pkg);
                     deps.push((name.clone(), target));
                 }
             }
@@ -1005,7 +1010,19 @@ fn generate_build_script_rule(
         .iter()
         .map(|f| format!("--feature {}", f))
         .collect();
-    let feature_str = feature_args.join(" ");
+    let mut feature_str = feature_args.join(" ");
+
+    // A build-dependency declared with package = "..." is imported under its
+    // alias; the externconfig only knows the real crate, so name the pairing.
+    for (name, target) in build_deps {
+        let alias = name.replace('-', "_");
+        if let Some(pkg) = target.rsplit(':').next() {
+            let real = pkg.strip_suffix("_host").unwrap_or(pkg);
+            if alias != real {
+                feature_str.push_str(&format!(" --rename {}={}", alias, real));
+            }
+        }
+    }
 
     // Aggregate direct build-dependencies' externconfigs only (transitive
     // ones can contain colliding entries for other versions of a crate)
@@ -1505,6 +1522,34 @@ mod tests {
             "",
         );
         assert!(!out.contains("--rename proc_macro2=proc_macro2_host"), "{}", out);
+    }
+
+    /// A build-dependency declared with package = "..." is imported under
+    /// its alias. wasm-bindgen's build script imports rustversion_compat,
+    /// which is the rustversion crate, and without the pairing the script
+    /// does not compile.
+    #[test]
+    fn renamed_build_dependencies_are_paired() {
+        let out = generate_build_file(
+            "my-crate",
+            "1.2.3",
+            &cargo_toml::Edition::E2021,
+            "lib",
+            &[],
+            &[],
+            &[("rustversion_compat".to_string(), "///third_party/crates/rustversion//:rustversion".to_string())],
+            Some("build.rs"),
+            "src/lib.rs",
+            "",
+            &[],
+            false,
+            true,
+            "x86_64-unknown-linux-gnu",
+            false,
+            "third_party/crates/my_crate",
+            "my-crate",
+        );
+        assert!(out.contains("--rename rustversion_compat=rustversion"), "{}", out);
     }
 
     #[test]

@@ -333,6 +333,42 @@ pub fn resolve_entries(entries: &[EntryInput], target: &str) -> Result<LockFile>
         }
     }
 
+    // Duality is contagious. Sharing one artifact between units is only sound
+    // if everything it links is also shared: quote's features are identical in
+    // both units, but proc-macro2's are not, so a single quote would embed the
+    // target proc-macro2 while syn's host unit embeds the host one - and two
+    // proc_macro2::TokenStream types that are not the same type is exactly
+    // what rustc then complains about. Anything reaching a dual crate is
+    // itself dual.
+    loop {
+        let mut added = false;
+        for i in 0..nodes.len() {
+            if dual.contains(&i)
+                || !nodes[i].unit(Unit::Target).activated
+                || !nodes[i].unit(Unit::Host).activated
+            {
+                continue;
+            }
+            let reaches_dual = nodes[i].deps.iter().any(|d| {
+                if d.optional
+                    && !nodes[i].unit(Unit::Host).enabled_optional_deps.contains(&d.name)
+                {
+                    return false;
+                }
+                resolver
+                    .select(&d.package, d.req.as_ref(), &nodes)
+                    .map_or(false, |c| dual.contains(&c))
+            });
+            if reaches_dual {
+                dual.insert(i);
+                added = true;
+            }
+        }
+        if !added {
+            break;
+        }
+    }
+
     let mut crates = BTreeMap::new();
     let mut host_crates = BTreeMap::new();
     for (i, n) in nodes.iter().enumerate() {

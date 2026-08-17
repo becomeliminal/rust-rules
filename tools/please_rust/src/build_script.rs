@@ -89,6 +89,12 @@ pub struct BuildScriptArgs {
     #[arg(long)]
     pub externconfig: Option<PathBuf>,
 
+    /// Dependency renames as alias=crate, for build-dependencies declared
+    /// with package = "...". wasm-bindgen's build script imports
+    /// rustversion_compat, which is the rustversion crate.
+    #[arg(long = "rename")]
+    pub renames: Vec<String>,
+
     /// C toolchain: either a cc binary or a directory containing cc/c++/ar/ranlib
     #[arg(long)]
     pub cc: Option<PathBuf>,
@@ -232,6 +238,16 @@ fn compile_build_script(
                     // Search for the file
                     if let Some(path) = find_file_recursive(".", filename.trim()) {
                         cmd.arg("--extern").arg(format!("{}={}", name, path.display()));
+                        // A renamed dependency is imported under its alias as
+                        // well, which is the only name its source knows.
+                        for rename in &args.renames {
+                            if let Some((alias, real)) = rename.split_once('=') {
+                                if real == name {
+                                    cmd.arg("--extern")
+                                        .arg(format!("{}={}", alias, path.display()));
+                                }
+                            }
+                        }
                         if let Some(dir) = path.parent() {
                             if !dir.as_os_str().is_empty() {
                                 cmd.arg("-L").arg(dir);
@@ -800,6 +816,7 @@ mod env_tests {
             sysroot: None,
             search_paths: vec![],
             externconfig: None,
+            renames: vec![],
             cc: None,
             dep_metadata: vec![],
         }
@@ -926,6 +943,7 @@ mod run_e2e_tests {
             sysroot: None,
             search_paths: vec![],
             externconfig: None,
+            renames: vec![],
             cc: None,
             dep_metadata: vec![],
         })
@@ -963,6 +981,7 @@ mod run_e2e_tests {
             sysroot: None,
             search_paths: vec![],
             externconfig: None,
+            renames: vec![],
             cc: None,
             dep_metadata: vec![],
         })
