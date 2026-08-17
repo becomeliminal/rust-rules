@@ -1,3 +1,8 @@
+Version 0.4.6
+-------------
+  * The clippy and rustfmt copies create their destination directory, which
+    a remote worker does not provide.
+
 Version 0.4.5
 -------------
   * Every action that runs rustc stages its driver library, not just the
