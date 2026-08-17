@@ -8,51 +8,90 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
+  # One job per platform consumers can download the tool for. The linux build
+  # also runs the test suite and is what gates the release; the darwin builds
+  # are allowed to fail so a runner problem on a platform nobody has validated
+  # yet cannot hold up a release. Remove continue-on-error once they have run
+  # green a few times.
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux_amd64
+            runs-on: ubuntu-latest
+            gating: true
+          - platform: darwin_arm64
+            runs-on: macos-latest
+            gating: false
+          - platform: darwin_amd64
+            runs-on: macos-13
+            gating: false
+    runs-on: ${{ matrix.runs-on }}
+    continue-on-error: ${{ !matrix.gating }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Build everything
+        if: matrix.gating
         run: ./pleasew build -p -v notice //... --log_file plz-out/log/build.log
 
       - name: Run tests
+        if: matrix.gating
         run: ./pleasew test -p -v notice --log_file plz-out/log/test.log
 
-      # The tool consumers download: statically linked, so it runs anywhere
-      # without matching the builder's libc.
+      # The tool consumers download: statically linked on linux, so it runs
+      # anywhere without matching the builder's libc.
       - name: Build the please_rust binary
         run: ./pleasew build -p -v notice -c opt //tools/please_rust:please_rust
 
       - name: Stage release assets
         run: |
           mkdir -p release
-          cp plz-out/bin/tools/please_rust/please_rust release/please_rust-linux_amd64
-          chmod +x release/please_rust-linux_amd64
-          file release/please_rust-linux_amd64
-          (cd release && sha256sum please_rust-linux_amd64 > please_rust-linux_amd64.sha256)
-          cat release/please_rust-linux_amd64.sha256
+          cp plz-out/bin/tools/please_rust/please_rust release/please_rust-${{ matrix.platform }}
+          chmod +x release/please_rust-${{ matrix.platform }}
+          file release/please_rust-${{ matrix.platform }}
+          (cd release && shasum -a 256 please_rust-${{ matrix.platform }} > please_rust-${{ matrix.platform }}.sha256)
+          cat release/please_rust-${{ matrix.platform }}.sha256
 
-      # The plugin's config documents the tool's hash; a mismatch means the
-      # release would not verify for consumers, so fail loudly here.
-      - name: Show hash for the release notes
+      # The hash pinned in tools/please_rust/BUILD has to match what was
+      # published, or consumers cannot verify the download.
+      - name: Show hash for the tool pin
         run: |
-          echo "PleaseRustTool sha256:"
-          cut -d' ' -f1 release/please_rust-linux_amd64.sha256
+          echo "PleaseRustTool ${{ matrix.platform }} sha256:"
+          cut -d' ' -f1 release/please_rust-${{ matrix.platform }}.sha256
 
-      - name: Publish release
-        uses: softprops/action-gh-release@v2
+      - name: Upload assets
+        uses: actions/upload-artifact@v4
         with:
-          files: |
-            release/please_rust-linux_amd64
-            release/please_rust-linux_amd64.sha256
-          generate_release_notes: true
-          fail_on_unmatched_files: true
+          name: release-${{ matrix.platform }}
+          path: release/
 
       - name: Archive logs
-        if: always()
+        if: always() && matrix.gating
         uses: actions/upload-artifact@v4
         with:
           name: release-logs
           path: plz-out/log
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Collect assets
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: assets
+          merge-multiple: true
+
+      - name: List what is being published
+        run: ls -l assets
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: assets/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
