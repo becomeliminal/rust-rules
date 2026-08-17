@@ -9,10 +9,15 @@ permissions:
 
 jobs:
   # One job per platform consumers can download the tool for. The linux build
-  # also runs the test suite and is what gates the release; the darwin builds
-  # are allowed to fail so a runner problem on a platform nobody has validated
-  # yet cannot hold up a release. Remove continue-on-error once they have run
+  # also runs the test suite and is what gates the release; the darwin build
+  # is allowed to fail so a runner problem on a platform nobody has validated
+  # yet cannot hold up a release. Remove continue-on-error once it has run
   # green a few times.
+  #
+  # darwin_amd64 is not built: it needs macos-13, whose runners are being
+  # retired and sat queued long enough to hold up a release even though the
+  # job was allowed to fail. Intel Macs can build the tool from source until
+  # someone needs the binary enough to cross-compile it from an arm64 runner.
   build:
     strategy:
       fail-fast: false
@@ -23,9 +28,6 @@ jobs:
             gating: true
           - platform: darwin_arm64
             runs-on: macos-latest
-            gating: false
-          - platform: darwin_amd64
-            runs-on: macos-13
             gating: false
     runs-on: ${{ matrix.runs-on }}
     continue-on-error: ${{ !matrix.gating }}
