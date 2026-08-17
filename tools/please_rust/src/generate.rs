@@ -705,8 +705,11 @@ fn generate_build_file(
     for (name, target) in deps {
         let dep_norm = name.replace('-', "_");
         if let Some(pkg) = target.rsplit(':').next() {
-            if dep_norm != pkg {
-                feature_str.push_str(&format!(" --rename {}={}", dep_norm, pkg));
+            // A host unit's target is named X_host but the crate it provides
+            // is X, so renaming to X_host asks for a crate nothing declares.
+            let real = pkg.strip_suffix("_host").unwrap_or(pkg);
+            if dep_norm != real {
+                feature_str.push_str(&format!(" --rename {}={}", dep_norm, real));
             }
         }
     }
@@ -860,8 +863,12 @@ fn generate_rmeta_rule(
     content.push_str(&format!("    name = \"_{}#rmeta\",\n", normalized_name));
     content.push_str("    srcs = {\n");
     content.push_str(&format!("        \"main\": [\"{}\"],\n", lib_path));
-    content.push_str(&format!("        \"mods\": glob([\"src/**\", \"*.rs\", \"**/*.rs\", \"build/**\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\"], allow_empty=True),\n", lib_path));
-    content.push_str("        \"data\": glob([\"*.md\", \"LICENSE*\", \"examples/**/*\"], allow_empty=True),\n");
+    // The whole package, the way cargo has it. Guessing at which files a
+    // crate reads does not work: sysinfo includes md_doc/*.md into its docs
+    // and icu_*_data includes data/*.rs.data, and neither is reachable from a
+    // glob written around src. Non-Rust files cost nothing to stage and are
+    // exactly what include_str! and include! reach for.
+    content.push_str(&format!("        \"mods\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\"], allow_empty=True),\n", lib_path));
     content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
     if !deps.is_empty() {
         content.push_str("        \"externconfigs\": [\n");
@@ -1169,8 +1176,12 @@ fn generate_compile_rule_with_buildscript(
     content.push_str(&format!("    name = \"{}\",\n", rule_name));
     content.push_str("    srcs = {\n");
     content.push_str(&format!("        \"main\": [\"{}\"],\n", lib_path));
-    content.push_str(&format!("        \"mods\": glob([\"src/**\", \"*.rs\", \"**/*.rs\", \"build/**\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\"], allow_empty=True),\n", lib_path));
-    content.push_str("        \"data\": glob([\"*.md\", \"LICENSE*\", \"examples/**/*\"], allow_empty=True),\n");
+    // The whole package, the way cargo has it. Guessing at which files a
+    // crate reads does not work: sysinfo includes md_doc/*.md into its docs
+    // and icu_*_data includes data/*.rs.data, and neither is reachable from a
+    // glob written around src. Non-Rust files cost nothing to stage and are
+    // exactly what include_str! and include! reach for.
+    content.push_str(&format!("        \"mods\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\"], allow_empty=True),\n", lib_path));
     content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
     if !deps.is_empty() {
         content.push_str("        \"externconfigs\": [\n");
@@ -1262,8 +1273,12 @@ fn generate_compile_rule(
     content.push_str(&format!("    name = \"{}\",\n", rule_name));
     content.push_str("    srcs = {\n");
     content.push_str(&format!("        \"main\": [\"{}\"],\n", lib_path));
-    content.push_str(&format!("        \"mods\": glob([\"src/**\", \"*.rs\", \"**/*.rs\", \"build/**\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\"], allow_empty=True),\n", lib_path));
-    content.push_str("        \"data\": glob([\"*.md\", \"LICENSE*\", \"examples/**/*\"], allow_empty=True),\n");
+    // The whole package, the way cargo has it. Guessing at which files a
+    // crate reads does not work: sysinfo includes md_doc/*.md into its docs
+    // and icu_*_data includes data/*.rs.data, and neither is reachable from a
+    // glob written around src. Non-Rust files cost nothing to stage and are
+    // exactly what include_str! and include! reach for.
+    content.push_str(&format!("        \"mods\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\"], allow_empty=True),\n", lib_path));
     content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
     if !deps.is_empty() {
         content.push_str("        \"externconfigs\": [\n");
@@ -1475,6 +1490,21 @@ mod tests {
         let out = gen("lib", &[], &[], None, "_host");
         assert!(out.contains("echo 'my_crate@third_party/crates/my_crate_host="), "{}", out);
         assert!(!out.contains("echo 'my_crate_host@"), "{}", out);
+    }
+
+    /// A host unit's target is named X_host while the crate it provides is X,
+    /// so a rename pointing at X_host asks for a crate nothing declares -
+    /// which is what syn's build did, and it took the whole crate down.
+    #[test]
+    fn host_units_are_not_renamed_to_themselves() {
+        let out = gen(
+            "lib",
+            &[],
+            &[("proc-macro2", "///third_party/crates/proc_macro2//:proc_macro2_host")],
+            None,
+            "",
+        );
+        assert!(!out.contains("--rename proc_macro2=proc_macro2_host"), "{}", out);
     }
 
     #[test]
