@@ -51,7 +51,7 @@ pub struct SyncArgs {
     /// are shared by everyone building the repo, so they have to name every
     /// crate any of those platforms needs; resolution itself still happens
     /// per-host, in the build graph.
-    #[arg(long, default_value = "x86_64-unknown-linux-gnu,aarch64-apple-darwin,x86_64-apple-darwin")]
+    #[arg(long, default_value = "x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu,aarch64-apple-darwin,x86_64-apple-darwin")]
     pub targets: String,
 
     /// Where to write the resolved lock (defaults to rust.lock next to the BUILD file)
@@ -908,7 +908,7 @@ pub struct LockCmdArgs {
     /// are shared by everyone building the repo, so they have to name every
     /// crate any of those platforms needs; resolution itself still happens
     /// per-host, in the build graph.
-    #[arg(long, default_value = "x86_64-unknown-linux-gnu,aarch64-apple-darwin,x86_64-apple-darwin")]
+    #[arg(long, default_value = "x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu,aarch64-apple-darwin,x86_64-apple-darwin")]
     pub targets: String,
 
     /// curl binary for index fetches
