@@ -1,3 +1,9 @@
+Version 0.4.7
+-------------
+  * Doc-test, rustdoc and coverage actions stage the libraries their tools
+    load (librustc_driver, libLLVM), which a remote worker does not provide
+    otherwise. Same class as v0.4.5, found by audit rather than by failure.
+
 Version 0.4.6
 -------------
   * The clippy and rustfmt copies create their destination directory, which
