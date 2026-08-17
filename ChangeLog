@@ -1,3 +1,9 @@
+Version 0.4.3
+-------------
+  * Crate subrepo rules run locally by default (LocalSubrepos), keeping
+    Please off the remote-filesystem path whose nil subrepo tree segfaults
+    under remote execution.
+
 Version 0.4.2
 -------------
   * The bootstrap takes cargo from the configured toolchain rather than this
