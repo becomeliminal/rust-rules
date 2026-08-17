@@ -234,15 +234,27 @@ fn compile_build_script(
                     continue;
                 }
                 if let Some((key, filename)) = line.split_once('=') {
-                    let (name, _) = crate::compile::split_externconfig_key(key);
+                    let (name, qualifier) = crate::compile::split_externconfig_key(key);
                     // Search for the file
                     if let Some(path) = find_file_recursive(".", filename.trim()) {
                         cmd.arg("--extern").arg(format!("{}={}", name, path.display()));
                         // A renamed dependency is imported under its alias as
-                        // well, which is the only name its source knows.
+                        // well, which is the only name its source knows. The
+                        // right-hand side names the declaration, since a crate
+                        // setting [lib] name is not called after its package.
                         for rename in &args.renames {
-                            if let Some((alias, real)) = rename.split_once('=') {
-                                if real == name {
+                            if let Some((alias, target)) = rename.split_once('=') {
+                                let (want_name, want_qual) =
+                                    crate::compile::split_externconfig_key(target);
+                                let name_ok = want_name.is_empty() || want_name == name;
+                                let qual_ok = match (want_qual, qualifier) {
+                                    (Some(w), Some(have)) => {
+                                        have == w || have.ends_with(&format!("/{}", w))
+                                    }
+                                    (Some(_), None) => false,
+                                    _ => true,
+                                };
+                                if name_ok && qual_ok {
                                     cmd.arg("--extern")
                                         .arg(format!("{}={}", alias, path.display()));
                                 }

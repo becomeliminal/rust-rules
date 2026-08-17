@@ -713,17 +713,31 @@ fn generate_build_file(
             // A host unit's target is named X_host but the crate it provides
             // is X, so renaming to X_host asks for a crate nothing declares.
             let real = pkg.strip_suffix("_host").unwrap_or(pkg);
-            let qual = label_qualifier(target);
+            // A host unit's key carries the unit in its qualifier, because
+            // that is what distinguishes it from the target unit of the same
+            // crate in the same subrepo. Ask for it by the same name.
+            let host_unit = pkg.ends_with("_host");
+            let qual = label_qualifier(target).map(|q| {
+                if host_unit {
+                    format!("{}_host", q)
+                } else {
+                    q.to_string()
+                }
+            });
             if dep_norm != real {
                 // An alias. Name the declaration too: a crate depending on
                 // two versions of one package renames both, and the crate
                 // name alone cannot say which alias means which.
-                match qual {
-                    Some(q) => feature_str
-                        .push_str(&format!(" --rename {}={}@{}", dep_norm, real, q)),
+                // Name the declaration and let the crate name come from it.
+                // The label carries the package name, and a crate setting
+                // [lib] name is not called that: md-5 builds md5, and
+                // rustls-webpki builds webpki, which is exactly what a
+                // renamed dependency of theirs imports.
+                match &qual {
+                    Some(q) => feature_str.push_str(&format!(" --rename {}=@{}", dep_norm, q)),
                     None => feature_str.push_str(&format!(" --rename {}={}", dep_norm, real)),
                 }
-            } else if let Some(q) = qual {
+            } else if let Some(q) = &qual {
                 // Not an alias, so this dep is imported under the crate's own
                 // name - and if the crate appears twice in this compile, that
                 // name alone does not say which one. aws-smithy-types depends
@@ -1043,7 +1057,14 @@ fn generate_build_script_rule(
         if let Some(pkg) = target.rsplit(':').next() {
             let real = pkg.strip_suffix("_host").unwrap_or(pkg);
             if alias != real {
-                feature_str.push_str(&format!(" --rename {}={}", alias, real));
+                let host_unit = pkg.ends_with("_host");
+                match label_qualifier(target) {
+                    Some(q) if host_unit => {
+                        feature_str.push_str(&format!(" --rename {}=@{}_host", alias, q))
+                    }
+                    Some(q) => feature_str.push_str(&format!(" --rename {}=@{}", alias, q)),
+                    None => feature_str.push_str(&format!(" --rename {}={}", alias, real)),
+                }
             }
         }
     }
@@ -1573,7 +1594,7 @@ mod tests {
             "third_party/crates/my_crate",
             "my-crate",
         );
-        assert!(out.contains("--rename rustversion_compat=rustversion"), "{}", out);
+        assert!(out.contains("--rename rustversion_compat=@third_party/crates/rustversion"), "{}", out);
     }
 
     /// aws-smithy-types depends on http-body twice, as http_body_0_4 and
@@ -1592,12 +1613,12 @@ mod tests {
             "",
         );
         assert!(
-            out.contains("--rename http_body_0_4=http_body@third_party/crates/http_body-0.4.6"),
+            out.contains("--rename http_body_0_4=@third_party/crates/http_body-0.4.6"),
             "{}",
             out
         );
         assert!(
-            out.contains("--rename http_body_1_0=http_body@third_party/crates/http_body"),
+            out.contains("--rename http_body_1_0=@third_party/crates/http_body"),
             "{}",
             out
         );
@@ -1621,10 +1642,26 @@ mod tests {
             "",
         );
         assert!(out.contains("--dep http@third_party/crates/http-0.2.12"), "{}", out);
-        assert!(out.contains("--rename http_1x=http@third_party/crates/http"), "{}", out);
+        assert!(out.contains("--rename http_1x=@third_party/crates/http"), "{}", out);
         // The alias is not also requested as a plain dep, which would put the
         // wrong version back under the bare name.
         assert!(!out.contains("--dep http@third_party/crates/http "), "{}", out);
+    }
+
+    /// A host unit's externconfig key carries the unit in its qualifier,
+    /// since that is what tells it from the target unit of the same crate in
+    /// the same subrepo. A dep asking for it has to use the same name, or
+    /// quote's host unit cannot find proc-macro2's.
+    #[test]
+    fn a_host_unit_dep_is_asked_for_by_its_unit() {
+        let out = gen(
+            "lib",
+            &[],
+            &[("proc-macro2", "///third_party/crates/proc_macro2//:proc_macro2_host")],
+            None,
+            "",
+        );
+        assert!(out.contains("--dep proc_macro2@third_party/crates/proc_macro2_host"), "{}", out);
     }
 
     #[test]
@@ -1764,7 +1801,7 @@ mod tests {
     #[test]
     fn renames_emitted_for_mismatched_deps() {
         let out = gen("lib", &[], &[("alias_name", "///third_party/rust/real//:real")], None, "");
-        assert!(out.contains("--rename alias_name=real@"), "{}", out);
+        assert!(out.contains("--rename alias_name=@"), "{}", out);
     }
 
     #[test]

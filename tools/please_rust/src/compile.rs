@@ -29,6 +29,28 @@ fn resolve_out_dir(recorded: &Path, buildscript: Option<&Path>) -> Option<PathBu
     None
 }
 
+/// Rewrite a path the build script emitted so it points at where its output
+/// actually is now.
+///
+/// A build script that compiles a C library writes it into OUT_DIR and emits
+/// an absolute search path into that directory - which belongs to the build
+/// script's sandbox and is gone by the time anything links. bzip2-sys,
+/// curl-sys and libgit2-sys all do this, and the failure is rustc reporting
+/// it cannot find a native static library that was built successfully.
+pub(crate) fn rebase_build_path(
+    raw: &str,
+    built_out_dir: Option<&Path>,
+    resolved_out_dir: Option<&Path>,
+) -> String {
+    if let (Some(old), Some(new)) = (built_out_dir, resolved_out_dir) {
+        let old = old.to_string_lossy();
+        if let Some(rest) = raw.strip_prefix(old.as_ref()) {
+            return format!("{}{}", new.display(), rest);
+        }
+    }
+    raw.to_string()
+}
+
 /// Recursively search for a file with the given name in the directory tree
 fn find_file_recursive(dir: &str, filename: &str) -> Option<PathBuf> {
     let dir_path = Path::new(dir);
@@ -192,6 +214,9 @@ pub struct CompileArgs {
 #[derive(Debug, Default)]
 pub(crate) struct BuildScriptDirectives {
     pub(crate) out_dir: Option<PathBuf>,
+    /// Where OUT_DIR was when the script ran. Paths the script emitted point
+    /// inside it, and that directory is gone by the time anything compiles.
+    pub(crate) built_out_dir: Option<PathBuf>,
     pub(crate) rustc_cfgs: Vec<String>,
     pub(crate) rustc_envs: Vec<(String, String)>,
     pub(crate) rustc_link_libs: Vec<String>,
@@ -207,7 +232,14 @@ pub(crate) fn parse_buildscript(path: &Path) -> Result<BuildScriptDirectives> {
 
     for line in content.lines() {
         let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("# OUT_DIR=") {
+            directives.built_out_dir = Some(PathBuf::from(value));
+            continue;
+        }
+        if line.starts_with('#') {
             continue;
         }
 
@@ -423,19 +455,26 @@ fn build_command(args: &CompileArgs) -> Result<Command> {
     // --extern under that name pointing at the real crate's library.
     for rename in &args.renames {
         if let Some((dep_name, target)) = rename.split_once('=') {
-            // The right-hand side may name the declaration as well as the
-            // crate, which is the only way to tell two versions apart.
+            // The right-hand side names the declaration, optionally with the
+            // crate name in front of it. Naming only the declaration is the
+            // more useful form: a crate that sets [lib] name is not called
+            // after its package - md-5 builds md5 - so the caller often does
+            // not know the crate name, only which declaration it meant.
             let (crate_name, want_qual) = split_externconfig_key(target);
             let found = extern_paths.iter().find(|(n, q, _)| {
-                n == crate_name
+                (crate_name.is_empty() || n == crate_name)
                     && match (want_qual, q.as_deref()) {
                         (Some(w), Some(have)) => {
                             have == w || have.ends_with(&format!("/{}", w))
                         }
+                        (Some(_), None) => false,
                         _ => true,
                     }
             });
-            if let Some((_, _, path)) = found {
+            if let Some((name, _, path)) = found {
+                // The alias is an extra name for the same library; the crate
+                // keeps its own name too, so code can use either.
+                let _ = name;
                 cmd.arg("--extern");
                 cmd.arg(format!("{}={}", dep_name.trim(), path.display()));
             } else {
@@ -488,26 +527,34 @@ fn build_command(args: &CompileArgs) -> Result<Command> {
 
     // Search paths from build script
     if let Some(ref directives) = buildscript_directives {
+        // Resolve OUT_DIR first: the directives file records it relative to
+        // itself, since the build-script rule's sandbox no longer exists at
+        // compile time.
+        let resolved_out = directives
+            .out_dir
+            .as_ref()
+            .and_then(|d| resolve_out_dir(d, args.buildscript.as_deref()));
+
         for path in &directives.rustc_link_searches {
             // Handle KIND=PATH format (e.g., "native=/usr/lib")
-            if let Some((_kind, actual_path)) = path.split_once('=') {
-                cmd.arg("-L").arg(actual_path);
-            } else {
-                cmd.arg("-L").arg(path);
-            }
+            let raw = match path.split_once('=') {
+                Some((_kind, actual_path)) => actual_path,
+                None => path.as_str(),
+            };
+            cmd.arg("-L").arg(rebase_build_path(
+                raw,
+                directives.built_out_dir.as_deref(),
+                resolved_out.as_deref(),
+            ));
         }
 
-        // Resolve OUT_DIR and expose it both as a search path and as the
-        // OUT_DIR env var (for include!(concat!(env!("OUT_DIR"), ...))).
-        // The directives file records it relative to itself, since the
-        // build-script rule's sandbox no longer exists at compile time.
-        if let Some(ref out_dir) = directives.out_dir {
-            if let Some(resolved) = resolve_out_dir(out_dir, args.buildscript.as_deref()) {
-                cmd.arg("-L").arg(&resolved);
-                cmd.env("OUT_DIR", &resolved);
-            } else {
-                eprintln!("Warning: OUT_DIR {} not found", out_dir.display());
-            }
+        // Expose OUT_DIR as a search path and as the env var, for
+        // include!(concat!(env!("OUT_DIR"), ...)).
+        if let Some(ref resolved) = resolved_out {
+            cmd.arg("-L").arg(resolved);
+            cmd.env("OUT_DIR", resolved);
+        } else if let Some(ref out_dir) = directives.out_dir {
+            eprintln!("Warning: OUT_DIR {} not found", out_dir.display());
         }
     }
 
@@ -642,6 +689,31 @@ mod tests {
         assert_eq!(d.rustc_link_libs, vec!["static=z"]);
         assert_eq!(d.rustc_link_searches, vec!["native=/some/dir"]);
         assert_eq!(d.rustc_link_args, vec!["-Wl,-z,now"]);
+    }
+
+    /// A build script that compiles a C library writes it into OUT_DIR and
+    /// emits an absolute search path into that directory - which belongs to
+    /// the build script's sandbox and is gone by the time anything links.
+    /// bzip2-sys, curl-sys and libgit2-sys all do it.
+    #[test]
+    fn link_search_paths_follow_the_output() {
+        let built = Path::new("/plz-out/tmp/x/_bzip2_sys_build_script._build/bzip2_sys_out");
+        let now = Path::new("/plz-out/gen/x/bzip2_sys_out");
+        assert_eq!(
+            rebase_build_path(
+                "/plz-out/tmp/x/_bzip2_sys_build_script._build/bzip2_sys_out/lib",
+                Some(built),
+                Some(now)
+            ),
+            "/plz-out/gen/x/bzip2_sys_out/lib"
+        );
+        // A path outside OUT_DIR is a system path and is left alone
+        assert_eq!(
+            rebase_build_path("/usr/lib/x86_64-linux-gnu", Some(built), Some(now)),
+            "/usr/lib/x86_64-linux-gnu"
+        );
+        // Nothing to rebase against: unchanged rather than mangled
+        assert_eq!(rebase_build_path("/some/dir", None, Some(now)), "/some/dir");
     }
 
     #[test]
@@ -798,6 +870,33 @@ mod command_tests {
         assert!(!s.contains("libsyn-3_0_3.rlib"), "{}", s);
         // The version it did not ask for stays reachable through -L
         assert!(s.contains("-L"));
+    }
+
+    /// A crate that sets [lib] name is not called after its package: md-5
+    /// builds md5, rustls-webpki builds webpki. A dependent renaming one of
+    /// those knows which declaration it meant but not what the crate ended up
+    /// called, so a rename may name the declaration alone.
+    #[test]
+    fn a_rename_may_name_only_the_declaration() {
+        let _guard = CWD_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("please_rust_rename_decl_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("libmd5-0_11_0.rlib"), "").unwrap();
+        std::fs::write(
+            dir.join("externconfig"),
+            "md5@third_party/crates/md_5=libmd5-0_11_0.rlib\n",
+        )
+        .unwrap();
+
+        let mut args = base_args(&dir);
+        args.renames = vec!["md5=@third_party/crates/md_5".to_string()];
+        let old = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        let cmd = build_command(&args).unwrap();
+        std::env::set_current_dir(old).unwrap();
+
+        let s = joined(&cmd);
+        assert!(s.contains("--extern md5=./libmd5-0_11_0.rlib"), "{}", s);
     }
 
     fn renames_add_aliased_externs() {
