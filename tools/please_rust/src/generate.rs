@@ -622,11 +622,14 @@ fn generate_build_file(
     // way cargo uses -C extra-filename/-C metadata.
     let version_tag = format!("{}{}", version.replace(['.', '+'], "_"), suffix);
 
-    // Determine outputs based on crate type
+    // Determine outputs based on crate type. A proc macro is a dynamic
+    // library rustc loads into itself, so it is named for the machine running
+    // the build: .dylib on macOS, .so on linux.
+    let dylib = std::env::consts::DLL_SUFFIX;
     let (out_rlib, out_rmeta, emit) = match crate_type {
         "proc-macro" => (
-            format!("lib{}-{}.so", crate_ident, version_tag),
-            format!("lib{}-{}.so", crate_ident, version_tag),
+            format!("lib{}-{}{}", crate_ident, version_tag, dylib),
+            format!("lib{}-{}{}", crate_ident, version_tag, dylib),
             "dep-info,link",
         ),
         _ => (
@@ -1413,7 +1416,7 @@ mod tests {
     fn proc_macro_rule_shape() {
         let out = gen("proc-macro", &[], &[], None, "");
         assert!(out.contains("--crate-type proc-macro"));
-        assert!(out.contains("libmy_crate-1_2_3.so"));
+        assert!(out.contains(&format!("libmy_crate-1_2_3{}", std::env::consts::DLL_SUFFIX)));
         assert!(!out.contains("rmeta"));
     }
 

@@ -43,6 +43,13 @@ def target_flag(crate_type:str=''):
     return '--target %s-%s ' % (arch, os)
 
 
+def _dylib_ext(host:bool=False):
+    """The dynamic library extension of the target, or of the host for
+    artifacts that run during the build rather than after it."""
+    os = CONFIG.HOSTOS if host else CONFIG.TARGET_OS
+    return '.dylib' if os == 'darwin' else '.so'
+
+
 def toolchain_entry(entry:str):
     """Another entry point of whatever toolchain target rustc comes from.
 
@@ -199,14 +206,19 @@ def rust_library(name:str, root:str, crate_name:str="", crate_type:str="rlib", m
         lib_file = f'lib{crate_name}.rlib'
         linkable = True
     elif crate_type in ['proc-macro', 'dylib']:
+        # A proc macro is loaded by rustc itself, so it is named for the host;
+        # a dylib is linked into the artifacts being produced, so it is named
+        # for the target. Without --arch they are the same platform.
+        ext = _dylib_ext(host = crate_type == 'proc-macro')
         outs = {
-            'so': [f'lib{crate_name}.so'],
+            'so': [f'lib{crate_name}{ext}'],
             'externconfig': [f'{crate_name}.externconfig'],
         }
-        lib_file = f'lib{crate_name}.so'
+        lib_file = f'lib{crate_name}{ext}'
         linkable = True
     elif crate_type == 'cdylib':
-        outs = [f'lib{crate_name}.so']
+        ext = _dylib_ext()
+        outs = [f'lib{crate_name}{ext}']
     elif crate_type == 'staticlib':
         outs = [f'lib{crate_name}.a']
     else:
