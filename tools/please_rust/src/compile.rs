@@ -315,7 +315,11 @@ fn build_command(args: &CompileArgs) -> Result<Command> {
     // Parse externconfig and add --extern flags
     // The externconfig contains lines like: crate_name=libcrate.rlib
     // We search for the actual file in the current directory tree
-    let mut extern_paths: Vec<(String, PathBuf)> = Vec::new();
+    // Crate name, the declaration it came from, and where it landed. The
+    // declaration matters for renames: aws-smithy-types depends on http-body
+    // twice, as http_body_0_4 and http_body_1_0, and both are the crate
+    // `http_body`.
+    let mut extern_paths: Vec<(String, Option<String>, PathBuf)> = Vec::new();
     if let Some(config_path) = &args.externconfig {
         if config_path.exists() {
             let content = fs::read_to_string(config_path)
@@ -359,7 +363,11 @@ fn build_command(args: &CompileArgs) -> Result<Command> {
                         if direct {
                             cmd.arg("--extern");
                             cmd.arg(format!("{}={}", name, path.display()));
-                            extern_paths.push((name.to_string(), path.clone()));
+                            extern_paths.push((
+                                name.to_string(),
+                                qualifier.map(|q| q.to_string()),
+                                path.clone(),
+                            ));
                         }
                         // -L keeps transitive crates resolvable by metadata hash
                         if let Some(dir) = path.parent() {
@@ -410,12 +418,24 @@ fn build_command(args: &CompileArgs) -> Result<Command> {
     // Renamed deps: source refers to them by the rename, so add an extra
     // --extern under that name pointing at the real crate's library.
     for rename in &args.renames {
-        if let Some((dep_name, crate_name)) = rename.split_once('=') {
-            if let Some((_, path)) = extern_paths.iter().find(|(n, _)| n == crate_name.trim()) {
+        if let Some((dep_name, target)) = rename.split_once('=') {
+            // The right-hand side may name the declaration as well as the
+            // crate, which is the only way to tell two versions apart.
+            let (crate_name, want_qual) = split_externconfig_key(target);
+            let found = extern_paths.iter().find(|(n, q, _)| {
+                n == crate_name
+                    && match (want_qual, q.as_deref()) {
+                        (Some(w), Some(have)) => {
+                            have == w || have.ends_with(&format!("/{}", w))
+                        }
+                        _ => true,
+                    }
+            });
+            if let Some((_, _, path)) = found {
                 cmd.arg("--extern");
                 cmd.arg(format!("{}={}", dep_name.trim(), path.display()));
             } else {
-                eprintln!("Warning: rename {}: crate {} not found in externconfig", dep_name, crate_name);
+                eprintln!("Warning: rename {}: crate {} not found in externconfig", dep_name, target);
             }
         }
     }

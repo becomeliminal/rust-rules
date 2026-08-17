@@ -645,6 +645,29 @@ fn activate_dep(
         .enabled_optional_deps
         .insert(dep_name.to_string());
 
+    // Activating an optional dependency also enables the implicit feature of
+    // the same name, unless the crate uses dep: syntax for it somewhere,
+    // which is what removes that implicit feature. Reaching a dep through
+    // `pkcs8/alloc` therefore sets `feature = "pkcs8"` too - and sec1 gates
+    // half its API on exactly that, so linking the dep without the cfg
+    // produces a crate whose own modules do not exist.
+    let is_optional = nodes[idx]
+        .deps
+        .iter()
+        .any(|d| d.name == dep_name && d.optional);
+    let namespaced = nodes[idx]
+        .manifest
+        .features
+        .values()
+        .flatten()
+        .any(|item| item.strip_prefix("dep:") == Some(dep_name));
+    if is_optional && !namespaced {
+        nodes[idx]
+            .unit_mut(unit)
+            .enabled_features
+            .insert(dep_name.to_string());
+    }
+
     let (package, df, feats, req, kind) = decl;
     if let Some(child) = resolver.select(&package, req.as_ref(), nodes) {
         work.push(Work::ActivateCrate {
@@ -984,6 +1007,26 @@ mod tests {
         // Namespaced: dep:b means no implicit feature cfg "b"
         assert!(!features(&lock, "a").contains(&"b".to_string()));
         assert!(features(&lock, "a").contains(&"with_b".to_string()));
+    }
+
+    /// Reaching an optional dependency through `b/feat` activates it, and
+    /// activating an optional dependency also sets the implicit feature of
+    /// the same name. sec1 gates half its API on exactly that, so linking
+    /// pkcs8 without setting feature = "pkcs8" produced a crate whose own
+    /// modules did not exist.
+    #[test]
+    fn slash_feature_sets_the_implicit_dep_feature() {
+        let mut g = Graph::new("slash_implicit");
+        g.krate(
+            "a", "a", "1.0.0",
+            "[dependencies.b]\nversion = \"1\"\noptional = true\n\n[features]\nuse_b = [\"b/inner\"]\n",
+        )
+        .krate("b", "b", "1.0.0", "[features]\ninner = []\n")
+        .root("a", &["use_b"], true);
+        let lock = g.resolve();
+        assert!(lock.crates.contains_key("b"));
+        assert!(features(&lock, "a").contains(&"b".to_string()), "{:?}", features(&lock, "a"));
+        assert!(features(&lock, "b").contains(&"inner".to_string()));
     }
 
     #[test]

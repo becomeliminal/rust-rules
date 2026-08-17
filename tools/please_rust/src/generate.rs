@@ -714,7 +714,14 @@ fn generate_build_file(
             // is X, so renaming to X_host asks for a crate nothing declares.
             let real = pkg.strip_suffix("_host").unwrap_or(pkg);
             if dep_norm != real {
-                feature_str.push_str(&format!(" --rename {}={}", dep_norm, real));
+                // Name the declaration too: a crate depending on two versions
+                // of one package renames both, and the crate name alone
+                // cannot say which alias means which.
+                match label_qualifier(target) {
+                    Some(q) => feature_str
+                        .push_str(&format!(" --rename {}={}@{}", dep_norm, real, q)),
+                    None => feature_str.push_str(&format!(" --rename {}={}", dep_norm, real)),
+                }
             }
         }
     }
@@ -822,6 +829,15 @@ fn generate_build_file(
 /// their rlibs are version-tagged - the dependent then resolves `syn` to a
 /// file that is not there. Derive the name from the artifact, which already
 /// carries the version.
+/// The declaration a dep label points at, as it appears in externconfig keys:
+/// `///third_party/crates/http_body-0.4.6//:http_body` is the declaration
+/// `third_party/crates/http_body-0.4.6`. Two versions of one crate are the
+/// same crate name and differ only here.
+fn label_qualifier(target: &str) -> Option<&str> {
+    let path = target.trim_start_matches('/');
+    path.split("//:").next().filter(|p| !p.is_empty())
+}
+
 fn externconfig_name(artifact: &str, infix: &str) -> String {
     let stem = artifact.strip_prefix("lib").unwrap_or(artifact);
     let stem = stem.rsplit_once('.').map(|(s, _)| s).unwrap_or(stem);
@@ -1552,6 +1568,33 @@ mod tests {
         assert!(out.contains("--rename rustversion_compat=rustversion"), "{}", out);
     }
 
+    /// aws-smithy-types depends on http-body twice, as http_body_0_4 and
+    /// http_body_1_0, and both are the crate `http_body`. A rename naming
+    /// only the crate cannot say which alias means which version.
+    #[test]
+    fn renames_name_the_declaration_not_just_the_crate() {
+        let out = gen(
+            "lib",
+            &[],
+            &[
+                ("http-body-0-4", "///third_party/crates/http_body-0.4.6//:http_body"),
+                ("http-body-1-0", "///third_party/crates/http_body//:http_body"),
+            ],
+            None,
+            "",
+        );
+        assert!(
+            out.contains("--rename http_body_0_4=http_body@third_party/crates/http_body-0.4.6"),
+            "{}",
+            out
+        );
+        assert!(
+            out.contains("--rename http_body_1_0=http_body@third_party/crates/http_body"),
+            "{}",
+            out
+        );
+    }
+
     #[test]
     fn build_script_two_stage() {
         let out = gen("lib", &[], &[], Some("build/main.rs"), "");
@@ -1689,7 +1732,7 @@ mod tests {
     #[test]
     fn renames_emitted_for_mismatched_deps() {
         let out = gen("lib", &[], &[("alias_name", "///third_party/rust/real//:real")], None, "");
-        assert!(out.contains("--rename alias_name=real"));
+        assert!(out.contains("--rename alias_name=real@"), "{}", out);
     }
 
     #[test]
