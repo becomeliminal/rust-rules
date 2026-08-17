@@ -7,3 +7,8 @@ BuildFileName = BUILD
 
 [Plugin "rust"]
 Target = //plugins:rust
+; Build the tool from the same source as the rules. The default is a pinned
+; release, which is right for consumers but wrong here: this test tracks
+; master, and master's rules and a previous release's tool are two different
+; versions of one protocol.
+PleaseRustTool = ///rust//tools/please_rust:bootstrap

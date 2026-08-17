@@ -868,7 +868,7 @@ fn generate_rmeta_rule(
     // and icu_*_data includes data/*.rs.data, and neither is reachable from a
     // glob written around src. Non-Rust files cost nothing to stage and are
     // exactly what include_str! and include! reach for.
-    content.push_str(&format!("        \"mods\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\"], allow_empty=True),\n", lib_path));
+    content.push_str(&format!("        \"mods\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\", \"*.rlib\", \"*.rmeta\", \"*.externconfig\", \"*.so\", \"*.dylib\", \"*.a\", \"*.d\", \"*_out\", \"*_out/**\"], allow_empty=True),\n", lib_path));
     content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
     if !deps.is_empty() {
         content.push_str("        \"externconfigs\": [\n");
@@ -1181,7 +1181,7 @@ fn generate_compile_rule_with_buildscript(
     // and icu_*_data includes data/*.rs.data, and neither is reachable from a
     // glob written around src. Non-Rust files cost nothing to stage and are
     // exactly what include_str! and include! reach for.
-    content.push_str(&format!("        \"mods\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\"], allow_empty=True),\n", lib_path));
+    content.push_str(&format!("        \"mods\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\", \"*.rlib\", \"*.rmeta\", \"*.externconfig\", \"*.so\", \"*.dylib\", \"*.a\", \"*.d\", \"*_out\", \"*_out/**\"], allow_empty=True),\n", lib_path));
     content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
     if !deps.is_empty() {
         content.push_str("        \"externconfigs\": [\n");
@@ -1278,7 +1278,7 @@ fn generate_compile_rule(
     // and icu_*_data includes data/*.rs.data, and neither is reachable from a
     // glob written around src. Non-Rust files cost nothing to stage and are
     // exactly what include_str! and include! reach for.
-    content.push_str(&format!("        \"mods\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\"], allow_empty=True),\n", lib_path));
+    content.push_str(&format!("        \"mods\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\", \"*.rlib\", \"*.rmeta\", \"*.externconfig\", \"*.so\", \"*.dylib\", \"*.a\", \"*.d\", \"*_out\", \"*_out/**\"], allow_empty=True),\n", lib_path));
     content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
     if !deps.is_empty() {
         content.push_str("        \"externconfigs\": [\n");
@@ -1634,7 +1634,11 @@ mod tests {
         let out = gen("proc-macro", &[], &[], None, "");
         assert!(out.contains("--crate-type proc-macro"));
         assert!(out.contains(&format!("libmy_crate-1_2_3{}", std::env::consts::DLL_SUFFIX)));
-        assert!(!out.contains("rmeta"));
+        // A proc macro has no metadata twin: dependents must expand it, which
+        // needs the dylib. (Checked precisely - "rmeta" also appears in the
+        // list of artifacts excluded from the source glob.)
+        assert!(!out.contains("libmy_crate-1_2_3.rmeta"), "{}", out);
+        assert!(!out.contains("#rmeta\""), "{}", out);
     }
 
     #[test]
