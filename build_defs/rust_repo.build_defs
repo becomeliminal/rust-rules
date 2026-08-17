@@ -59,20 +59,6 @@ def rust_git_download(name:str, crate:str, version:str, repo:str, revision:str, 
     )
 
 
-def rustc_lib_label():
-    """The directory holding rustc's driver library; see the identical helper
-    in rust.build_defs. Duplicated because each subinclude has its own
-    namespace and these files are subincluded independently."""
-    if CONFIG.RUST.RUSTC_LIB:
-        return CONFIG.RUST.RUSTC_LIB
-    rustc = CONFIG.RUST.RUSTC
-    if not rustc.startswith("//") and not rustc.startswith(":") and not rustc.startswith("@") and not rustc.startswith("/"):
-        return ""
-    if "_rustc" not in rustc:
-        return ""
-    return rustc.replace("_rustc", "_rustc_lib")
-
-
 def host_triple():
     """The target triple of the machine parsing this, derived the way
     rust_toolchain derives its download URL. Resolution is per-target because
@@ -252,19 +238,16 @@ def rust_repo(
     pipeline_flag = "--pipeline " if CONFIG.RUST.PIPELINED_COMPILATION else ""
     cc_is_label = CONFIG.RUST.CC_TOOL and (CONFIG.RUST.CC_TOOL.startswith("//") or CONFIG.RUST.CC_TOOL.startswith(":"))
     cc_ref = _subrepo_ref(CONFIG.RUST.CC_TOOL) if CONFIG.RUST.CC_TOOL else ""
-    cc_flag = f"--cc-label {cc_ref} " if cc_is_label else ""
+    cc_flag = f"--cc-label '{cc_ref}' " if cc_is_label else ""
     tool_ref = _subrepo_ref(CONFIG.RUST.PLEASE_RUST_TOOL)
     rustc_ref = _subrepo_ref(CONFIG.RUST.RUSTC)
     sysroot_ref = _subrepo_ref(CONFIG.RUST.SYSROOT)
-    rustc_lib = rustc_lib_label()
-    rustc_lib_ref = _subrepo_ref(rustc_lib) if rustc_lib else ""
-    rustc_lib_flag = f"--rustc-lib-label {rustc_lib_ref} " if rustc_lib_ref else ""
     cmds = [
         # Remove any existing BUILD files or plzconfig
         "rm -rf $SRCS_CRATE/.plzconfig",
         "find $SRCS_CRATE -name BUILD -delete",
         # Run please_rust generate (SRCS_CRATE points directly to the extracted directory)
-        f"$TOOL generate --crate-name {crate} --version {version} --src-root $SRCS_CRATE --subrepo {subrepo_path} --features '{features_arg}' --install '{install_arg}' --third-party-folder '{third_party_path}' --target {target_triple} --tool-label {tool_ref} --rustc-label {rustc_ref} --sysroot-label {sysroot_ref} {rustc_lib_flag}{cc_flag}{lock_flag}{pipeline_flag}" + " ".join([f"--override {k}={v}" for k, v in sorted(dep_overrides.items())]),
+        f"$TOOL generate --crate-name {crate} --version {version} --src-root $SRCS_CRATE --subrepo {subrepo_path} --features '{features_arg}' --install '{install_arg}' --third-party-folder '{third_party_path}' --target {target_triple} --tool-label '{tool_ref}' --rustc-label '{rustc_ref}' --sysroot-label '{sysroot_ref}' {cc_flag}{lock_flag}{pipeline_flag}" + " ".join([f"--override {k}={v}" for k, v in sorted(dep_overrides.items())]),
         # Move to output
         "mv $SRCS_CRATE $OUT",
     ]

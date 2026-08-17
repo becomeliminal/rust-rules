@@ -64,12 +64,6 @@ pub struct GenerateArgs {
     #[arg(long, default_value = "@//third_party/rust:toolchain_sysroot")]
     pub sysroot_label: String,
 
-    /// Build label of rustc's driver library directory. Every compile stages
-    /// it: rustc loads the library from beside its own binary, and a remote
-    /// worker stages only what an action names.
-    #[arg(long, default_value = "")]
-    pub rustc_lib_label: String,
-
     /// Build label of a C toolchain (cc_toolchain rule); empty disables
     #[arg(long, default_value = "")]
     pub cc_label: String,
@@ -334,11 +328,6 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         .replace("@//tools/please_rust:bootstrap", &args.tool_label)
         .replace("@//third_party/rust:toolchain_rustc", &args.rustc_label)
         .replace("@//third_party/rust:toolchain_sysroot", &args.sysroot_label);
-    if args.rustc_lib_label.is_empty() {
-        build_content = build_content.replace("        \"rustc_lib\": [\"__RUSTC_LIB_LABEL__\"],\n", "");
-    } else {
-        build_content = build_content.replace("__RUSTC_LIB_LABEL__", &args.rustc_lib_label);
-    }
     if args.cc_label.is_empty() {
         build_content = build_content
             .replace("--cc $TOOLS_CC ", "")
@@ -803,7 +792,6 @@ fn generate_rmeta_rule(
     content.push_str("        \"please_rust\": [\"@//tools/please_rust:bootstrap\"],\n");
     content.push_str("        \"rustc\": [\"@//third_party/rust:toolchain_rustc\"],\n");
     content.push_str("        \"sysroot\": [\"@//third_party/rust:toolchain_sysroot\"],\n");
-    content.push_str("        \"rustc_lib\": [\"__RUSTC_LIB_LABEL__\"],\n");
     content.push_str("    },\n");
     content.push_str("    needs_transitive_deps = True,\n");
     content.push_str("    visibility = [\"PUBLIC\"],\n");
@@ -882,7 +870,6 @@ fn generate_bin_rule(
     content.push_str("        \"please_rust\": [\"@//tools/please_rust:bootstrap\"],\n");
     content.push_str("        \"rustc\": [\"@//third_party/rust:toolchain_rustc\"],\n");
     content.push_str("        \"sysroot\": [\"@//third_party/rust:toolchain_sysroot\"],\n");
-    content.push_str("        \"rustc_lib\": [\"__RUSTC_LIB_LABEL__\"],\n");
     content.push_str("        \"cc\": [\"__CC_LABEL__\"],\n");
     content.push_str("    },\n");
     content.push_str("    needs_transitive_deps = True,\n");
@@ -981,7 +968,6 @@ fn generate_build_script_rule(
     content.push_str("        \"please_rust\": [\"@//tools/please_rust:bootstrap\"],\n");
     content.push_str("        \"rustc\": [\"@//third_party/rust:toolchain_rustc\"],\n");
     content.push_str("        \"sysroot\": [\"@//third_party/rust:toolchain_sysroot\"],\n");
-    content.push_str("        \"rustc_lib\": [\"__RUSTC_LIB_LABEL__\"],\n");
     content.push_str("        \"cc\": [\"__CC_LABEL__\"],\n");
     content.push_str("    },\n");
 
@@ -1110,7 +1096,6 @@ fn generate_compile_rule_with_buildscript(
     content.push_str("        \"please_rust\": [\"@//tools/please_rust:bootstrap\"],\n");
     content.push_str("        \"rustc\": [\"@//third_party/rust:toolchain_rustc\"],\n");
     content.push_str("        \"sysroot\": [\"@//third_party/rust:toolchain_sysroot\"],\n");
-    content.push_str("        \"rustc_lib\": [\"__RUSTC_LIB_LABEL__\"],\n");
     content.push_str("        \"cc\": [\"__CC_LABEL__\"],\n");
     content.push_str("    },\n");
     content.push_str("    needs_transitive_deps = True,\n");
@@ -1200,7 +1185,6 @@ fn generate_compile_rule(
     content.push_str("        \"please_rust\": [\"@//tools/please_rust:bootstrap\"],\n");
     content.push_str("        \"rustc\": [\"@//third_party/rust:toolchain_rustc\"],\n");
     content.push_str("        \"sysroot\": [\"@//third_party/rust:toolchain_sysroot\"],\n");
-    content.push_str("        \"rustc_lib\": [\"__RUSTC_LIB_LABEL__\"],\n");
     content.push_str("        \"cc\": [\"__CC_LABEL__\"],\n");
     content.push_str("    },\n");
     content.push_str("    needs_transitive_deps = True,\n");
@@ -1451,7 +1435,6 @@ mod run_tests {
             subrepo: "third_party/rust/demo".to_string(),
             third_party_folder: "third_party/rust".to_string(),
             target: "x86_64-unknown-linux-gnu".to_string(),
-            rustc_lib_label: String::new(),
             pipeline: false,
             features: "fallback-feat".to_string(),
             install: "".to_string(),

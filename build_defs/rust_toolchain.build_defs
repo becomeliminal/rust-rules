@@ -40,6 +40,7 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
             raise ParseError('Unknown architecture %s, you must pass arch explicitly to rust_toolchain' % CONFIG.ARCH)
 
     base = '-'.join(['rust', version, arch, os])
+    triple = '%s-%s' % (arch, os)
     download_rule = remote_file(
         name = '_%s#download' % name,
         url = 'https://static.rust-lang.org/dist/%s.tar.gz' % base,
@@ -47,124 +48,43 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
         hashes = hashes,
         deps = deps,
     )
-    # sysroot is the directory containing lib/rustlib/...
-    sysroot_path = '/rust-std-%s-%s' % (arch, os)
-    extract_rule = build_rule(
+    # One rule, one directory, entry points into it - the shape go_toolchain
+    # uses. Everything the toolchain provides lives inside a single output, so
+    # an action cannot stage a binary without the libraries sitting beside it.
+    # Exposing rustc, rustdoc and the llvm tools as separate targets made that
+    # separation possible, and it happened: each of them loads a library from
+    # ../lib relative to its own binary, which survives locally (where the
+    # extracted tree is all present) and not on a remote worker (which stages
+    # only what an action names).
+    #
+    # clippy-driver and rustfmt resolve librustc_driver the same way, so they
+    # move next to rustc rather than being copied out into rules of their own.
+    cmds = [
+        'tar -xzf $SRCS',
+        'mv %s $OUT' % base,
+        'mv $OUT/clippy-preview/bin/clippy-driver $OUT/rustc/bin/',
+        'mv $OUT/rustfmt-preview/bin/rustfmt $OUT/rustc/bin/',
+    ]
+    llvm_bin = '%s/llvm-tools-preview/lib/rustlib/%s/bin' % (name, triple)
+    sysroot = '%s/rust-std-%s' % (name, triple)
+    return build_rule(
         name = name,
-        tag = 'extract',
         srcs = [download_rule],
-        outs = {
-            'rustc_bin': [base + '/rustc/bin/rustc'],
-            'rustdoc_bin': [base + '/rustc/bin/rustdoc'],
-            'rustc_lib': [base + '/rustc/lib'],
-            'cargo_bin': [base + '/cargo/bin/cargo'],
-            'sysroot': [base + sysroot_path],
-            'llvm_tools': [base + '/llvm-tools-preview/lib/rustlib/%s-%s/bin' % (arch, os)],
-            'llvm_tools_lib': [base + '/llvm-tools-preview/lib/rustlib/%s-%s/lib' % (arch, os)],
-            'clippy_bin': [base + '/clippy-preview/bin/clippy-driver'],
-            'rustfmt_bin': [base + '/rustfmt-preview/bin/rustfmt'],
+        outs = [name],
+        cmd = ' && '.join(cmds),
+        entry_points = {
+            'rustc': '%s/rustc/bin/rustc' % name,
+            'rustdoc': '%s/rustc/bin/rustdoc' % name,
+            'clippy': '%s/rustc/bin/clippy-driver' % name,
+            'rustfmt': '%s/rustc/bin/rustfmt' % name,
+            'cargo': '%s/cargo/bin/cargo' % name,
+            'sysroot': sysroot,
+            'stdlib': '%s/lib/rustlib/%s/lib' % (sysroot, triple),
+            'llvm-tools': llvm_bin,
+            'llvm-cov': '%s/llvm-cov' % llvm_bin,
+            'llvm-profdata': '%s/llvm-profdata' % llvm_bin,
         },
-        cmd = 'tar -xzf $SRCS',
+        binary = True,
         building_description = 'Extracting...',
-    )
-    # This is something of a hack; the libraries need to stay in place next to the binary, which
-    # must itself be binary so it's executable.
-    # Another option might be to rewrite its rpath, or clever use of LD_LIBRARY_PATH, but this
-    # seems easiest for now.
-    lib_rule = filegroup(
-        name = name,
-        tag = 'lib',
-        srcs = [extract_rule + '|rustc_lib'],
-        binary = True,
-    )
-    rustc_rule = filegroup(
-        name = name + '_rustc',
-        srcs = [extract_rule + '|rustc_bin'],
         visibility = visibility,
-        binary = True,
-        deps = [lib_rule],
-    )
-    # rustc loads librustc_driver from ../lib next to the binary. Locally that
-    # comes along as a dependency of the rule above, but a remote worker stages
-    # only what an action names, so anything invoking rustc remotely needs to
-    # ask for this directly.
-    rustc_lib_rule = filegroup(
-        name = name + '_rustc_lib',
-        srcs = [extract_rule + '|rustc_lib'],
-        visibility = visibility,
-        binary = True,
-    )
-    rustdoc_rule = filegroup(
-        name = name + '_rustdoc',
-        srcs = [extract_rule + '|rustdoc_bin'],
-        visibility = visibility,
-        binary = True,
-        deps = [lib_rule],
-    )
-    sysroot_rule = filegroup(
-        name = name + '_sysroot',
-        srcs = [extract_rule + '|sysroot'],
-        visibility = visibility,
-    )
-    # The llvm tools have RUNPATH $ORIGIN/../lib pointing at libLLVM, so the
-    # sibling lib directory must stay staged next to the bin directory.
-    llvm_lib_rule = filegroup(
-        name = name,
-        tag = 'llvm_lib',
-        srcs = [extract_rule + '|llvm_tools_lib'],
-        binary = True,
-    )
-    llvm_tools_rule = filegroup(
-        name = name + '_llvm_tools',
-        srcs = [extract_rule + '|llvm_tools'],
-        visibility = visibility,
-        binary = True,
-        deps = [llvm_lib_rule],
-    )
-    # As with rustc's driver library: a dependency is enough locally, but an
-    # action that runs these on a remote worker has to name the directory.
-    llvm_tools_lib_rule = filegroup(
-        name = name + '_llvm_tools_lib',
-        srcs = [extract_rule + '|llvm_tools_lib'],
-        visibility = visibility,
-        binary = True,
-    )
-    # clippy-driver and rustfmt link librustc_driver via RUNPATH $ORIGIN/../lib,
-    # so they are copied next to rustc where that resolves to the staged libs.
-    # The copy creates that directory itself: cp will not, and a remote worker
-    # starts from a tree containing only what the action names, so the parent
-    # of a nested output is not there to copy into.
-    clippy_rule = build_rule(
-        name = name + '_clippy',
-        srcs = [extract_rule + '|clippy_bin'],
-        outs = [base + '/rustc/bin/clippy-driver'],
-        cmd = 'mkdir -p $(dirname $OUT) && cp $SRCS $OUT',
-        binary = True,
-        deps = [lib_rule],
-        visibility = visibility,
-    )
-    rustfmt_rule = build_rule(
-        name = name + '_rustfmt',
-        srcs = [extract_rule + '|rustfmt_bin'],
-        outs = [base + '/rustc/bin/rustfmt'],
-        cmd = 'mkdir -p $(dirname $OUT) && cp $SRCS $OUT',
-        binary = True,
-        deps = [lib_rule],
-        visibility = visibility,
-    )
-    # For backwards compatibility, stdlib is the lib subdirectory of the
-    # sysroot (copied out - it cannot be a nested output of the extract rule).
-    stdlib_rule = build_rule(
-        name = name + '_stdlib',
-        srcs = [extract_rule + '|sysroot'],
-        outs = [name + '_stdlib'],
-        cmd = 'cp -r $SRCS/lib/rustlib/%s-%s/lib $OUT' % (arch, os),
-        visibility = visibility,
-    )
-    cargo_rule = filegroup(
-        name = name + '_cargo',
-        srcs = [extract_rule + '|cargo_bin'],
-        visibility = visibility,
-        binary=True,
-        deps = [rustc_rule],
     )

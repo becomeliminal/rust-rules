@@ -9,53 +9,29 @@ an on-disk path and passes `--extern name=path` to rustc. This makes first-party
 rules and rust_repo subrepo crates freely interoperable in either direction.
 """
 
-def rustc_lib_label():
-    """The directory holding rustc's driver library.
-
-    rustc loads librustc_driver from ../lib beside its own binary. Locally
-    that resolves because the extracted toolchain is staged whole, but a
-    remote worker stages only what an action names, so every action that runs
-    rustc has to ask for this too or rustc dies with exit 127 before doing
-    anything. rustc and its lib directory are siblings emitted by the same
-    rust_toolchain call, so the configured rustc names it; RustcLib overrides
-    that for a rustc configured some other way.
-    """
-    if CONFIG.RUST.RUSTC_LIB:
-        return CONFIG.RUST.RUSTC_LIB
-    rustc = CONFIG.RUST.RUSTC
-    if not rustc.startswith("//") and not rustc.startswith(":") and not rustc.startswith("@") and not rustc.startswith("/"):
-        return ""
-    if "_rustc" not in rustc:
-        return ""
-    return rustc.replace("_rustc", "_rustc_lib")
-
-
 def _rustdoc_tools():
-    """Tools for rustdoc actions. rustdoc loads librustc_driver just as rustc
-    does, so the same directory has to be staged."""
-    tools = {
+    """Tools for rustdoc actions. rustdoc is an entry point of the same
+    toolchain target as rustc, so it arrives with the libraries it loads."""
+    return {
         'please_rust': [CONFIG.RUST.PLEASE_RUST_TOOL],
-        'rustdoc': ['//third_party/rust:toolchain_rustdoc'],
+        'rustdoc': [toolchain_entry('rustdoc')],
         'sysroot': [CONFIG.RUST.SYSROOT],
     }
-    lib = rustc_lib_label()
-    if lib:
-        tools['rustc_lib'] = [lib]
-    return tools
 
 
-def llvm_tools_lib_label():
-    """The directory holding libLLVM, beside the coverage tools that load it.
-    Same reasoning as rustc_lib_label: naming it is what gets it staged on a
-    remote worker."""
-    if CONFIG.RUST.LLVM_TOOLS_LIB:
-        return CONFIG.RUST.LLVM_TOOLS_LIB
-    tools = CONFIG.RUST.LLVM_TOOLS
-    if not tools.startswith("//") and not tools.startswith(":") and not tools.startswith("@") and not tools.startswith("/"):
-        return ""
-    if "_llvm_tools" not in tools:
-        return ""
-    return tools.replace("_llvm_tools", "_llvm_tools_lib")
+def toolchain_entry(entry:str):
+    """Another entry point of whatever toolchain target rustc comes from.
+
+    Every tool the toolchain provides is an entry point of one target, so
+    naming rustc names them all. Deriving them keeps a consumer from having
+    to configure each, and keeps a plugin's own default from sending them to
+    its toolchain instead of theirs: Please qualifies a plugin's DefaultValue
+    into that plugin's subrepo.
+    """
+    rustc = CONFIG.RUST.RUSTC
+    if '|' not in rustc:
+        return ''
+    return rustc.split('|')[0] + '|' + entry
 
 
 def _rust_tools(link:bool=False):
@@ -66,9 +42,6 @@ def _rust_tools(link:bool=False):
         "rustc": [CONFIG.RUST.RUSTC],
         "sysroot": [CONFIG.RUST.SYSROOT],
     }
-    lib = rustc_lib_label()
-    if lib:
-        tools["rustc_lib"] = [lib]
     if link and CONFIG.RUST.CC_TOOL:
         tools["cc"] = [CONFIG.RUST.CC_TOOL]
     return tools
@@ -422,9 +395,6 @@ def rust_test(name:str, root:str, modules:list=None, deps:list=[], cc_deps:list=
     if CONFIG.BUILD_CONFIG == 'cover':
         test_cmd = f'$TOOLS_PLEASE_RUST test --suite {name} --coverage --llvm-tools $TOOLS_LLVM -- $TEST'
         test_tools['llvm'] = [CONFIG.RUST.LLVM_TOOLS]
-        llvm_lib = llvm_tools_lib_label()
-        if llvm_lib:
-            test_tools['llvm_lib'] = [llvm_lib]
 
     # plz excludes a test target's own srcs from coverage reports, but Rust
     # unit tests recompile the library sources (tests live inside them), so

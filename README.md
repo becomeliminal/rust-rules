@@ -251,19 +251,25 @@ SomeConfig = some-value
 ```
 The available configuration options are:
 
-### Rustc
-The path to the `rustc` compiler to use. Defaults to the toolchain's rustc.
+`rust_toolchain` is one target, and each tool it provides is an entry point
+of it:
+
 ```ini
 [Plugin "rust"]
-Rustc = //third_party/rust:toolchain_rustc
+Rustc   = //third_party/rust:toolchain|rustc
+StdLib  = //third_party/rust:toolchain|stdlib
+Sysroot = //third_party/rust:toolchain|sysroot
 ```
 
-### StdLib
-The path to the `stdlib` to be linked by the compiler. Defaults to the toolchain's stdlib.
-```ini
-[Plugin "rust"]
-StdLib = //third_party/rust:toolchain_stdlib
-```
+`|rustdoc`, `|cargo`, `|clippy`, `|rustfmt`, `|llvm-tools`, `|llvm-cov` and
+`|llvm-profdata` are available the same way, and are derived from `Rustc`
+unless you set them, so most repos configure nothing beyond the three above.
+
+Keeping the toolchain in one output is deliberate rather than tidy: rustc,
+rustdoc and the llvm tools each load a library from beside their own binary,
+and exposing them as separate targets let a build stage a binary without it.
+That works locally, where the whole toolchain is present, and fails on a
+remote worker, which stages only what an action names.
 
 ### DefaultStatic
 Binaries statically link the C runtime by default, producing self-contained

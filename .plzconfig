@@ -11,9 +11,8 @@ Target = //plugins:rust
 ; names cannot collide with a consumer's third_party/rust ones
 CriterionDep = //third_party/crates:criterion
 BindgenTool = ///third_party/crates/bindgen_cli//:bindgen_bin
-Rustc = //third_party/rust:toolchain_rustc
-StdLib = //third_party/rust:toolchain_stdlib
-RepoRoot = //third_party/rust:toolchain_target
+Rustc = //third_party/rust:toolchain|rustc
+StdLib = //third_party/rust:toolchain|stdlib
 ; Exercise the pipelined shape in this repo; consumers default to off
 PipelinedCompilation = true
 
@@ -32,12 +31,12 @@ Target = //plugins:cc
 Name = rust
 
 [PluginConfig "rustc"]
-DefaultValue = //third_party/rust:toolchain_rustc
+DefaultValue = //third_party/rust:toolchain|rustc
 Help = A file path or build label for rustc.
 Inherit = true
 
 [PluginConfig "stdlib"]
-DefaultValue = //third_party/rust:toolchain_stdlib
+DefaultValue = //third_party/rust:toolchain|stdlib
 Help = A file path or build label for a rust stdlib.
 Inherit = true
 Optional = true
@@ -75,7 +74,7 @@ Inherit = true
 
 [PluginConfig "sysroot"]
 ConfigKey = Sysroot
-DefaultValue = //third_party/rust:toolchain_sysroot
+DefaultValue = //third_party/rust:toolchain|sysroot
 Help = A build label for the Rust sysroot (contains lib/rustlib/...).
 Inherit = true
 
@@ -99,7 +98,7 @@ PleaseVersion = 17.27.0
 
 [PluginConfig "llvm_tools"]
 ConfigKey = LlvmTools
-DefaultValue = //third_party/rust:toolchain_llvm_tools
+DefaultValue = //third_party/rust:toolchain|llvm-tools
 Help = Build label of the llvm-tools directory (llvm-profdata, llvm-cov) used for coverage.
 Inherit = true
 
@@ -117,13 +116,13 @@ Inherit = true
 
 [PluginConfig "clippy_tool"]
 ConfigKey = ClippyTool
-DefaultValue = //third_party/rust:toolchain_clippy
+DefaultValue = //third_party/rust:toolchain|clippy
 Help = Build label of clippy-driver (a rustc-compatible frontend) used by rust_clippy.
 Inherit = true
 
 [PluginConfig "rustfmt_tool"]
 ConfigKey = RustfmtTool
-DefaultValue = //third_party/rust:toolchain_rustfmt
+DefaultValue = //third_party/rust:toolchain|rustfmt
 Help = Build label of rustfmt, used by rust_fmt_test.
 Inherit = true
 
@@ -202,16 +201,4 @@ Type = bool
 Help = Run crate download and BUILD generation locally rather than on a remote worker. These steps fetch a tarball and write BUILD files, so there is little to gain remotely, and Please crashes reading a remote subrepo's config when its tree is not in the remote cache.
 Inherit = true
 
-[PluginConfig "rustc_lib"]
-ConfigKey = RustcLib
-DefaultValue =
-Optional = true
-Help = Directory holding rustc's driver library. Empty derives it from Rustc, whose sibling it is. Every action that runs rustc stages it, because a remote worker stages only what an action names and rustc loads the library from beside its own binary.
-Inherit = true
 
-[PluginConfig "llvm_tools_lib"]
-ConfigKey = LlvmToolsLib
-DefaultValue =
-Optional = true
-Help = Directory holding libLLVM, which the coverage tools load from beside their own binaries. Empty derives it from LlvmTools.
-Inherit = true

@@ -20,8 +20,8 @@ def please_repo_e2e_test(name, expected_output=None, plz_command, repo, labels=[
             "PLUGIN_REPO": ["//test:export"],
         },
         tools = {
-            "RUSTC": ["//third_party/rust:toolchain_rustc"],
-            "SYSROOT": ["//third_party/rust:toolchain_sysroot"],
+            "RUSTC": ["//third_party/rust:toolchain|rustc"],
+            "SYSROOT": ["//third_party/rust:toolchain|sysroot"],
             "PLEASE_RUST": ["//tools/please_rust:bootstrap"],
         },
         labels = labels,

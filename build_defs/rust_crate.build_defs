@@ -135,10 +135,6 @@ def _crate_tools():
         'rustc': [CONFIG.RUST.RUSTC],
         'stdlib': [CONFIG.RUST.STDLIB],
     }
-    # rustc needs its driver library staged alongside; see rustc_lib_label
-    lib = rustc_lib_label()
-    if lib:
-        tools['rustc_lib'] = [lib]
     return tools
 
 

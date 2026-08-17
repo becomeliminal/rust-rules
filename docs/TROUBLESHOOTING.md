@@ -97,6 +97,27 @@ Pin the released binary instead (see PleaseRustTool in the README). It is
 hash-verified, downloads in seconds, and removes cargo from the picture
 entirely.
 
+## `Invalid build label: //third_party/rust:toolchain|rustc`
+
+Entry-point labels are for `tools`, not `deps`. Depend on the toolchain
+target itself (`//third_party/rust:toolchain`) where you need it as a
+dependency, and use the entry point where you need a particular binary.
+
+If the label instead reaches a shell command, quote it: the `|` is a pipe.
+
+## Upgrading from separate toolchain targets
+
+Before 0.5.0 the toolchain was eight sibling targets. Two lines of config:
+
+```ini
+Rustc   = //third_party/rust:toolchain_rustc    ->  //third_party/rust:toolchain|rustc
+Sysroot = //third_party/rust:toolchain_sysroot  ->  //third_party/rust:toolchain|sysroot
+```
+
+`StdLib`, `LlvmTools`, `ClippyTool` and `RustfmtTool` follow the same
+pattern if you set them; `RustcLib` and `LlvmToolsLib` are gone, as the
+separation they compensated for no longer exists.
+
 ## Reporting something not listed here
 
 The tool prints the exact rustc invocation before running it, so a failing
