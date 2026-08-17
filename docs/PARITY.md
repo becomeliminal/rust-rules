@@ -107,7 +107,10 @@ binary-link time.
       coverage tools staging libLLVM (no coverage step). Reasoning says they
       are fine and an audit of the wrapper found nothing; an audit also
       missed the compile-action instance before v0.4.5, so treat these as
-      unverified. Pointing a remote executor at them, in that order, closes it
+      unverified. Pointing a remote executor at them, in that order, closes
+      it; asked of the labs pilot on 2026-08-17. The entry-point toolchain
+      makes the rustdoc and llvm cases structurally the same as the compile
+      path that was verified remotely, which is an argument, not a run
 - [ ] Upstream plz WaitForPackage race (found 2026-08): a lost-wakeup
       TOCTOU on `packageWaits` in src/core/state.go hangs builds when many
       packages concurrently subinclude the plugin's build_defs — all plz

@@ -110,6 +110,14 @@ so adding one crate does not churn the rest of the graph. `--ignore-msrv`
 turns MSRV filtering off; `--greedy` selects the older non-backtracking
 resolver.
 
+Declarations are shared by everyone working in the repo, so `lock` solves
+for every platform in `--targets` (linux x86_64 and both darwin arches by
+default) and declares the union. A linux developer adding `chrono` declares
+`core-foundation-sys` too, because `iana-time-zone` needs it on macOS, and
+their colleague on a Mac can build the branch. Resolution itself is still
+per-platform and happens in the build graph, so each machine builds only the
+crates it actually needs.
+
 
 Or import an existing Cargo project wholesale from its lockfile:
 ```ini
@@ -270,6 +278,26 @@ rustdoc and the llvm tools each load a library from beside their own binary,
 and exposing them as separate targets let a build stage a binary without it.
 That works locally, where the whole toolchain is present, and fails on a
 remote worker, which stages only what an action names.
+
+### Cross-compilation
+`plz build --arch darwin_arm64 //...` compiles for another platform.
+`rust_toolchain` installs the standard library for whatever `--arch` names,
+and `architectures` installs more for cross-compiling part of a repo by
+hand:
+
+```python
+rust_toolchain(
+    name = "toolchain",
+    version = "1.97.1",
+    architectures = ["darwin_arm64"],
+)
+```
+
+Build scripts, proc macros and installed binaries are compiled for the host
+whatever the target is, since they run during the build; cargo splits its
+unit graph the same way. Libraries need nothing further. Linking an
+executable for another platform also needs a linker that targets it, which
+comes from `CCTool`.
 
 ### DefaultStatic
 Binaries statically link the C runtime by default, producing self-contained
