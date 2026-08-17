@@ -351,7 +351,10 @@ def rust_binary(name:str, main:str, modules:list=None, deps:list=[], cc_deps:lis
     if build_root or build_deps:
         fail(f"rust_binary {name}: build scripts are only supported for third-party crates via rust_repo")
     if static == None:
-        static = CONFIG.RUST.DEFAULT_STATIC
+        # Apple does not ship a static libSystem and linking against it is
+        # unsupported, so crt-static is a linux (and Windows) idea. Asking for
+        # it explicitly still passes it through, and rustc will say no.
+        static = CONFIG.RUST.DEFAULT_STATIC and CONFIG.TARGET_OS != 'darwin'
     crate_name = name.replace('-', '_')
 
     srcs = {
