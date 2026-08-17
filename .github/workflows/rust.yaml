@@ -27,3 +27,25 @@ jobs:
         with:
           name: logs
           path: plz-out/log
+
+  # macOS is where the platform assumptions show up: three bugs that made a
+  # Mac checkout unbuildable were found by the release workflow building
+  # there, one release at a time. This runs the whole suite so they surface
+  # here instead. Allowed to fail until it has been green a few times, since
+  # nobody develops on a Mac day to day.
+  macos:
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Build everything
+        run: ./pleasew build -p -v notice //... --log_file plz-out/log/build.log
+      - name: Run tests
+        run: ./pleasew test -p -v notice --log_file plz-out/log/test.log
+      - name: Archive logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-logs
+          path: plz-out/log
