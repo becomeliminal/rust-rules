@@ -1201,7 +1201,6 @@ rust_repo(
 # Machine-maintained by please_rust sync; resolution runs in the build graph.
 rust_resolve(
     name = "rust_lock",
-    target = "x86_64-unknown-linux-gnu",
     entries = [
         "libc|libc|0.2.155|default,std|true|true",
         "cfg_if|cfg-if|1.0.0||false|true",

@@ -59,9 +59,42 @@ def rust_git_download(name:str, crate:str, version:str, repo:str, revision:str, 
     )
 
 
+def host_triple():
+    """The target triple of the machine parsing this, derived the way
+    rust_toolchain derives its download URL. Resolution is per-target because
+    Rust's cfg-gated dependencies differ by platform, so a mac developer must
+    resolve the darwin graph rather than a checked-in linux one."""
+    oses = {'linux': 'unknown-linux-gnu', 'darwin': 'apple-darwin'}
+    arches = {'amd64': 'x86_64', 'x86': 'i686', 'arm64': 'aarch64', 'arm': 'arm'}
+    os = oses.get(CONFIG.OS, '')
+    arch = arches.get(CONFIG.ARCH, '')
+    if not os or not arch:
+        raise ParseError('Unsupported platform %s/%s; pass target explicitly to rust_resolve' % (CONFIG.OS, CONFIG.ARCH))
+    return '%s-%s' % (arch, os)
+
+
 def _subrepo_ref(value:str):
-    """A config value as seen from inside a generated subrepo: host-repo
-    labels need the @ prefix; file paths (config overrides) pass through."""
+    """A config value as seen from inside a generated subrepo.
+
+    A label that already names a subrepo (`///rust//tools:x`) is absolute and
+    means the same thing everywhere, so it passes through untouched. This is
+    what a consumer sees for any config value it has not overridden, because
+    Please qualifies a plugin's own DefaultValue into the plugin's subrepo.
+    Prefixing those with @ used to rewrite them into the consuming repo,
+    where the target does not exist, which is why consumers had to override
+    the tool with a label of their own.
+
+    A plain host-repo label (`//third_party/rust:toolchain_rustc`) does need
+    the @ prefix to keep pointing at the host from inside a subrepo. File
+    paths (from config overrides) pass through.
+    """
+    # Please qualifies a plugin's DefaultValue into the plugin's subrepo. In
+    # the plugin's own repo that subrepo name is empty, so the value comes
+    # back as ///// + path; collapse it to the plain host label it means.
+    if value.startswith("////"):
+        value = value[3:]
+    if value.startswith("///"):
+        return value
     if value.startswith("//") or value.startswith(":"):
         return f"@{value}"
     return value
@@ -201,6 +234,7 @@ def rust_repo(
     # Generate BUILD files
     # Note: remote_file with extract=True extracts contents into a directory named after the crate
     lock_flag = "--lock $SRCS_LOCK " if lock else ""
+    target_triple = host_triple()
     pipeline_flag = "--pipeline " if CONFIG.RUST.PIPELINED_COMPILATION else ""
     cc_is_label = CONFIG.RUST.CC_TOOL and (CONFIG.RUST.CC_TOOL.startswith("//") or CONFIG.RUST.CC_TOOL.startswith(":"))
     cc_ref = _subrepo_ref(CONFIG.RUST.CC_TOOL) if CONFIG.RUST.CC_TOOL else ""
@@ -213,7 +247,7 @@ def rust_repo(
         "rm -rf $SRCS_CRATE/.plzconfig",
         "find $SRCS_CRATE -name BUILD -delete",
         # Run please_rust generate (SRCS_CRATE points directly to the extracted directory)
-        f"$TOOL generate --crate-name {crate} --version {version} --src-root $SRCS_CRATE --subrepo {subrepo_path} --features '{features_arg}' --install '{install_arg}' --third-party-folder '{third_party_path}' --tool-label {tool_ref} --rustc-label {rustc_ref} --sysroot-label {sysroot_ref} {cc_flag}{lock_flag}{pipeline_flag}" + " ".join([f"--override {k}={v}" for k, v in sorted(dep_overrides.items())]),
+        f"$TOOL generate --crate-name {crate} --version {version} --src-root $SRCS_CRATE --subrepo {subrepo_path} --features '{features_arg}' --install '{install_arg}' --third-party-folder '{third_party_path}' --target {target_triple} --tool-label {tool_ref} --rustc-label {rustc_ref} --sysroot-label {sysroot_ref} {cc_flag}{lock_flag}{pipeline_flag}" + " ".join([f"--override {k}={v}" for k, v in sorted(dep_overrides.items())]),
         # Move to output
         "mv $SRCS_CRATE $OUT",
     ]
@@ -281,7 +315,7 @@ def rust_repo(
     )
 
 
-def rust_resolve(name:str, entries:list, target:str="x86_64-unknown-linux-gnu", visibility:list=["PUBLIC"]):
+def rust_resolve(name:str, entries:list, target:str="", visibility:list=["PUBLIC"]):
     """Resolves versions and features across the declared crate graph.
 
     Maintained by `please_rust sync`. Each entry is
@@ -294,9 +328,14 @@ def rust_resolve(name:str, entries:list, target:str="x86_64-unknown-linux-gnu", 
     Args:
         name: Name of the rule (rust_repo's lock arg points at it).
         entries: Declared crate graph, one string per rust_repo entry.
-        target: Target triple to resolve for.
+        target: Target triple to resolve for. Defaults to the host's, so a
+                repo shared between linux and mac developers resolves the
+                graph each of them actually builds; pass one explicitly to
+                pin a single platform.
         visibility: Visibility specification.
     """
+    if not target:
+        target = host_triple()
     pkg = package_name()
     entry_flags = " ".join([f"--entry '{e}'" for e in entries])
     manifest_srcs = []

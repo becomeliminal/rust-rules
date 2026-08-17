@@ -68,6 +68,11 @@ pub struct GenerateArgs {
     #[arg(long, default_value = "")]
     pub cc_label: String,
 
+    /// Target triple, used to evaluate platform-gated dependencies when a
+    /// crate is generated standalone (absent from the resolved graph)
+    #[arg(long, default_value = "x86_64-unknown-linux-gnu")]
+    pub target: String,
+
     /// Emit pipelined-compilation rule shapes: each crate splits into a
     /// `_X#link` compile rule, a `_X#rmeta` metadata-only rule that
     /// dependents' compiles hang off, and a public `X` filegroup that
@@ -231,8 +236,8 @@ pub fn run(args: GenerateArgs) -> Result<()> {
             .collect();
 
         let deps =
-            resolve_dependencies(&manifest, &args.third_party_folder, &requested_features, &overrides);
-        let build_deps = resolve_build_dependencies(&manifest, &args.third_party_folder);
+            resolve_dependencies(&manifest, &args.third_party_folder, &args.target, &requested_features, &overrides);
+        let build_deps = resolve_build_dependencies(&manifest, &args.third_party_folder, &args.target);
         (requested_features, deps, build_deps)
     };
 
@@ -406,6 +411,7 @@ fn determine_crate_type(manifest: &Manifest) -> String {
 fn resolve_dependencies(
     manifest: &Manifest,
     third_party_folder: &str,
+    target_triple: &str,
     enabled_features: &[String],
     overrides: &std::collections::HashMap<String, String>,
 ) -> Vec<(String, String)> {
@@ -473,17 +479,13 @@ fn resolve_dependencies(
     }
 
     // Process target-specific dependencies
-    // For now, we only include deps that apply to Linux
+    // Platform-gated dependencies, evaluated properly with cfg-expr. The old
+    // substring matching here missed gates like
+    // cfg(any(target_os = "linux", target_os = "macos")), so crates that
+    // declare a dependency only under a target section (ahash's getrandom and
+    // once_cell, for two) silently lost it.
     for (target_cfg, target_deps) in &manifest.target {
-        // Check if this target applies to our platform (Linux/x86_64)
-        // Common patterns:
-        // - cfg(unix), cfg(target_os = "linux"), cfg(target_family = "unix")
-        // - cfg(not(windows)) - applies on Linux
-        let applies = target_cfg.contains("unix")
-            || target_cfg.contains("linux")
-            || target_cfg.contains("target_family = \"unix\"")
-            || (target_cfg.contains("not") && target_cfg.contains("windows"))
-            || (target_cfg.contains("not") && target_cfg.contains("wasm"));
+        let applies = crate::sync::target_applies(target_cfg, target_triple);
 
         if applies {
             for (name, dep) in &target_deps.dependencies {
@@ -499,6 +501,7 @@ fn resolve_dependencies(
 fn resolve_build_dependencies(
     manifest: &Manifest,
     third_party_folder: &str,
+    target_triple: &str,
 ) -> Vec<(String, String)> {
     let mut deps = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -514,11 +517,7 @@ fn resolve_build_dependencies(
 
     // Also check target-specific build-dependencies
     for (target_cfg, target_deps) in &manifest.target {
-        let applies = target_cfg.contains("unix")
-            || target_cfg.contains("linux")
-            || target_cfg.contains("target_family = \"unix\"")
-            || (target_cfg.contains("not") && target_cfg.contains("windows"))
-            || (target_cfg.contains("not") && target_cfg.contains("wasm"));
+        let applies = crate::sync::target_applies(target_cfg, target_triple);
 
         if applies {
             for (name, _dep) in &target_deps.build_dependencies {
@@ -1196,12 +1195,17 @@ fn generate_compile_rule(
 }
 
 fn generate_plzconfig() -> String {
-    // Reference parent repo's plugin and provide explicit toolchain paths
-    // CONFIG.RUST is not available in subrepos, so we specify the tools directly
+    // Only the plugin reference, matching what go_repo writes into its own
+    // subrepos (a plugin ref and plain scalars, no cross-repo build labels).
+    //
+    // The toolchain used to be named here as Rustc/Stdlib labels. The rules in
+    // these generated files never read that config — every target passes its
+    // tools explicitly — so the labels bought nothing, and they cost: resolving
+    // a cross-repo label while reading a subrepo config crashes Please under
+    // remote execution, and the labels hardcoded both `third_party/rust` and a
+    // `toolchain_` name prefix that any consumer is free to change.
     r#"[Plugin "rust"]
 Target = @//plugins:rust
-Rustc = @//third_party/rust:toolchain_rustc
-Stdlib = @//third_party/rust:toolchain_stdlib
 "#.to_string()
 }
 
@@ -1430,6 +1434,7 @@ mod run_tests {
             src_root,
             subrepo: "third_party/rust/demo".to_string(),
             third_party_folder: "third_party/rust".to_string(),
+            target: "x86_64-unknown-linux-gnu".to_string(),
             pipeline: false,
             features: "fallback-feat".to_string(),
             install: "".to_string(),
@@ -1608,6 +1613,38 @@ mod heuristic_tests {
     }
 
     #[test]
+    fn platform_gated_deps_use_real_cfg_evaluation() {
+        // ahash declares getrandom and once_cell only under
+        // cfg(any(target_os = "linux", ...)) style gates. Substring matching
+        // missed those, so a standalone build lost the dependency entirely.
+        let m = manifest(
+            "[target.'cfg(any(target_os = \"linux\", target_os = \"macos\"))'.dependencies]\nonce_cell = \"1\"\n\n[target.'cfg(target_os = \"windows\")'.dependencies]\nwinapi = \"0.3\"\n",
+        );
+        let deps = resolve_dependencies(
+            &m,
+            "third_party/rust",
+            "x86_64-unknown-linux-gnu",
+            &[],
+            &HashMap::new(),
+        );
+        let names: Vec<&str> = deps.iter().map(|d| d.0.as_str()).collect();
+        assert!(names.contains(&"once_cell"), "got {:?}", names);
+        assert!(!names.contains(&"winapi"), "got {:?}", names);
+
+        // ... and the same manifest resolved for windows flips the answer
+        let deps = resolve_dependencies(
+            &m,
+            "third_party/rust",
+            "x86_64-pc-windows-msvc",
+            &[],
+            &HashMap::new(),
+        );
+        let names: Vec<&str> = deps.iter().map(|d| d.0.as_str()).collect();
+        assert!(names.contains(&"winapi"), "got {:?}", names);
+        assert!(!names.contains(&"once_cell"), "got {:?}", names);
+    }
+
+    #[test]
     fn heuristic_optional_and_overrides() {
         let m = manifest(
             "[dependencies]\nplain = \"1\"\n\n[dependencies.opt]\nversion = \"1\"\noptional = true\n\n[dependencies.gated]\nversion = \"1\"\noptional = true\n\n[features]\nwith_gated = [\"dep:gated\"]\n\n[target.'cfg(windows)'.dependencies]\nwinonly = \"1\"\n",
@@ -1616,7 +1653,7 @@ mod heuristic_tests {
         overrides.insert("plain".to_string(), "plain-0.9.0".to_string());
 
         // No features: only the mandatory dep, routed through the override
-        let deps = resolve_dependencies(&m, "third_party/rust", &[], &overrides);
+        let deps = resolve_dependencies(&m, "third_party/rust", "x86_64-unknown-linux-gnu", &[], &overrides);
         assert_eq!(deps.len(), 1);
         assert_eq!(deps[0].1, "///third_party/rust/plain-0.9.0//:plain");
 
@@ -1624,6 +1661,7 @@ mod heuristic_tests {
         let deps = resolve_dependencies(
             &m,
             "third_party/rust",
+            "x86_64-unknown-linux-gnu",
             &["with_gated".to_string(), "opt".to_string()],
             &HashMap::new(),
         );
@@ -1636,7 +1674,7 @@ mod heuristic_tests {
     #[test]
     fn heuristic_build_deps() {
         let m = manifest("[build-dependencies]\ncc = \"1\"\n\n[target.'cfg(unix)'.build-dependencies]\nub = \"1\"\n");
-        let deps = resolve_build_dependencies(&m, "third_party/rust");
+        let deps = resolve_build_dependencies(&m, "third_party/rust", "x86_64-unknown-linux-gnu");
         let names: Vec<&str> = deps.iter().map(|d| d.0.as_str()).collect();
         assert_eq!(names, vec!["cc", "ub"]);
     }

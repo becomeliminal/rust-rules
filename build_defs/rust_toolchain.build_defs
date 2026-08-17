@@ -28,11 +28,15 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
         else:
             raise ParseError('Unknown OS %s, you must pass os explicitly to rust_toolchain' % CONFIG.OS)
     if not arch:
-        if CONFIG.ARCH == 'amd64':
-            arch = 'x86_64'
-        elif CONFIG.ARCH == 'x86':
-            arch = 'i686'
-        else:
+        # Please's names on the left, the Rust target triple's on the right
+        arches = {
+            'amd64': 'x86_64',
+            'x86': 'i686',
+            'arm64': 'aarch64',
+            'arm': 'arm',
+        }
+        arch = arches.get(CONFIG.ARCH, '')
+        if not arch:
             raise ParseError('Unknown architecture %s, you must pass arch explicitly to rust_toolchain' % CONFIG.ARCH)
 
     base = '-'.join(['rust', version, arch, os])

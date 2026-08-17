@@ -322,6 +322,24 @@ pub fn run_reporting(args: SyncArgs) -> Result<Vec<crate::resolve::MissingDep>> 
         let _ = fs::remove_file(&old_lock);
         eprintln!("sync: removed stale {} (resolution now happens in the build graph)", old_lock.display());
     }
+    // Declarations nothing reaches are built standalone with default
+    // features, which is rarely what was meant: name them rather than
+    // leaving the surprise to surface as a compile error inside an
+    // unrelated crate.
+    let unreachable: Vec<String> = decls
+        .iter()
+        .map(|d| d.subrepo())
+        .filter(|s| !lock.crates.contains_key(s) && !lock.host_crates.contains_key(s))
+        .collect();
+    if !unreachable.is_empty() {
+        let shown: Vec<&str> = unreachable.iter().take(5).map(|s| s.as_str()).collect();
+        eprintln!(
+            "sync: {} declarations are not reachable from any root and will build standalone with default features: {}{}. Run sync --prune to drop them.",
+            unreachable.len(),
+            shown.join(", "),
+            if unreachable.len() > 5 { ", ..." } else { "" },
+        );
+    }
     eprintln!(
         "sync: wrote {} declarations to {} ({} crates resolve)",
         decls.len(),
@@ -336,7 +354,10 @@ fn write_resolve_block(build: &str, decls: &[Decl], target: &str) -> String {
     let mut block = String::new();
     block.push_str("# Machine-maintained by please_rust sync; resolution runs in the build graph.\n");
     block.push_str("rust_resolve(\n    name = \"rust_lock\",\n");
-    block.push_str(&format!("    target = \"{}\",\n", target));
+    // No target: the rule derives the host's, so the same declarations
+    // resolve correctly for linux and mac developers alike. sync --target
+    // still resolves for whatever was asked, it just is not written here.
+    let _ = target;
     block.push_str("    entries = [\n");
     for d in decls {
         let features = if d.root { d.features.join(",") } else { String::new() };
@@ -1487,7 +1508,7 @@ fn default_activated_deps(iv: &IndexVersion) -> BTreeSet<String> {
     activated
 }
 
-fn target_applies(target_cfg: &str, triple: &str) -> bool {
+pub fn target_applies(target_cfg: &str, triple: &str) -> bool {
     if target_cfg.starts_with("cfg(") {
         if let Some(info) = cfg_expr::targets::get_builtin_target_by_triple(triple) {
             if let Ok(expr) = cfg_expr::Expression::parse(target_cfg) {
