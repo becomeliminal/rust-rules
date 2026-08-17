@@ -390,11 +390,11 @@ fn build_command(args: &CompileArgs) -> Result<Command> {
                         let direct = args.deps.is_empty()
                             || args.deps.iter().any(|d| match d.split_once('@') {
                                 Some((dep_name, dep_qual)) => {
-                                    // A dep names its label; the crate names
-                                    // its subrepo. They agree on the tail,
-                                    // which is enough to tell one declaration
-                                    // of a crate from another.
-                                    dep_name == name
+                                    // A dep names its declaration, and may
+                                    // name the crate as well. Declaration
+                                    // alone is the useful form: the label
+                                    // says md_5 where the crate is md5.
+                                    (dep_name.is_empty() || dep_name == name)
                                         && qualifier.map_or(true, |q| {
                                             q == dep_qual || q.ends_with(&format!("/{}", dep_qual))
                                         })

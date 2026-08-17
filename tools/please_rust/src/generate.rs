@@ -743,7 +743,10 @@ fn generate_build_file(
                 // name alone does not say which one. aws-smithy-types depends
                 // on http 0.2 plainly and on http 1.x as http_1x; without
                 // this both answer to `http` and rustc refuses the pair.
-                feature_str.push_str(&format!(" --dep {}@{}", real, q));
+                //
+                // Named by declaration alone for the same reason renames are:
+                // the label says md_5 and the crate is called md5.
+                feature_str.push_str(&format!(" --dep @{}", q));
             }
         }
     }
@@ -911,7 +914,7 @@ fn generate_rmeta_rule(
     // and icu_*_data includes data/*.rs.data, and neither is reachable from a
     // glob written around src. Non-Rust files cost nothing to stage and are
     // exactly what include_str! and include! reach for.
-    content.push_str(&format!("        \"mods\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\", \"*.rlib\", \"*.rmeta\", \"*.externconfig\", \"*.so\", \"*.dylib\", \"*.a\", \"*.d\", \"*_out\", \"*_out/**\"], allow_empty=True),\n", lib_path));
+    content.push_str(&format!("        \"mods\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\", \"lib{}-*\", \"*.externconfig\", \"{}_out\", \"{}_out/**\"], allow_empty=True),\n", lib_path, crate_ident, normalized_name, normalized_name));
     content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
     if !deps.is_empty() {
         content.push_str("        \"externconfigs\": [\n");
@@ -1243,7 +1246,7 @@ fn generate_compile_rule_with_buildscript(
     // and icu_*_data includes data/*.rs.data, and neither is reachable from a
     // glob written around src. Non-Rust files cost nothing to stage and are
     // exactly what include_str! and include! reach for.
-    content.push_str(&format!("        \"mods\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\", \"*.rlib\", \"*.rmeta\", \"*.externconfig\", \"*.so\", \"*.dylib\", \"*.a\", \"*.d\", \"*_out\", \"*_out/**\"], allow_empty=True),\n", lib_path));
+    content.push_str(&format!("        \"mods\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\", \"lib{}-*\", \"*.externconfig\", \"{}_out\", \"{}_out/**\"], allow_empty=True),\n", lib_path, crate_ident, normalized_name, normalized_name));
     content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
     if !deps.is_empty() {
         content.push_str("        \"externconfigs\": [\n");
@@ -1340,7 +1343,7 @@ fn generate_compile_rule(
     // and icu_*_data includes data/*.rs.data, and neither is reachable from a
     // glob written around src. Non-Rust files cost nothing to stage and are
     // exactly what include_str! and include! reach for.
-    content.push_str(&format!("        \"mods\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\", \"*.rlib\", \"*.rmeta\", \"*.externconfig\", \"*.so\", \"*.dylib\", \"*.a\", \"*.d\", \"*_out\", \"*_out/**\"], allow_empty=True),\n", lib_path));
+    content.push_str(&format!("        \"mods\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\", \"lib{}-*\", \"*.externconfig\", \"{}_out\", \"{}_out/**\"], allow_empty=True),\n", lib_path, crate_ident, normalized_name, normalized_name));
     content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
     if !deps.is_empty() {
         content.push_str("        \"externconfigs\": [\n");
@@ -1641,11 +1644,11 @@ mod tests {
             None,
             "",
         );
-        assert!(out.contains("--dep http@third_party/crates/http-0.2.12"), "{}", out);
+        assert!(out.contains("--dep @third_party/crates/http-0.2.12"), "{}", out);
         assert!(out.contains("--rename http_1x=@third_party/crates/http"), "{}", out);
         // The alias is not also requested as a plain dep, which would put the
         // wrong version back under the bare name.
-        assert!(!out.contains("--dep http@third_party/crates/http "), "{}", out);
+        assert!(!out.contains("--dep @third_party/crates/http "), "{}", out);
     }
 
     /// A host unit's externconfig key carries the unit in its qualifier,
@@ -1661,7 +1664,19 @@ mod tests {
             None,
             "",
         );
-        assert!(out.contains("--dep proc_macro2@third_party/crates/proc_macro2_host"), "{}", out);
+        assert!(out.contains("--dep @third_party/crates/proc_macro2_host"), "{}", out);
+    }
+
+    /// Excluding artifacts by extension throws away data files a crate
+    /// legitimately ships: wit-component includes a libdl.so, which is not
+    /// our output and which the crate cannot build without. Exclude what we
+    /// generate by its name instead.
+    #[test]
+    fn only_our_own_artifacts_are_excluded_from_the_package() {
+        let out = gen("lib", &[], &[], None, "");
+        assert!(out.contains("\"libmy_crate-*\""), "{}", out);
+        assert!(!out.contains("\"*.so\""), "{}", out);
+        assert!(!out.contains("\"*.a\""), "{}", out);
     }
 
     #[test]
