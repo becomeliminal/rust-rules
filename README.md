@@ -412,10 +412,10 @@ Contributions are welcome! Please open or submit a pull request with your change
 ### Extra Features for Contribution
 Here are some extra features that would be valuable additions to this project:
 
-- **Target (OS and Architecture) Compatibility**: built and tested on
-  x86_64-unknown-linux-gnu, and cross-compiled from there to
-  aarch64-apple-darwin. Running the produced binaries, and building natively
-  on macOS, needs a contributor who runs the target.
+- **Target (OS and Architecture) Compatibility**: built and tested in CI on
+  x86_64-unknown-linux-gnu and aarch64-apple-darwin, and cross-compiled from
+  the former to the latter. Intel Macs, ARM linux and Windows have nobody
+  running them; ARM linux is covered by resolution but not by a build.
 
 C toolchains stay host-provided by convention (the `CCTool` config accepts
 a build label for anyone who wants their own), and private registries are
