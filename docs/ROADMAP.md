@@ -119,8 +119,9 @@ service.
 2. ~~fmt / clippy / doc rules~~ — done 2026-08.
 3. ~~Profile knobs~~ — done 2026-08: opt-level, lto, codegen-units,
   panic, strip, debug-assertions.
-4. **Pilot debt** — ~~`lock` feature UX~~ and ~~release-on-tag CI~~ done
-  2026-08; subrepo namespacing fix remains.
+4. ~~Pilot debt~~ — done 2026-08: `lock` feature UX, release-on-tag CI, and
+  the subrepo namespacing fix (this plugin keeps its crates in
+  third_party/crates so they cannot collide with a consumer's).
 
 **Exit criterion:** a cargo project ports with one command, clippy and fmt
 gate CI, and builds/tests get faster.
@@ -131,34 +132,45 @@ gate CI, and builds/tests get faster.
 7. **Top-100-crates corpus in CI** — a generated test package that locks and
   builds the most-downloaded crates; the pass-rate is the public metric.
   (M, then continuous)
-8. **Optional hermetic C toolchain target** + pkg-config/bindgen strategy,
-  driven by what the corpus fails on. (L)
-9. **Generic git + private registries.** (M)
-10. **PubGrub at the `select()` seam; MSRV-aware resolution.** (M)
+8. ~~Optional hermetic C toolchain target~~ — dropped by decision (2026-08):
+  go-rules has shipped on a host cc forever, and `CCTool` takes a build
+  label for anyone who wants their own. bindgen shipped separately.
+9. **Generic git fetcher** (gitlab, self-hosted; github archive URLs already
+  work). Private registries dropped to on-demand by decision (2026-08):
+  crates.io plus git forks and `download=` overrides cover the cases. (M)
+10. ~~PubGrub at the `select()` seam; MSRV-aware resolution~~ — done
+  2026-08: backtracking version selection over the sparse index, with
+  compatibility buckets, declared versions as preferences, and MSRV
+  filtered from the index's `rust_version`.
 
 **Exit criterion:** corpus pass-rate ≥90 of top 100, with the failures
 individually explained.
 
-### Phase 3 — Platform breadth (parked)
+### Phase 3 — Platform breadth
 
-Parked by decision (2026-08): the team is single-platform (linux-amd64),
-so cross-platform work has no consumer to validate it. Revisit when a real
-target appears; the host/target unit split already did the hard part.
-
+Unparked and largely done (2026-08). It was parked on the grounds that a
+single-platform team has no consumer to validate cross-platform work; what
+changed is that the plugin ships to people who are not on this machine, and
+a declaration set generated on linux was quietly wrong for anyone else.
 
 11. **More targets** (musl, wasm, embedded) now that cross-compilation
   itself works: each needs a `rust-std` and, for wasm, a bindgen-shaped
   rule. (M)
-12. **macOS host support**: the release workflow builds there and the
-  toolchain resolves per host; what is missing is a green native build of
-  the whole repo. (M)
+12. ~~macOS host support~~ — done 2026-08: `plz build //...` and
+  `plz test //...` are green natively on macos-latest in gating CI, and the
+  release publishes a darwin_arm64 binary. Five bugs stood in the way, each
+  found by building on a Mac rather than by reading. Intel is not covered:
+  its runners were dropped in December 2025.
 13. **Nightly/channel toolchains.** (S)
 
 ### Phase 4 — Proof (make the "faster than Cargo" claim with numbers)
 
 14. ~~Benchmark harness~~ — done 2026-08: `scripts/benchmark.sh`, numbers
   in [BENCHMARKS.md](BENCHMARKS.md).
-15. **Remote cache/execution validation** at labs scale. (M)
+15. **Remote cache/execution validation** at labs scale — mostly done
+  2026-08: verified against a real cluster (1461 build tasks, 525 crates,
+  CI green), six bugs fixed. Three paths remain expected-but-not-shown; the
+  labs pilot is driving them against its cluster now. (M)
 16. **Stress**: a 1k+ crate graph through sync/resolve/build. (S)
 
 ## Where things live
