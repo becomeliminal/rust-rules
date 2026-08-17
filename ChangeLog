@@ -1,3 +1,13 @@
+Version 0.3.4
+-------------
+  * Declarations no root reaches are built with their default features,
+    expanded through the manifest, as cargo does for a crate built on its
+    own; sync names them and points at --prune. Previously they compiled
+    with no features at all, which broke feature-guarded crates outright
+    and quietly changed behaviour in the rest.
+  * Coverage profiles from instrumented code that runs during a build no
+    longer land in the source tree.
+
 Version 0.3.3
 -------------
   * --extern filtering derives crate names correctly from plz's internal
