@@ -14,14 +14,29 @@ PLEASE_RUST_HASHES = {
     # darwin_amd64 and darwin_arm64 once the release workflow publishes them
 }
 
+_HOST_PLAT = f"{CONFIG.HOSTOS}_{CONFIG.HOSTARCH}"
+
 for _plat, _hash in PLEASE_RUST_HASHES.items():
-    _native = f"{CONFIG.OS}_{CONFIG.ARCH}" == _plat
+    _native = _HOST_PLAT == _plat
     remote_file(
         name = "please_rust_release" if _native else f"please_rust_release_{_plat}",
         binary = True,
         hashes = [_hash],
         url = f"https://github.com/becomeliminal/rust-rules/releases/download/{PLEASE_RUST_VERSION}/please_rust-{_plat}",
         visibility = ["PUBLIC"] if _native else None,
+    )
+
+# A platform with no published binary yet builds the tool from source rather
+# than failing to find a target that was never declared for it. That is a
+# cargo build, with everything the comment above says it costs, but it is the
+# difference between a slow first build and an unusable plugin — and it stops
+# applying to a platform the moment its hash is pinned above.
+if _HOST_PLAT not in PLEASE_RUST_HASHES:
+    filegroup(
+        name = "please_rust_release",
+        srcs = [":bootstrap"],
+        binary = True,
+        visibility = ["PUBLIC"],
     )
 
 # please_rust built hermetically by this plugin's own rules against the

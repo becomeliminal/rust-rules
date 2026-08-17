@@ -23,6 +23,10 @@ rust_toolchain(
 )
 ```
 
+The toolchain is downloaded for the machine doing the building, so a repo
+worked on from both linux and macOS lists a hash per platform and plz
+accepts whichever matches.
+
 Then add the plugin config to `.plzconfig`:
 ```ini
 [Plugin "rust"]
