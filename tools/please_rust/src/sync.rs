@@ -1317,6 +1317,39 @@ fn dirs_cache() -> PathBuf {
 /// PubGrub-backed lock: solve the whole declared set plus the requested
 /// additions at once, then hand the result to the same declaration writer
 /// the greedy path uses.
+/// Mark declarations named by `--add` as roots, returning what changed.
+///
+/// Asking for a crate that is already present as somebody else's dependency
+/// still makes it a root. Otherwise it stays reachable only through whoever
+/// pulled it in, and when that edge moves - a version bump elsewhere is
+/// enough - the declaration is suddenly unreferenced and the crate this repo
+/// asked for is being built by accident, or not at all.
+fn promote_added_roots(decls: &mut [Decl], adds: &[String]) -> Vec<String> {
+    let mut promoted: Vec<String> = Vec::new();
+    for add in adds {
+        let (name, req_str) = match add.split_once('@') {
+            Some(p) => p,
+            None => continue,
+        };
+        let req = semver::VersionReq::parse(req_str).ok();
+        for d in decls.iter_mut() {
+            if d.crate_name != name || d.root {
+                continue;
+            }
+            let matches = match (&req, Version::parse(&d.version)) {
+                (Some(r), Ok(v)) => r.matches(&v),
+                _ => true,
+            };
+            if matches {
+                d.root = true;
+                promoted.push(format!("{}@{}", d.crate_name, d.version));
+            }
+        }
+    }
+    promoted.sort();
+    promoted
+}
+
 fn lock_with_pubgrub(
     args: &LockCmdArgs,
     index: &Index,
@@ -1334,6 +1367,16 @@ fn lock_round(
     mut decls: Vec<Decl>,
     build_text: &str,
 ) -> Result<Vec<crate::resolve::MissingDep>> {
+    // Asking for a crate that is already present as somebody else's
+    // dependency still makes it a root. Otherwise it stays reachable only
+    // through whoever pulled it in, and when that edge moves - a version bump
+    // elsewhere is enough - the declaration is suddenly unreferenced and the
+    // crate this repo asked for is being built by accident, or not at all.
+    let promoted = promote_added_roots(&mut decls, &args.add);
+    for p in &promoted {
+        eprintln!("lock: * {} is now a root", p);
+    }
+
     // Fast path: if every requested addition is already satisfied by a
     // declaration, there is nothing to solve and nothing to fetch. This keeps
     // a no-op `lock --add` working offline with a cold index cache.
@@ -1351,8 +1394,13 @@ fn lock_round(
             })
         });
     if all_satisfied && args.features.is_none() {
-        eprintln!("lock: nothing to do");
-        return Ok(Vec::new());
+        if promoted.is_empty() {
+            eprintln!("lock: nothing to do");
+            return Ok(Vec::new());
+        }
+        // Nothing to solve, but the declarations changed, so they still have
+        // to be written and re-reported.
+        return finish_lock(args, decls).map(|_| Vec::new());
     }
 
     // Solve once per platform the declaration set covers and declare the
@@ -2079,6 +2127,52 @@ mod lock_cmd_tests {
         })
         .unwrap_err();
         assert!(err.to_string().contains("not in index cache"));
+    }
+
+    fn decl(crate_name: &str, version: &str, root: bool) -> Decl {
+        Decl {
+            name: None,
+            crate_name: crate_name.to_string(),
+            version: version.to_string(),
+            features: vec![],
+            hashes: vec![],
+            passthrough: vec![],
+            leading_comments: vec![],
+            span: None,
+            imported: true,
+            root,
+            default_features: true,
+            git_repo: String::new(),
+            git_revision: String::new(),
+        }
+    }
+
+    /// Asking for a crate that is already present as somebody else's
+    /// dependency makes it a root. Otherwise it is reachable only through
+    /// whoever pulled it in, and a version bump elsewhere can leave the crate
+    /// this repo asked for unreferenced - which is how a corpus of 251 named
+    /// crates ended up with 8 of them unreachable.
+    #[test]
+    fn add_promotes_an_existing_declaration_to_a_root() {
+        let mut decls = vec![
+            decl("itertools", "0.14.0", false),
+            decl("itertools", "0.10.5", false),
+            decl("serde", "1.0.0", false),
+        ];
+        let promoted = promote_added_roots(&mut decls, &["itertools@0.14".to_string()]);
+        assert_eq!(promoted, vec!["itertools@0.14.0".to_string()]);
+        assert!(decls[0].root, "the matching version is a root");
+        assert!(!decls[1].root, "a version the requirement excludes is not");
+        assert!(!decls[2].root, "an unrelated crate is untouched");
+    }
+
+    /// A wildcard names every version of the crate, which is what
+    /// `lock --add x@*` means.
+    #[test]
+    fn add_with_a_wildcard_promotes_each_matching_declaration() {
+        let mut decls = vec![decl("http", "1.3.1", false), decl("http", "0.2.12", false)];
+        let promoted = promote_added_roots(&mut decls, &["http@*".to_string()]);
+        assert_eq!(promoted.len(), 2, "{:?}", promoted);
     }
 
     #[test]

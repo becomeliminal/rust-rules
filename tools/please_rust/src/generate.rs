@@ -713,15 +713,23 @@ fn generate_build_file(
             // A host unit's target is named X_host but the crate it provides
             // is X, so renaming to X_host asks for a crate nothing declares.
             let real = pkg.strip_suffix("_host").unwrap_or(pkg);
+            let qual = label_qualifier(target);
             if dep_norm != real {
-                // Name the declaration too: a crate depending on two versions
-                // of one package renames both, and the crate name alone
-                // cannot say which alias means which.
-                match label_qualifier(target) {
+                // An alias. Name the declaration too: a crate depending on
+                // two versions of one package renames both, and the crate
+                // name alone cannot say which alias means which.
+                match qual {
                     Some(q) => feature_str
                         .push_str(&format!(" --rename {}={}@{}", dep_norm, real, q)),
                     None => feature_str.push_str(&format!(" --rename {}={}", dep_norm, real)),
                 }
+            } else if let Some(q) = qual {
+                // Not an alias, so this dep is imported under the crate's own
+                // name - and if the crate appears twice in this compile, that
+                // name alone does not say which one. aws-smithy-types depends
+                // on http 0.2 plainly and on http 1.x as http_1x; without
+                // this both answer to `http` and rustc refuses the pair.
+                feature_str.push_str(&format!(" --dep {}@{}", real, q));
             }
         }
     }
@@ -1593,6 +1601,30 @@ mod tests {
             "{}",
             out
         );
+    }
+
+    /// A crate can depend on two versions of one package, one plainly and
+    /// one under an alias - aws-smithy-types takes http 0.2 as `http` and
+    /// http 1.x as `http_1x`. Both entries answer to the crate name `http`,
+    /// so the plain one has to name its declaration or rustc is handed two
+    /// --extern http and refuses the pair.
+    #[test]
+    fn a_plain_dep_names_its_declaration_too() {
+        let out = gen(
+            "lib",
+            &[],
+            &[
+                ("http", "///third_party/crates/http-0.2.12//:http"),
+                ("http-1x", "///third_party/crates/http//:http"),
+            ],
+            None,
+            "",
+        );
+        assert!(out.contains("--dep http@third_party/crates/http-0.2.12"), "{}", out);
+        assert!(out.contains("--rename http_1x=http@third_party/crates/http"), "{}", out);
+        // The alias is not also requested as a plain dep, which would put the
+        // wrong version back under the bare name.
+        assert!(!out.contains("--dep http@third_party/crates/http "), "{}", out);
     }
 
     #[test]

@@ -343,6 +343,15 @@ fn build_command(args: &CompileArgs) -> Result<Command> {
                     let found_path = find_file_recursive(".", filename);
 
                     if let Some(path) = found_path {
+                        // Every entry is recorded, whether or not it becomes
+                        // an --extern: an alias may point at a version that
+                        // the filter deliberately left out.
+                        extern_paths.push((
+                            name.to_string(),
+                            qualifier.map(|q| q.to_string()),
+                            path.clone(),
+                        ));
+
                         // A dep may name the declaration it wants. It matches
                         // an unqualified entry too, so a crate built by rules
                         // that do not qualify still resolves.
@@ -363,11 +372,6 @@ fn build_command(args: &CompileArgs) -> Result<Command> {
                         if direct {
                             cmd.arg("--extern");
                             cmd.arg(format!("{}={}", name, path.display()));
-                            extern_paths.push((
-                                name.to_string(),
-                                qualifier.map(|q| q.to_string()),
-                                path.clone(),
-                            ));
                         }
                         // -L keeps transitive crates resolvable by metadata hash
                         if let Some(dir) = path.parent() {

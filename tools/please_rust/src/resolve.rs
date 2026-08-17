@@ -645,27 +645,30 @@ fn activate_dep(
         .enabled_optional_deps
         .insert(dep_name.to_string());
 
-    // Activating an optional dependency also enables the implicit feature of
-    // the same name, unless the crate uses dep: syntax for it somewhere,
-    // which is what removes that implicit feature. Reaching a dep through
-    // `pkcs8/alloc` therefore sets `feature = "pkcs8"` too - and sec1 gates
-    // half its API on exactly that, so linking the dep without the cfg
-    // produces a crate whose own modules do not exist.
+    // Activating an optional dependency also enables the feature of the same
+    // name. Two shapes of that: the implicit feature every optional dep gets,
+    // which dep: syntax removes; and an explicit feature the crate declares
+    // itself, which dep: syntax does not remove and which has items of its
+    // own to run. opentelemetry-http declares `reqwest = ["dep:reqwest"]` and
+    // reaches the dep through `reqwest/blocking`, so it needs the second.
+    // sec1 gates half its API on the first.
     let is_optional = nodes[idx]
         .deps
         .iter()
         .any(|d| d.name == dep_name && d.optional);
+    let explicit = nodes[idx].manifest.features.contains_key(dep_name);
     let namespaced = nodes[idx]
         .manifest
         .features
         .values()
         .flatten()
         .any(|item| item.strip_prefix("dep:") == Some(dep_name));
-    if is_optional && !namespaced {
-        nodes[idx]
-            .unit_mut(unit)
-            .enabled_features
-            .insert(dep_name.to_string());
+    if is_optional && (explicit || !namespaced) {
+        work.push(Work::Feature {
+            idx,
+            unit,
+            feature: dep_name.to_string(),
+        });
     }
 
     let (package, df, feats, req, kind) = decl;
@@ -1007,6 +1010,28 @@ mod tests {
         // Namespaced: dep:b means no implicit feature cfg "b"
         assert!(!features(&lock, "a").contains(&"b".to_string()));
         assert!(features(&lock, "a").contains(&"with_b".to_string()));
+    }
+
+    /// `dep:` removes the *implicit* feature of an optional dependency, but
+    /// not an explicit one the crate declares itself - and that explicit
+    /// feature has items to run. opentelemetry-http declares
+    /// `reqwest = ["dep:reqwest"]` and reaches the dep through
+    /// `reqwest/blocking`; cargo enables `reqwest` there and so must we.
+    #[test]
+    fn an_explicit_feature_named_after_the_dep_still_runs() {
+        let mut g = Graph::new("explicit_dep_feature");
+        g.krate(
+            "a", "a", "1.0.0",
+            "[dependencies.b]\nversion = \"1\"\noptional = true\n\n\
+             [features]\nb = [\"dep:b\"]\nb_blocking = [\"dep:b\", \"b/inner\"]\n",
+        )
+        .krate("b", "b", "1.0.0", "[features]\ninner = []\n")
+        .root("a", &["b_blocking"], true);
+        let lock = g.resolve();
+        let feats = features(&lock, "a");
+        assert!(feats.contains(&"b".to_string()), "{:?}", feats);
+        assert!(feats.contains(&"b_blocking".to_string()), "{:?}", feats);
+        assert!(features(&lock, "b").contains(&"inner".to_string()));
     }
 
     /// Reaching an optional dependency through `b/feat` activates it, and
