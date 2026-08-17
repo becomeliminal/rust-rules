@@ -1,3 +1,12 @@
+Version 0.4.2
+-------------
+  * The bootstrap takes cargo from the configured toolchain rather than this
+    repo's, removing the second toolchain download a consumer incurred when
+    building the tool from source. v0.4.1 removed the second use but not the
+    default that caused it.
+  * The bootstrap exports LD_LIBRARY_PATH for rustc's driver library, which
+    a remote worker does not resolve on its own.
+
 Version 0.4.1
 -------------
   * The bootstrap takes rustc, the sysroot and cargo from config rather than
