@@ -1,3 +1,8 @@
+Version 0.4.4
+-------------
+  * rust_toolchain exposes <name>_rustc_lib, and the bootstrap names it as a
+    tool, so rustc finds librustc_driver on a remote worker.
+
 Version 0.4.3
 -------------
   * Crate subrepo rules run locally by default (LocalSubrepos), keeping
