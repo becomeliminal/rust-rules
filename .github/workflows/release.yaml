@@ -14,10 +14,13 @@ jobs:
   # yet cannot hold up a release. Remove continue-on-error once it has run
   # green a few times.
   #
-  # darwin_amd64 is not built: it needs macos-13, whose runners are being
-  # retired and sat queued long enough to hold up a release even though the
-  # job was allowed to fail. Intel Macs can build the tool from source until
-  # someone needs the binary enough to cross-compile it from an arm64 runner.
+  # darwin_amd64 is not built. It was on macos-13, which GitHub stopped
+  # supporting in December 2025: the label gets no runner at all, so the job
+  # queued indefinitely and held up a release even though it was allowed to
+  # fail. The macos-15-intel label still works and would publish an Intel
+  # binary, but only until August 2027, when GitHub-hosted x86_64 macOS ends
+  # with the macOS 15 image. Until someone asks, Intel Macs build the tool
+  # from source.
   build:
     strategy:
       fail-fast: false

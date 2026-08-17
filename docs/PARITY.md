@@ -48,7 +48,9 @@ binary-link time.
       colliding with crates that ship a build/ directory on a
       case-insensitive filesystem, proc macros named .so where macOS
       produces .dylib, and build scripts told they were targeting linux.
-      darwin_amd64 is not built (macos-13 runners are retiring)
+      darwin_amd64 is not built: its macos-13 runners were dropped in
+      December 2025 and the label now never starts. macos-15-intel would
+      work until August 2027, when GitHub-hosted x86_64 macOS ends
 - [x] Cross-compilation: `plz build --arch darwin_arm64 //...`.
       `rust_toolchain` installs the `rust-std` for whatever `--arch` names
       (plus anything in `architectures`), and the triple threads through
