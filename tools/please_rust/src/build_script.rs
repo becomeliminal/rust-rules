@@ -13,6 +13,25 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+/// The triple of the machine this is running on, as the default for flags
+/// that name a platform. Derived rather than hardcoded so an unset flag
+/// describes reality.
+pub fn running_triple() -> String {
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "x86_64",
+        "aarch64" => "aarch64",
+        "x86" => "i686",
+        other => other,
+    };
+    let os = match std::env::consts::OS {
+        "linux" => "unknown-linux-gnu",
+        "macos" => "apple-darwin",
+        "windows" => "pc-windows-msvc",
+        other => other,
+    };
+    format!("{}-{}", arch, os)
+}
+
 #[derive(Args)]
 pub struct BuildScriptArgs {
     /// Path to Cargo.toml
@@ -31,12 +50,15 @@ pub struct BuildScriptArgs {
     #[arg(long, default_value = "rustc")]
     pub rustc: PathBuf,
 
-    /// Target triple
-    #[arg(long, default_value = "x86_64-unknown-linux-gnu")]
+    /// Target triple. A build script branches on this to decide what it is
+    /// building for, so defaulting it to a fixed platform tells every script
+    /// on every other platform a lie: rustix picks its linux syscall backend
+    /// and does not compile on macOS.
+    #[arg(long, default_value_t = running_triple())]
     pub target: String,
 
     /// Host triple
-    #[arg(long, default_value = "x86_64-unknown-linux-gnu")]
+    #[arg(long, default_value_t = running_triple())]
     pub host: String,
 
     /// Features to enable (can be specified multiple times)

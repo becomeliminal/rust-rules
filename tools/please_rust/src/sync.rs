@@ -44,7 +44,7 @@ pub struct SyncArgs {
     pub import_workspace: Option<PathBuf>,
 
     /// Target triple to resolve for
-    #[arg(long, default_value = "x86_64-unknown-linux-gnu")]
+    #[arg(long, default_value_t = crate::build_script::running_triple())]
     pub target: String,
 
     /// Triples the declaration set must cover, comma-separated. Declarations
@@ -901,7 +901,7 @@ pub struct LockCmdArgs {
     pub offline: bool,
 
     /// Target triple
-    #[arg(long, default_value = "x86_64-unknown-linux-gnu")]
+    #[arg(long, default_value_t = crate::build_script::running_triple())]
     pub target: String,
 
     /// Triples the declaration set must cover, comma-separated. Declarations

@@ -77,7 +77,7 @@ pub struct GenerateArgs {
 
     /// Target triple, used to evaluate platform-gated dependencies when a
     /// crate is generated standalone (absent from the resolved graph)
-    #[arg(long, default_value = "x86_64-unknown-linux-gnu")]
+    #[arg(long, default_value_t = crate::build_script::running_triple())]
     pub target: String,
 
     /// Emit pipelined-compilation rule shapes: each crate splits into a
@@ -248,12 +248,11 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         (requested_features, deps, build_deps)
     };
 
-    // Cross-compilation: the target unit is compiled for another platform,
-    // the host unit (and every build script and proc macro) is not.
-    let target_arg = match &args.compile_target {
-        Some(t) => format!("--target {} ", t),
-        None => String::new(),
-    };
+    // The platform being built for. Build scripts are told about it whatever
+    // platform they run on, since what they emit describes the artifacts;
+    // compiles only need naming when it is not the host's.
+    let build_target = args.compile_target.clone().unwrap_or_else(|| args.target.clone());
+    let cross = args.compile_target.is_some();
 
     // Generate BUILD file content
     let mut build_content = generate_build_file(
@@ -270,7 +269,8 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         &linked_deps,
         args.pipeline,
         has_lib,
-        &target_arg,
+        &build_target,
+        cross,
     );
 
     // Bin-only crates: the crate-named target aliases the (first) binary so
@@ -334,7 +334,8 @@ pub fn run(args: GenerateArgs) -> Result<()> {
             &linked_deps,
             args.pipeline,
             has_lib,
-            "",
+            &build_target,
+            false,
         ));
     }
 
@@ -595,12 +596,18 @@ fn generate_build_file(
     linked_deps: &[String],
     pipeline: bool,
     has_lib: bool,
-    target_arg: &str,
+    build_target: &str,
+    cross: bool,
 ) -> String {
     let mut content = String::new();
     // Proc macros are loaded into rustc itself, so they are built for the
     // machine running the build however the rest of the graph is targeted.
-    let target_arg = if crate_type == "proc-macro" { "" } else { target_arg };
+    let target_arg = if cross && crate_type != "proc-macro" {
+        format!("--target {} ", build_target)
+    } else {
+        String::new()
+    };
+    let target_arg = target_arg.as_str();
 
     let crate_ident = crate_name.replace("-", "_");
     let normalized_name = format!("{}{}", crate_ident, suffix);
@@ -665,7 +672,7 @@ fn generate_build_file(
 
     // If this crate has a build script, generate two-stage build
     if let Some(script_path) = build_script_path {
-        content.push_str(&generate_build_script_rule(&normalized_name, features, build_deps, script_path, linked_deps, pipeline));
+        content.push_str(&generate_build_script_rule(&normalized_name, features, build_deps, script_path, linked_deps, pipeline, build_target));
         content.push_str("\n");
         content.push_str(&generate_compile_rule_with_buildscript(
             &normalized_name,
@@ -919,6 +926,7 @@ fn generate_build_script_rule(
     script_path: &str,
     linked_deps: &[String],
     pipeline: bool,
+    target: &str,
 ) -> String {
     let mut content = String::new();
 
@@ -953,8 +961,8 @@ fn generate_build_script_rule(
         "--dep-metadata $SRCS_DEP_METADATA "
     };
     let build_script_cmd = format!(
-        "mkdir -p out && {}$TOOLS_PLEASE_RUST build-script --manifest-path $SRCS_MANIFEST --build-script $SRCS_SCRIPT --out-dir out --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cc $TOOLS_CC {}{}--output $OUTS_BUILDSCRIPT {}",
-        aggregate_cmd, externconfig_arg, dep_metadata_arg, feature_str
+        "mkdir -p out && {}$TOOLS_PLEASE_RUST build-script --manifest-path $SRCS_MANIFEST --build-script $SRCS_SCRIPT --out-dir out --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cc $TOOLS_CC --target {} {}{}--output $OUTS_BUILDSCRIPT {}",
+        aggregate_cmd, target, externconfig_arg, dep_metadata_arg, feature_str
     );
 
     content.push_str(&format!("# Stage 1: Run build script for {}\n", normalized_name));
@@ -1299,7 +1307,8 @@ mod tests {
             &[],
             pipeline,
             true,
-            "",
+            "x86_64-unknown-linux-gnu",
+            false,
         )
     }
 
@@ -1343,7 +1352,8 @@ mod tests {
             &[],
             false,
             true,
-            "--target aarch64-apple-darwin ",
+            "aarch64-apple-darwin",
+            true,
         )
     }
 
@@ -1359,18 +1369,22 @@ mod tests {
         assert!(!out.contains("--target aarch64-apple-darwin"));
     }
 
+    /// A build script runs on the host but describes the target: cargo sets
+    /// TARGET (and the CARGO_CFG_* derived from it) to what is being built
+    /// for, and HOST to what is doing the building. Getting this wrong is not
+    /// subtle - rustix picks its linux syscall backend and will not compile.
     #[test]
-    fn cross_compiled_build_script_stays_on_the_host() {
-        let out = gen_cross("lib", Some("build.rs"));
-        // The crate itself is cross-compiled...
-        assert!(out.contains("--target aarch64-apple-darwin "));
-        // ...but the script that runs during the build is not. Its command
-        // is the one invoking the build-script subcommand.
-        let script_cmd = out
-            .lines()
-            .find(|l| l.contains("$TOOLS_PLEASE_RUST build-script"))
-            .expect("build script command");
-        assert!(!script_cmd.contains("--target"));
+    fn build_script_is_told_the_target_platform() {
+        let script_cmd = |out: String| {
+            out.lines()
+                .find(|l| l.contains("$TOOLS_PLEASE_RUST build-script"))
+                .expect("build script command")
+                .to_string()
+        };
+        assert!(script_cmd(gen_cross("lib", Some("build.rs"))).contains("--target aarch64-apple-darwin"));
+        // Not only when cross-compiling: the default would otherwise decide
+        // the platform for every native build too.
+        assert!(script_cmd(gen("lib", &[], &[], Some("build.rs"), "")).contains("--target x86_64-unknown-linux-gnu"));
     }
 
     #[test]
@@ -1395,7 +1409,8 @@ mod tests {
             &["///third_party/rust/libz_sys//:_libz_sys_build_script|buildscript".to_string()],
             false,
             true,
-            "",
+            "x86_64-unknown-linux-gnu",
+            false,
         );
         assert!(out.contains("\"dep_metadata\": ["));
         assert!(out.contains("///third_party/rust/libz_sys//:_libz_sys_build_script|buildscript"));

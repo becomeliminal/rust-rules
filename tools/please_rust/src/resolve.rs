@@ -39,7 +39,7 @@ pub struct ResolveArgs {
     pub manifest_dir: PathBuf,
 
     /// Target triple to resolve for
-    #[arg(long, default_value = "x86_64-unknown-linux-gnu")]
+    #[arg(long, default_value_t = crate::build_script::running_triple())]
     pub target: String,
 
     /// Output lock file path
