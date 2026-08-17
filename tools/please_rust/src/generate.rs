@@ -352,8 +352,14 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         build_content = build_content.replace("__CC_LABEL__", &args.cc_label);
     }
 
-    // Write BUILD file
-    let build_path = args.src_root.join("BUILD");
+    // Write BUILD file. A crate shipping a `build` directory collides with it
+    // on a case-insensitive filesystem, which is the default on macOS; plz
+    // reads BUILD.plz too, and names this exact case as why the setting
+    // exists.
+    let mut build_path = args.src_root.join("BUILD");
+    if build_path.is_dir() {
+        build_path = args.src_root.join("BUILD.plz");
+    }
     fs::write(&build_path, &build_content)
         .with_context(|| format!("Failed to write {}", build_path.display()))?;
 
@@ -1571,6 +1577,20 @@ mod run_tests {
         let path = dir.join("rust.lock");
         fs::write(&path, serde_json::to_string(&lock).unwrap()).unwrap();
         path
+    }
+
+    /// A crate shipping a `build` directory takes the name BUILD on a
+    /// case-insensitive filesystem, which is macOS by default. Simulated here
+    /// by creating the directory, since linux would happily write both.
+    #[test]
+    fn build_directory_does_not_block_generation() {
+        let root = scratch("builddir");
+        let src = crate_dir(&root, "[package]\nname = \"demo\"\nversion = \"1.0.0\"\nedition = \"2021\"\n", &[("src/lib.rs", "")]);
+        fs::create_dir(src.join("BUILD")).unwrap();
+        run(args(src.clone(), None)).unwrap();
+
+        let build = fs::read_to_string(src.join("BUILD.plz")).unwrap();
+        assert!(build.contains("--crate-name demo"));
     }
 
     #[test]

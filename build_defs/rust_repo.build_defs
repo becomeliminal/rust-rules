@@ -253,7 +253,9 @@ def rust_repo(
     cmds = [
         # Remove any existing BUILD files or plzconfig
         "rm -rf $SRCS_CRATE/.plzconfig",
-        "find $SRCS_CRATE -name BUILD -delete",
+        # -type f so a crate shipping a build/ directory survives this on a
+        # case-insensitive filesystem, where find matches it by either name
+        "find $SRCS_CRATE -type f \\( -name BUILD -o -name BUILD.plz \\) -delete",
         # Run please_rust generate (SRCS_CRATE points directly to the extracted directory)
         f"$TOOL generate --crate-name {crate} --version {version} --src-root $SRCS_CRATE --subrepo {subrepo_path} --features '{features_arg}' --install '{install_arg}' --third-party-folder '{third_party_path}' --target {target_triple} --tool-label '{tool_ref}' --rustc-label '{rustc_ref}' --sysroot-label '{sysroot_ref}' {cc_flag}{cross_flag}{lock_flag}{pipeline_flag}" + " ".join([f"--override {k}={v}" for k, v in sorted(dep_overrides.items())]),
         # Move to output
