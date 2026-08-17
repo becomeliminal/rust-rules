@@ -55,6 +55,17 @@ fn find_file_in_dir(dir: &Path, filename: &str) -> Option<PathBuf> {
     None
 }
 
+/// Split an externconfig key into the crate name and the declaration that
+/// produced it. `syn` and `syn@third_party/crates/syn-2.0.119` both name the
+/// crate `syn`; the qualifier exists only to tell two declarations of one
+/// crate apart, and is never what rustc is told.
+pub fn split_externconfig_key(key: &str) -> (&str, Option<&str>) {
+    match key.split_once('@') {
+        Some((name, qual)) => (name.trim(), Some(qual.trim())),
+        None => (key.trim(), None),
+    }
+}
+
 #[derive(Args)]
 pub struct CompileArgs {
     /// Path to externconfig file (contains crate_name=/path/to/lib.rlib lines)
@@ -121,10 +132,10 @@ pub struct CompileArgs {
     /// externconfig entries matching these; everything else in the sandbox
     /// stays reachable via -L only (transitive deps, as cargo does).
     ///
-    /// A value may be `name` or `name=libstem`, the second naming the exact
-    /// artifact wanted. Two versions of one crate both answer to the same
-    /// crate name, so without the artifact the choice falls to whichever
-    /// entry came last, which links the wrong version rather than failing.
+    /// A value may be `name` or `name@qualifier`, the second naming the
+    /// declaration wanted. Two versions of one crate both answer to the same
+    /// crate name, so a bare name cannot say which was meant and the choice
+    /// falls to whichever entry came last.
     #[arg(long = "dep")]
     pub deps: Vec<String>,
 
@@ -318,18 +329,30 @@ fn build_command(args: &CompileArgs) -> Result<Command> {
                 if line.starts_with("native=") {
                     continue; // handled separately below
                 }
-                if let Some((name, filename)) = line.split_once('=') {
-                    let name = name.trim();
+                if let Some((key, filename)) = line.split_once('=') {
+                    // `crate` or `crate@declaration`: the crate name is what
+                    // rustc is told, the qualifier only picks between entries.
+                    let (name, qualifier) = split_externconfig_key(key);
                     let filename = filename.trim();
 
                     // Search for the file in current directory tree
                     let found_path = find_file_recursive(".", filename);
 
                     if let Some(path) = found_path {
+                        // A dep may name the declaration it wants. It matches
+                        // an unqualified entry too, so a crate built by rules
+                        // that do not qualify still resolves.
                         let direct = args.deps.is_empty()
-                            || args.deps.iter().any(|d| match d.split_once('=') {
-                                Some((dep_name, stem)) => {
-                                    dep_name == name && filename.starts_with(&format!("{}.", stem))
+                            || args.deps.iter().any(|d| match d.split_once('@') {
+                                Some((dep_name, dep_qual)) => {
+                                    // A dep names its label; the crate names
+                                    // its subrepo. They agree on the tail,
+                                    // which is enough to tell one declaration
+                                    // of a crate from another.
+                                    dep_name == name
+                                        && qualifier.map_or(true, |q| {
+                                            q == dep_qual || q.ends_with(&format!("/{}", dep_qual))
+                                        })
                                 }
                                 None => d == name,
                             });
@@ -732,10 +755,15 @@ mod command_tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("libsyn-2_0_119.rlib"), "").unwrap();
         std::fs::write(dir.join("libsyn-3_0_3.rlib"), "").unwrap();
-        std::fs::write(dir.join("externconfig"), "syn=libsyn-2_0_119.rlib\nsyn=libsyn-3_0_3.rlib\n").unwrap();
+        std::fs::write(
+            dir.join("externconfig"),
+            "syn@third_party/crates/syn-2.0.119=libsyn-2_0_119.rlib\n\
+             syn@third_party/crates/syn=libsyn-3_0_3.rlib\n",
+        )
+        .unwrap();
 
         let mut args = base_args(&dir);
-        args.deps = vec!["syn=libsyn-2_0_119".to_string()];
+        args.deps = vec!["syn@third_party/crates/syn-2.0.119".to_string()];
         let old = std::env::current_dir().unwrap();
         std::env::set_current_dir(&dir).unwrap();
         let cmd = build_command(&args).unwrap();

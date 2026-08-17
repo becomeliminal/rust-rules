@@ -227,10 +227,11 @@ fn compile_build_script(
                 if line.is_empty() {
                     continue;
                 }
-                if let Some((name, filename)) = line.split_once('=') {
+                if let Some((key, filename)) = line.split_once('=') {
+                    let (name, _) = crate::compile::split_externconfig_key(key);
                     // Search for the file
                     if let Some(path) = find_file_recursive(".", filename.trim()) {
-                        cmd.arg("--extern").arg(format!("{}={}", name.trim(), path.display()));
+                        cmd.arg("--extern").arg(format!("{}={}", name, path.display()));
                         if let Some(dir) = path.parent() {
                             if !dir.as_os_str().is_empty() {
                                 cmd.arg("-L").arg(dir);

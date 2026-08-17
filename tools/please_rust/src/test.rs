@@ -296,12 +296,13 @@ fn collect_externs(root: &str) -> Vec<(String, String)> {
     for config in configs {
         if let Ok(content) = std::fs::read_to_string(&config) {
             for line in content.lines() {
-                if let Some((name, filename)) = line.trim().split_once('=') {
+                if let Some((key, filename)) = line.trim().split_once('=') {
+                    let (name, _) = crate::compile::split_externconfig_key(key);
                     // The library sits next to its externconfig
                     if let Some(dir) = config.parent() {
                         let lib = dir.join(filename.trim());
                         if lib.exists() {
-                            out.push((name.trim().to_string(), lib.display().to_string()));
+                            out.push((name.to_string(), lib.display().to_string()));
                         }
                     }
                 }

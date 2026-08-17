@@ -254,6 +254,13 @@ pub fn run(args: GenerateArgs) -> Result<()> {
     let build_target = args.compile_target.clone().unwrap_or_else(|| args.target.clone());
     let cross = args.compile_target.is_some();
 
+    // Externconfig keys carry which declaration produced them. Two versions of
+    // one crate both answer to the same crate name, so a dependent asking for
+    // `hashbrown` cannot say which it meant; asking for
+    // `hashbrown@third_party/crates/hashbrown` can. The qualifier is the
+    // subrepo, which is exactly what the dependent wrote as its dep label.
+    let qualifier = args.subrepo.clone();
+
     // Generate BUILD file content
     let mut build_content = generate_build_file(
         crate_name,
@@ -271,6 +278,7 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         has_lib,
         &build_target,
         cross,
+        &qualifier,
     );
 
     // Bin-only crates: the crate-named target aliases the (first) binary so
@@ -336,6 +344,7 @@ pub fn run(args: GenerateArgs) -> Result<()> {
             has_lib,
             &build_target,
             false,
+            &qualifier,
         ));
     }
 
@@ -598,6 +607,7 @@ fn generate_build_file(
     has_lib: bool,
     build_target: &str,
     cross: bool,
+    qualifier: &str,
 ) -> String {
     let mut content = String::new();
     // Proc macros are loaded into rustc itself, so they are built for the
@@ -611,6 +621,15 @@ fn generate_build_file(
 
     let crate_ident = crate_name.replace("-", "_");
     let normalized_name = format!("{}{}", crate_ident, suffix);
+
+    // The key a dependent names this crate by: crate name for anyone who does
+    // not care which declaration, crate@subrepo for anyone who does.
+    let ec_key = if qualifier.is_empty() {
+        normalized_name.clone()
+    } else {
+        format!("{}@{}", normalized_name, qualifier)
+    };
+
 
     // Bin-only crates (e.g. bindgen-cli) have no library to compile; run()
     // emits an alias to the binary instead.
@@ -687,6 +706,7 @@ fn generate_build_file(
             lib_path,
             pipeline,
             target_arg,
+            &ec_key,
         ));
     } else {
         content.push_str(&generate_compile_rule(
@@ -702,6 +722,7 @@ fn generate_build_file(
             lib_path,
             pipeline,
             target_arg,
+            &ec_key,
         ));
     }
 
@@ -748,6 +769,7 @@ fn generate_build_file(
                 lib_path,
                 build_script_path.is_some(),
                 target_arg,
+                &ec_key,
             ));
         }
     }
@@ -780,6 +802,7 @@ fn generate_rmeta_rule(
     lib_path: &str,
     has_buildscript: bool,
     target_arg: &str,
+    ec_key: &str,
 ) -> String {
     let mut content = String::new();
 
@@ -801,7 +824,7 @@ fn generate_rmeta_rule(
         "{} && $TOOLS_PLEASE_RUST compile --pipeline-rmeta --externconfig externconfig {}{}--manifest-path $SRCS_MANIFEST --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cap-lints allow --crate-name {} --edition {} --crate-type lib --emit dep-info,link,metadata {}",
         aggregate_cmd, target_arg, buildscript_arg, crate_ident, edition_str, feature_str
     );
-    let ec_cmd = format!("echo '{}={}' > $OUTS_EXTERNCONFIG", normalized_name, out_rmeta);
+    let ec_cmd = format!("echo '{}={}' > $OUTS_EXTERNCONFIG", ec_key, out_rmeta);
     let cmd_dbg = format!("{} -g $SRCS_MAIN && {}", compile_base, ec_cmd);
     let cmd_opt = format!("{} -O $SRCS_MAIN && {}", compile_base, ec_cmd);
 
@@ -1084,6 +1107,7 @@ fn generate_compile_rule_with_buildscript(
     lib_path: &str,
     pipeline: bool,
     target_arg: &str,
+    ec_key: &str,
 ) -> String {
     let mut content = String::new();
     let (rule_name, dep_label, dep_ec): (String, fn(&str) -> String, fn(&str) -> String) =
@@ -1105,11 +1129,11 @@ fn generate_compile_rule_with_buildscript(
 
     let cmd_dbg = format!(
         "{} && {} -g $SRCS_MAIN && echo '{}={}' > $OUTS_EXTERNCONFIG",
-        aggregate_cmd, compile_base, normalized_name, out_rlib
+        aggregate_cmd, compile_base, ec_key, out_rlib
     );
     let cmd_opt = format!(
         "{} && {} -O $SRCS_MAIN && echo '{}={}' > $OUTS_EXTERNCONFIG",
-        aggregate_cmd, compile_base, normalized_name, out_rlib
+        aggregate_cmd, compile_base, ec_key, out_rlib
     );
 
     content.push_str(&format!("# Stage 2: Compile {} with build script output\n", normalized_name));
@@ -1178,6 +1202,7 @@ fn generate_compile_rule(
     lib_path: &str,
     pipeline: bool,
     target_arg: &str,
+    ec_key: &str,
 ) -> String {
     let mut content = String::new();
     let (rule_name, dep_label, dep_ec): (String, fn(&str) -> String, fn(&str) -> String) =
@@ -1198,11 +1223,11 @@ fn generate_compile_rule(
 
     let cmd_dbg = format!(
         "{} && {} -g $SRCS_MAIN && echo '{}={}' > $OUTS_EXTERNCONFIG",
-        aggregate_cmd, compile_base, normalized_name, out_rlib
+        aggregate_cmd, compile_base, ec_key, out_rlib
     );
     let cmd_opt = format!(
         "{} && {} -O $SRCS_MAIN && echo '{}={}' > $OUTS_EXTERNCONFIG",
-        aggregate_cmd, compile_base, normalized_name, out_rlib
+        aggregate_cmd, compile_base, ec_key, out_rlib
     );
 
     content.push_str("build_rule(\n");
@@ -1326,6 +1351,7 @@ mod tests {
             true,
             "x86_64-unknown-linux-gnu",
             false,
+            "third_party/crates/my_crate",
         )
     }
 
@@ -1408,6 +1434,7 @@ mod tests {
             true,
             "aarch64-apple-darwin",
             true,
+            "third_party/crates/my_crate",
         )
     }
 
@@ -1465,6 +1492,7 @@ mod tests {
             true,
             "x86_64-unknown-linux-gnu",
             false,
+            "third_party/crates/my_crate",
         );
         assert!(out.contains("\"dep_metadata\": ["));
         assert!(out.contains("///third_party/rust/libz_sys//:_libz_sys_build_script|buildscript"));
@@ -1478,7 +1506,7 @@ mod tests {
         assert!(out.contains("name = \"my_crate_host\""));
         assert!(out.contains("--crate-name my_crate "));
         assert!(out.contains("libmy_crate-1_2_3_host.rlib"));
-        assert!(out.contains("echo 'my_crate_host=libmy_crate-1_2_3_host.rlib'"));
+        assert!(out.contains("echo 'my_crate_host@third_party/crates/my_crate=libmy_crate-1_2_3_host.rlib'"));
     }
 
     #[test]
