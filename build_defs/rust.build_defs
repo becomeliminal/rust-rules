@@ -86,9 +86,14 @@ _AGGREGATE_EXTERNCONFIGS = "find . -name '*.externconfig' -type f 2>/dev/null | 
 def _dep_names(deps:list):
     """Crate names of direct deps, for --extern filtering.
 
-    The rule name is the crate name, except for plz's internal `_name#tag`
-    targets: generated libraries (proto and gRPC stubs, for instance) are
-    exposed that way, and the crate they build is `name`.
+    The rule name is the crate name, with two exceptions. plz's internal
+    `_name#tag` targets expose generated libraries (proto and gRPC stubs, for
+    instance) and the crate they build is `name`. And a crate declared
+    alongside another version of itself is named `<crate>-<version>`, where
+    the crate is still `<crate>`: getting that wrong costs the dep its
+    --extern, which does not fail loudly - rustc falls back to searching -L
+    and reports `multiple candidates` only if more than one version happens to
+    be reachable.
     """
     names = []
     for dep in deps:
@@ -96,7 +101,21 @@ def _dep_names(deps:list):
         name = name.split('#')[0]
         if name.startswith('_'):
             name = name[1:]
-        names += [name.replace('-', '_')]
+        parts = name.split('-')
+        version = ''
+        if len(parts) > 1 and parts[-1][0] in '0123456789':
+            version = parts[-1]
+            name = '-'.join(parts[:-1])
+        crate = name.replace('-', '_')
+        if version:
+            # Name the artifact, not just the crate: with two versions of one
+            # crate in the graph both answer to `syn`, and picking by name
+            # alone links against whichever was listed last rather than the
+            # one this rule asked for.
+            tag = version.replace('.', '_')
+            names += ['%s=lib%s-%s' % (crate, crate, tag)]
+        else:
+            names += [crate]
     return names
 
 

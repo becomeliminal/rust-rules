@@ -732,7 +732,7 @@ fn generate_build_file(
             content.push_str(&format!("    srcs = [\":_{}#link|externconfig\"],\n", normalized_name));
             content.push_str("    cmd = \"cp $SRCS $OUTS_EXTERNCONFIG\",\n");
             content.push_str("    outs = {\n");
-            content.push_str(&format!("        \"externconfig\": [\"{}.rmeta.externconfig\"],\n", normalized_name));
+            content.push_str(&format!("        \"externconfig\": [\"{}\"],\n", externconfig_name(&out_rlib, ".rmeta")));
             content.push_str("    },\n");
             content.push_str(&format!("    deps = [\":{}\"],\n", normalized_name));
             content.push_str("    visibility = [\"PUBLIC\"],\n");
@@ -758,6 +758,18 @@ fn generate_build_file(
 /// Generate the metadata-only compile rule (`_X#rmeta`) that dependents'
 /// compiles hang off under pipelined compilation. Frontend-only: no codegen,
 /// so a chain of crates builds at frontend depth.
+/// Externconfig filenames have to be as unique as the artifacts they name.
+/// Every input to a compile is staged flat in the sandbox, so two versions of
+/// one crate both writing `syn.externconfig` overwrite each other even though
+/// their rlibs are version-tagged - the dependent then resolves `syn` to a
+/// file that is not there. Derive the name from the artifact, which already
+/// carries the version.
+fn externconfig_name(artifact: &str, infix: &str) -> String {
+    let stem = artifact.strip_prefix("lib").unwrap_or(artifact);
+    let stem = stem.rsplit_once('.').map(|(s, _)| s).unwrap_or(stem);
+    format!("{}{}.externconfig", stem, infix)
+}
+
 fn generate_rmeta_rule(
     normalized_name: &str,
     crate_ident: &str,
@@ -819,7 +831,7 @@ fn generate_rmeta_rule(
     content.push_str("    },\n");
     content.push_str("    outs = {\n");
     content.push_str(&format!("        \"rmeta\": [\"{}\"],\n", out_rmeta));
-    content.push_str(&format!("        \"externconfig\": [\"{}.rmeta.externconfig\"],\n", normalized_name));
+    content.push_str(&format!("        \"externconfig\": [\"{}\"],\n", externconfig_name(out_rmeta, ".rmeta")));
     content.push_str("    },\n");
     if !deps.is_empty() {
         content.push_str("    deps = [\n");
@@ -951,6 +963,11 @@ fn generate_build_script_rule(
         ""
     };
 
+    // A crate reached as both a target and a host unit generates two build
+    // script rules in one package, and two rules cannot declare the same
+    // output, so OUT_DIR is named per unit rather than "out".
+    let out_dir = format!("{}_out", normalized_name);
+
     // Build script command. OUT_DIR is a declared output directory of this
     // rule so the files a build script generates survive into the crate's
     // compile action (the directives file records it by name; compile
@@ -961,8 +978,8 @@ fn generate_build_script_rule(
         "--dep-metadata $SRCS_DEP_METADATA "
     };
     let build_script_cmd = format!(
-        "mkdir -p out && {}$TOOLS_PLEASE_RUST build-script --manifest-path $SRCS_MANIFEST --build-script $SRCS_SCRIPT --out-dir out --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cc $TOOLS_CC --target {} {}{}--output $OUTS_BUILDSCRIPT {}",
-        aggregate_cmd, target, externconfig_arg, dep_metadata_arg, feature_str
+        "mkdir -p {} && {}$TOOLS_PLEASE_RUST build-script --manifest-path $SRCS_MANIFEST --build-script $SRCS_SCRIPT --out-dir {} --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cc $TOOLS_CC --target {} {}{}--output $OUTS_BUILDSCRIPT {}",
+        out_dir, aggregate_cmd, out_dir, target, externconfig_arg, dep_metadata_arg, feature_str
     );
 
     content.push_str(&format!("# Stage 1: Run build script for {}\n", normalized_name));
@@ -972,7 +989,7 @@ fn generate_build_script_rule(
     content.push_str(&format!("        \"script\": [\"{}\"],\n", script_path));
     // Cargo runs build scripts from the package root with the whole package
     // present (scripts read source/data files, e.g. blake3 reads c/).
-    content.push_str(&format!("        \"package\": glob([\"**/*\"], exclude=[\"{}\", \"Cargo.toml\", \"BUILD\", \".plzconfig\", \"out\"], allow_empty=True),\n", script_path));
+    content.push_str(&format!("        \"package\": glob([\"**/*\"], exclude=[\"{}\", \"Cargo.toml\", \"BUILD\", \".plzconfig\", \"{}\"], allow_empty=True),\n", script_path, out_dir));
     content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
     if has_build_deps {
         content.push_str("        \"externconfigs\": [\n");
@@ -993,7 +1010,7 @@ fn generate_build_script_rule(
     content.push_str(&format!("    cmd = \"{}\",\n", build_script_cmd));
     content.push_str("    outs = {\n");
     content.push_str(&format!("        \"buildscript\": [\"{}.buildscript\"],\n", normalized_name));
-    content.push_str("        \"out\": [\"out\"],\n");
+    content.push_str(&format!("        \"out\": [\"{}\"],\n", out_dir));
     content.push_str("    },\n");
 
     // Add build-dependencies if any
@@ -1123,7 +1140,7 @@ fn generate_compile_rule_with_buildscript(
     if crate_type != "proc-macro" && !pipeline {
         content.push_str(&format!("        \"rmeta\": [\"{}\"],\n", out_rmeta));
     }
-    content.push_str(&format!("        \"externconfig\": [\"{}.externconfig\"],\n", normalized_name));
+    content.push_str(&format!("        \"externconfig\": [\"{}\"],\n", externconfig_name(out_rlib, "")));
     content.push_str("    },\n");
 
     if !deps.is_empty() {
@@ -1213,7 +1230,7 @@ fn generate_compile_rule(
     if crate_type != "proc-macro" && !pipeline {
         content.push_str(&format!("        \"rmeta\": [\"{}\"],\n", out_rmeta));
     }
-    content.push_str(&format!("        \"externconfig\": [\"{}.externconfig\"],\n", normalized_name));
+    content.push_str(&format!("        \"externconfig\": [\"{}\"],\n", externconfig_name(out_rlib, "")));
     content.push_str("    },\n");
 
     if !deps.is_empty() {
@@ -1324,14 +1341,51 @@ mod tests {
         assert!(!out.contains("_build_script"));
     }
 
+    /// Two versions of one crate in a graph write two externconfigs, and
+    /// every input to a compile is staged flat, so the filenames must differ
+    /// or one silently overwrites the other. syn 1 and syn 2 coexist in most
+    /// real graphs, which is where this shows up.
+    #[test]
+    fn externconfig_names_are_version_unique() {
+        assert_eq!(externconfig_name("libsyn-2_0_119.rlib", ""), "syn-2_0_119.externconfig");
+        assert_eq!(externconfig_name("libsyn-3_0_3.rlib", ""), "syn-3_0_3.externconfig");
+        assert_ne!(
+            externconfig_name("libsyn-2_0_119.rlib", ""),
+            externconfig_name("libsyn-3_0_3.rlib", "")
+        );
+        // The rmeta twin's config is distinct from the link rule's
+        assert_eq!(
+            externconfig_name("libsyn-2_0_119.rmeta", ".rmeta"),
+            "syn-2_0_119.rmeta.externconfig"
+        );
+        // Proc macros are dylibs, and the host unit carries its own suffix
+        assert_eq!(
+            externconfig_name("libserde_derive-1_0_229_host.so", ""),
+            "serde_derive-1_0_229_host.externconfig"
+        );
+    }
+
     #[test]
     fn build_script_two_stage() {
         let out = gen("lib", &[], &[], Some("build/main.rs"), "");
         assert!(out.contains("name = \"_my_crate_build_script\""));
         assert!(out.contains("\"script\": [\"build/main.rs\"]"));
         assert!(out.contains("--buildscript $SRCS_BUILDSCRIPT"));
-        assert!(out.contains("\"out\": [\"out\"]"));
+        assert!(out.contains("\"out\": [\"my_crate_out\"]"));
         assert!(!out.contains("dep_metadata"));
+    }
+
+    /// A crate reached as both a target and a host unit generates two build
+    /// script rules in one package. Two rules cannot declare the same output,
+    /// so their OUT_DIRs have to differ - proc-macro2 and quote hit this the
+    /// moment a graph is big enough to reach them both ways.
+    #[test]
+    fn dual_unit_build_scripts_have_distinct_out_dirs() {
+        let target = gen("lib", &[], &[], Some("build.rs"), "");
+        let host = gen("lib", &[], &[], Some("build.rs"), "_host");
+        assert!(target.contains("\"out\": [\"my_crate_out\"]"));
+        assert!(host.contains("\"out\": [\"my_crate_host_out\"]"));
+        assert!(host.contains("--out-dir my_crate_host_out"));
     }
 
     /// Cross-compiling: the target unit names the triple, the host units

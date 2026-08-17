@@ -120,6 +120,11 @@ pub struct CompileArgs {
     /// Direct dependency crate names. When given, --extern is added only for
     /// externconfig entries matching these; everything else in the sandbox
     /// stays reachable via -L only (transitive deps, as cargo does).
+    ///
+    /// A value may be `name` or `name=libstem`, the second naming the exact
+    /// artifact wanted. Two versions of one crate both answer to the same
+    /// crate name, so without the artifact the choice falls to whichever
+    /// entry came last, which links the wrong version rather than failing.
     #[arg(long = "dep")]
     pub deps: Vec<String>,
 
@@ -321,7 +326,13 @@ fn build_command(args: &CompileArgs) -> Result<Command> {
                     let found_path = find_file_recursive(".", filename);
 
                     if let Some(path) = found_path {
-                        let direct = args.deps.is_empty() || args.deps.iter().any(|d| d == name);
+                        let direct = args.deps.is_empty()
+                            || args.deps.iter().any(|d| match d.split_once('=') {
+                                Some((dep_name, stem)) => {
+                                    dep_name == name && filename.starts_with(&format!("{}.", stem))
+                                }
+                                None => d == name,
+                            });
                         if direct {
                             cmd.arg("--extern");
                             cmd.arg(format!("{}={}", name, path.display()));
@@ -712,7 +723,31 @@ mod command_tests {
         assert!(s.contains("-L"));
     }
 
+    /// With two versions of one crate in the sandbox, a bare crate name
+    /// cannot say which is wanted, and the loser silently wins by being last.
     #[test]
+    fn dep_filter_picks_the_named_version() {
+        let _guard = CWD_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("please_rust_two_versions_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("libsyn-2_0_119.rlib"), "").unwrap();
+        std::fs::write(dir.join("libsyn-3_0_3.rlib"), "").unwrap();
+        std::fs::write(dir.join("externconfig"), "syn=libsyn-2_0_119.rlib\nsyn=libsyn-3_0_3.rlib\n").unwrap();
+
+        let mut args = base_args(&dir);
+        args.deps = vec!["syn=libsyn-2_0_119".to_string()];
+        let old = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        let cmd = build_command(&args).unwrap();
+        std::env::set_current_dir(old).unwrap();
+
+        let s = joined(&cmd);
+        assert!(s.contains("--extern syn=./libsyn-2_0_119.rlib"), "{}", s);
+        assert!(!s.contains("libsyn-3_0_3.rlib"), "{}", s);
+        // The version it did not ask for stays reachable through -L
+        assert!(s.contains("-L"));
+    }
+
     fn renames_add_aliased_externs() {
         let _guard = CWD_LOCK.lock().unwrap();
         let dir = fixture("renames");
