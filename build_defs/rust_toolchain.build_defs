@@ -123,11 +123,14 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
     )
     # clippy-driver and rustfmt link librustc_driver via RUNPATH $ORIGIN/../lib,
     # so they are copied next to rustc where that resolves to the staged libs.
+    # The copy creates that directory itself: cp will not, and a remote worker
+    # starts from a tree containing only what the action names, so the parent
+    # of a nested output is not there to copy into.
     clippy_rule = build_rule(
         name = name + '_clippy',
         srcs = [extract_rule + '|clippy_bin'],
         outs = [base + '/rustc/bin/clippy-driver'],
-        cmd = 'cp $SRCS $OUT',
+        cmd = 'mkdir -p $(dirname $OUT) && cp $SRCS $OUT',
         binary = True,
         deps = [lib_rule],
         visibility = visibility,
@@ -136,7 +139,7 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
         name = name + '_rustfmt',
         srcs = [extract_rule + '|rustfmt_bin'],
         outs = [base + '/rustc/bin/rustfmt'],
-        cmd = 'cp $SRCS $OUT',
+        cmd = 'mkdir -p $(dirname $OUT) && cp $SRCS $OUT',
         binary = True,
         deps = [lib_rule],
         visibility = visibility,
