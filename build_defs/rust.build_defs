@@ -9,6 +9,27 @@ an on-disk path and passes `--extern name=path` to rustc. This makes first-party
 rules and rust_repo subrepo crates freely interoperable in either direction.
 """
 
+def rustc_lib_label():
+    """The directory holding rustc's driver library.
+
+    rustc loads librustc_driver from ../lib beside its own binary. Locally
+    that resolves because the extracted toolchain is staged whole, but a
+    remote worker stages only what an action names, so every action that runs
+    rustc has to ask for this too or rustc dies with exit 127 before doing
+    anything. rustc and its lib directory are siblings emitted by the same
+    rust_toolchain call, so the configured rustc names it; RustcLib overrides
+    that for a rustc configured some other way.
+    """
+    if CONFIG.RUST.RUSTC_LIB:
+        return CONFIG.RUST.RUSTC_LIB
+    rustc = CONFIG.RUST.RUSTC
+    if not rustc.startswith("//") and not rustc.startswith(":") and not rustc.startswith("@") and not rustc.startswith("/"):
+        return ""
+    if "_rustc" not in rustc:
+        return ""
+    return rustc.replace("_rustc", "_rustc_lib")
+
+
 def _rust_tools(link:bool=False):
     # Evaluated at rule-call time; plugin config is not available when the
     # build defs are preloaded.
@@ -17,6 +38,9 @@ def _rust_tools(link:bool=False):
         "rustc": [CONFIG.RUST.RUSTC],
         "sysroot": [CONFIG.RUST.SYSROOT],
     }
+    lib = rustc_lib_label()
+    if lib:
+        tools["rustc_lib"] = [lib]
     if link and CONFIG.RUST.CC_TOOL:
         tools["cc"] = [CONFIG.RUST.CC_TOOL]
     return tools
