@@ -1,5 +1,29 @@
 subinclude("//build_defs:rust")
 
+# The tool consumers get by default: a released binary, hash-pinned per
+# platform, the way go-rules ships please_go. Nothing to build, no toolchain
+# to download, no cargo, and it works under remote execution — the bootstrap
+# below cannot claim any of those, and exists only to break the egg when
+# developing these rules.
+#
+# Update on release: publish the tag, then pin the hashes it produced.
+PLEASE_RUST_VERSION = "v0.4.7"
+
+PLEASE_RUST_HASHES = {
+    "linux_amd64": "2c864f0f962779723b17f975a878046a2ee701f3699255327b8cc05032909128",
+    # darwin_amd64 and darwin_arm64 once the release workflow publishes them
+}
+
+for _plat, _hash in PLEASE_RUST_HASHES.items():
+    _native = f"{CONFIG.OS}_{CONFIG.ARCH}" == _plat
+    remote_file(
+        name = "please_rust_release" if _native else f"please_rust_release_{_plat}",
+        binary = True,
+        hashes = [_hash],
+        url = f"https://github.com/becomeliminal/rust-rules/releases/download/{PLEASE_RUST_VERSION}/please_rust-{_plat}",
+        visibility = ["PUBLIC"] if _native else None,
+    )
+
 # please_rust built hermetically by this plugin's own rules against the
 # rust_repo crate graph in //third_party/rust. This is the real tool; the
 # cargo bootstrap below exists only to break the egg (rust_repo subrepos are

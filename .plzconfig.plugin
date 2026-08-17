@@ -45,8 +45,8 @@ Inherit = true
 
 [PluginConfig "please_rust_tool"]
 ConfigKey = PleaseRustTool
-DefaultValue = //tools/please_rust:bootstrap
-Help = Build label of the please_rust tool used to generate and compile crates.
+DefaultValue = //tools/please_rust:please_rust_release
+Help = Build label of the please_rust tool used to generate and compile crates. Defaults to a hash-pinned release download, which needs no toolchain, no cargo and no network beyond the fetch itself. //tools/please_rust:bootstrap builds it from source instead, at the cost of a cargo build that does not work under remote execution.
 Inherit = true
 
 [PluginConfig "sysroot"]
