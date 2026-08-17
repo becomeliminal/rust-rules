@@ -217,6 +217,11 @@ rust_library(
 )
 ```
 
+Protobuf and gRPC codegen live in
+[rust-proto-rules](https://github.com/becomeliminal/rust-proto-rules), a
+separate plugin that pins these rules by tag and plugs into the proto
+plugin's language definitions.
+
 Clippy, rustfmt and rustdoc ship in the toolchain, with a rule each:
 ```python
 rust_clippy(
@@ -322,6 +327,10 @@ always re-runs; cargo keeps a decisive edge on single-crate edit loops.
 The full numbers, methodology and honest caveats are in
 [docs/BENCHMARKS.md](docs/BENCHMARKS.md), reproducible via
 `scripts/benchmark.sh`.
+
+Hit a confusing failure? [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
+lists the real messages this plugin produces, what causes each, and what to
+do about it.
 
 Rust Rules replicates Cargo's build contract without ever invoking Cargo:
 crate tarballs are fetched as verified downloads, `Cargo.toml` files are

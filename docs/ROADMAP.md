@@ -158,6 +158,16 @@ target appears; the host/target unit split already did the hard part.
 15. **Remote cache/execution validation** at labs scale. (M)
 16. **Stress**: a 1k+ crate graph through sync/resolve/build. (S)
 
+## Where things live
+
+- **rust-rules** (this repo): the toolchain, `rust_repo` and third-party
+  resolution, the first-party rules, and `please_rust`.
+- **[rust-proto-rules](https://github.com/becomeliminal/rust-proto-rules)**:
+  protobuf and gRPC codegen, pinning this repo by tag. It lived here
+  briefly; keeping it here forced the proto and python plugins into the
+  config every consumer inherits, and the split is the ecosystem convention
+  anyway (go-rules and go-proto are separate for the same reason).
+
 ## What we deliberately do not chase
 
 - **Editor/IDE integration** (`rust-project.json` for rust-analyzer): parked.

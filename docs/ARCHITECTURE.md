@@ -45,7 +45,7 @@ so its *contract* is reimplemented under the build system's control.
 | `please_rust resolve` | semver version routing + cargo resolver-v2 feature unification across the declared graph, computed by the `rust_resolve` rule inside the build graph | none |
 | `please_rust compile` / `build-script` | drives rustc with cargo's full env contract (`CARGO_PKG_*`, `OUT_DIR`, feature cfgs, proc-macro externs, build script directives) | none |
 | `please_rust sync` | maintains the `rust_repo` list: naming, hashes, pruning; imports a cargo `Cargo.lock` wholesale, or a whole workspace with `--import-workspace` | none |
-| `please_rust lock --add crate@req` | resolves new deps against the crates.io sparse index (cached, `--offline` supported), hashes from index checksums | dev-time only |
+| `please_rust lock --add crate@req` | PubGrub solve over the crates.io sparse index (cached, `--offline` supported), MSRV-filtered against the declared toolchain; hashes from index checksums | dev-time only |
 
 The `rust_repo` declarations play the role `go.mod` plays for go-rules: the
 committed, deterministic resolution artifact. The computed feature sets and
@@ -76,7 +76,8 @@ plz run //tools/please_rust -- sync --import-workspace path/to/workspace
 plz run //tools/please_rust -- sync
 ```
 
-All three rewrite `third_party/rust/BUILD` and regenerate `rust.lock`.
+All three rewrite the declarations in place; resolution itself is derived
+in the build graph, so there is no lock file to commit or drift.
 Feature requests live on the `rust_repo` entries you name; everything
 transitive is derived.
 
@@ -112,6 +113,27 @@ the `rust_repo` graph. The `:bootstrap` genrule builds it once with cargo to
 break the egg (exactly as go-rules bootstraps please_go); nothing else ever
 runs cargo.
 
+## Notes for plugin authors
+
+Two things about Please's plugin model caused every consumer-facing bug this
+plugin has shipped, and neither is obvious from the outside.
+
+**A plugin's `.plzconfig` is shipped to its consumers.** `plugin_repo`
+downloads the repo, config and all, so anything under `[Parse]` becomes a
+requirement on every repo that parses a package of the plugin: preload a
+subinclude and consumers must have that plugin declared too. go-rules ships
+no `[Parse]` section at all, which is the discipline to copy. This repo's
+own BUILD files subinclude explicitly instead.
+
+**Subrepo names are global and unqualified.** Please derives them from the
+declaring package path plus the name, with no prefix identifying which repo
+declared them, so a plugin's `third_party/rust/serde` and a consumer's are
+one name and collide the moment both are parsed. That is why this repo keeps
+its own crates in `third_party/crates`: `rust_repo` derives both
+`third_party_path` and the lock label from the package the declarations live
+in, so a plugin only has to put them somewhere its consumers will not. The
+same applies to any plugin declaring crates on a consumer's behalf.
+
 ## Status / known gaps
 
 Audited against cargo's documented build-script and feature contracts and
@@ -125,9 +147,13 @@ against go-rules' architecture. What remains open, deliberately:
   hermetic toolchain target can be swapped in without changing any rules;
   such a toolchain is not shipped here. C sources are staged and compile
   (blake3 builds its real asm implementations).
-- **`lock` resolution is greedy** max-satisfying with pin preference and
-  clear conflict errors; a backtracking (PubGrub) solver can replace its
-  `select()` seam without touching anything else.
+- **Version selection is a PubGrub solve.** Each (crate, compatibility
+  bucket) is a package, so incompatible majors coexist as cargo allows, and
+  a requirement spanning buckets becomes a proxy package whose versions are
+  the candidate buckets, making that choice backtrackable too. Declared
+  versions are preferences, not requirements, so adding one crate does not
+  churn the rest. Releases needing a newer rustc than the declared toolchain
+  are filtered out.
 - **Single-platform resolution**: one target triple per resolve
   (`x86_64-unknown-linux-gnu` by default; `--target` on resolve/sync/lock).
   The host/target unit split is in place, so cross-compilation needs only a
