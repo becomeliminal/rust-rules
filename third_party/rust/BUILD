@@ -10,6 +10,11 @@ rust_toolchain(
         "cbd14c36f039f6f11f38148a6295d8234d18ddf20bea53031c86f119423a8b26",  # aarch64-apple-darwin
         "5f4c84d2bcce7983468642855a45fc4978fba1324cfdd1ea0b182face3ab4ffa",  # x86_64-apple-darwin
     ],
+    # Cross-compiling to a platform pulls its standard library, and CI does
+    # exactly that; pin what it fetches.
+    std_hashes = {
+        "darwin_arm64": "27b3da11e1adefeba0213aff73587acf0bf50641c774f09103fb7b29a341ed5d",
+    },
     version = "1.97.1",
     visibility = ["PUBLIC"],
 )

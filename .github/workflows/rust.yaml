@@ -10,6 +10,17 @@ jobs:
         run: ./pleasew build -p -v notice //... --log_file plz-out/log/build.log
       - name: Run tests
         run: ./pleasew test -p -v notice --log_file plz-out/log/test.log
+      # Cross-compilation is verifiable from linux even though running the
+      # result is not: the object file says which platform it is for.
+      - name: Cross-compile to macOS
+        run: |
+          ./pleasew build -p -v notice --arch darwin_arm64 //examples/local_crate/package_a:package_a
+          rlib=plz-out/gen/darwin_arm64/examples/local_crate/package_a/libpackage_a.rlib
+          obj=$(ar t "$rlib" | grep -m1 '\.o$')
+          ar x "$rlib" "$obj" && file "$obj"
+          file "$obj" | grep -q 'Mach-O 64-bit arm64' || {
+            echo "cross-compiled object is not arm64 Mach-O"; exit 1; }
+
       - name: Archive logs
         if: always()
         uses: actions/upload-artifact@v4
