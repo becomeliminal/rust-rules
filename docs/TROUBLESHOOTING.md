@@ -105,6 +105,34 @@ dependency, and use the entry point where you need a particular binary.
 
 If the label instead reaches a shell command, quote it: the `|` is a pipe.
 
+## `can't find crate for 'std'` when building with `--arch`
+
+The toolchain has no standard library for the platform being targeted.
+`rust_toolchain` installs one for whatever `--arch` names, so this means the
+build is using a toolchain target that was parsed for a different platform,
+or `architectures` was used to cross-compile part of a repo by hand without
+listing that platform:
+
+```python
+rust_toolchain(
+    name = "toolchain",
+    version = "1.97.1",
+    architectures = ["darwin_arm64"],
+)
+```
+
+## Cross-compiling links against the host's libraries, or fails in the linker
+
+Compiling for another platform needs nothing but its `rust-std`; linking an
+executable for one needs a linker that targets it. Rust libraries therefore
+cross-compile out of the box and binaries do not. Point `CCTool` at a cross
+linker (a build label works) as you would for any other C toolchain here.
+
+Build scripts, proc macros and installed binaries are compiled for the host
+whatever `--arch` says, since they run during the build. That is cargo's
+split too, and it is why a repo can cross-compile even though its build
+scripts execute.
+
 ## Upgrading from separate toolchain targets
 
 Before 0.5.0 the toolchain was eight sibling targets. Two lines of config:

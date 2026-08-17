@@ -68,6 +68,13 @@ pub struct GenerateArgs {
     #[arg(long, default_value = "")]
     pub cc_label: String,
 
+    /// Triple to compile libraries for, when it is not the host's. Build
+    /// scripts, proc macros and installed binaries run during the build, so
+    /// they stay on the host whatever this says, exactly as cargo splits its
+    /// unit graph.
+    #[arg(long)]
+    pub compile_target: Option<String>,
+
     /// Target triple, used to evaluate platform-gated dependencies when a
     /// crate is generated standalone (absent from the resolved graph)
     #[arg(long, default_value = "x86_64-unknown-linux-gnu")]
@@ -241,6 +248,13 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         (requested_features, deps, build_deps)
     };
 
+    // Cross-compilation: the target unit is compiled for another platform,
+    // the host unit (and every build script and proc macro) is not.
+    let target_arg = match &args.compile_target {
+        Some(t) => format!("--target {} ", t),
+        None => String::new(),
+    };
+
     // Generate BUILD file content
     let mut build_content = generate_build_file(
         crate_name,
@@ -256,6 +270,7 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         &linked_deps,
         args.pipeline,
         has_lib,
+        &target_arg,
     );
 
     // Bin-only crates: the crate-named target aliases the (first) binary so
@@ -319,6 +334,7 @@ pub fn run(args: GenerateArgs) -> Result<()> {
             &linked_deps,
             args.pipeline,
             has_lib,
+            "",
         ));
     }
 
@@ -573,8 +589,12 @@ fn generate_build_file(
     linked_deps: &[String],
     pipeline: bool,
     has_lib: bool,
+    target_arg: &str,
 ) -> String {
     let mut content = String::new();
+    // Proc macros are loaded into rustc itself, so they are built for the
+    // machine running the build however the rest of the graph is targeted.
+    let target_arg = if crate_type == "proc-macro" { "" } else { target_arg };
 
     let crate_ident = crate_name.replace("-", "_");
     let normalized_name = format!("{}{}", crate_ident, suffix);
@@ -650,6 +670,7 @@ fn generate_build_file(
             deps,
             lib_path,
             pipeline,
+            target_arg,
         ));
     } else {
         content.push_str(&generate_compile_rule(
@@ -664,6 +685,7 @@ fn generate_build_file(
             deps,
             lib_path,
             pipeline,
+            target_arg,
         ));
     }
 
@@ -709,6 +731,7 @@ fn generate_build_file(
                 deps,
                 lib_path,
                 build_script_path.is_some(),
+                target_arg,
             ));
         }
     }
@@ -728,6 +751,7 @@ fn generate_rmeta_rule(
     deps: &[(String, String)],
     lib_path: &str,
     has_buildscript: bool,
+    target_arg: &str,
 ) -> String {
     let mut content = String::new();
 
@@ -746,8 +770,8 @@ fn generate_rmeta_rule(
     // the optimized MIR dependents' codegen needs). Profile flags must match
     // the link rule so the inlined MIR agrees.
     let compile_base = format!(
-        "{} && $TOOLS_PLEASE_RUST compile --pipeline-rmeta --externconfig externconfig {}--manifest-path $SRCS_MANIFEST --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cap-lints allow --crate-name {} --edition {} --crate-type lib --emit dep-info,link,metadata {}",
-        aggregate_cmd, buildscript_arg, crate_ident, edition_str, feature_str
+        "{} && $TOOLS_PLEASE_RUST compile --pipeline-rmeta --externconfig externconfig {}{}--manifest-path $SRCS_MANIFEST --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cap-lints allow --crate-name {} --edition {} --crate-type lib --emit dep-info,link,metadata {}",
+        aggregate_cmd, target_arg, buildscript_arg, crate_ident, edition_str, feature_str
     );
     let ec_cmd = format!("echo '{}={}' > $OUTS_EXTERNCONFIG", normalized_name, out_rmeta);
     let cmd_dbg = format!("{} -g $SRCS_MAIN && {}", compile_base, ec_cmd);
@@ -1025,6 +1049,7 @@ fn generate_compile_rule_with_buildscript(
     deps: &[(String, String)],
     lib_path: &str,
     pipeline: bool,
+    target_arg: &str,
 ) -> String {
     let mut content = String::new();
     let (rule_name, dep_label, dep_ec): (String, fn(&str) -> String, fn(&str) -> String) =
@@ -1040,8 +1065,8 @@ fn generate_compile_rule_with_buildscript(
 
     // Compile command with --buildscript flag
     let compile_base = format!(
-        "$TOOLS_PLEASE_RUST compile --externconfig externconfig --buildscript $SRCS_BUILDSCRIPT --manifest-path $SRCS_MANIFEST --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cc $TOOLS_CC --cap-lints allow --crate-name {} --edition {} --crate-type {} --emit {} {}",
-        crate_ident, edition_str, crate_type, emit, feature_str
+        "$TOOLS_PLEASE_RUST compile --externconfig externconfig {}--buildscript $SRCS_BUILDSCRIPT --manifest-path $SRCS_MANIFEST --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cc $TOOLS_CC --cap-lints allow --crate-name {} --edition {} --crate-type {} --emit {} {}",
+        target_arg, crate_ident, edition_str, crate_type, emit, feature_str
     );
 
     let cmd_dbg = format!(
@@ -1118,6 +1143,7 @@ fn generate_compile_rule(
     deps: &[(String, String)],
     lib_path: &str,
     pipeline: bool,
+    target_arg: &str,
 ) -> String {
     let mut content = String::new();
     let (rule_name, dep_label, dep_ec): (String, fn(&str) -> String, fn(&str) -> String) =
@@ -1132,8 +1158,8 @@ fn generate_compile_rule(
     };
 
     let compile_base = format!(
-        "$TOOLS_PLEASE_RUST compile --externconfig externconfig --manifest-path $SRCS_MANIFEST --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cc $TOOLS_CC --cap-lints allow --crate-name {} --edition {} --crate-type {} --emit {} {}",
-        crate_ident, edition_str, crate_type, emit, feature_str
+        "$TOOLS_PLEASE_RUST compile --externconfig externconfig {}--manifest-path $SRCS_MANIFEST --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cc $TOOLS_CC --cap-lints allow --crate-name {} --edition {} --crate-type {} --emit {} {}",
+        target_arg, crate_ident, edition_str, crate_type, emit, feature_str
     );
 
     let cmd_dbg = format!(
@@ -1264,6 +1290,7 @@ mod tests {
             &[],
             pipeline,
             true,
+            "",
         )
     }
 
@@ -1289,6 +1316,60 @@ mod tests {
         assert!(!out.contains("dep_metadata"));
     }
 
+    /// Cross-compiling: the target unit names the triple, the host units
+    /// (build scripts, proc macros) never do, or rustc would produce code the
+    /// machine running the build cannot execute.
+    fn gen_cross(crate_type: &str, build_script: Option<&str>) -> String {
+        generate_build_file(
+            "my-crate",
+            "1.2.3",
+            &cargo_toml::Edition::E2021,
+            crate_type,
+            &[],
+            &[],
+            &[],
+            build_script,
+            "src/lib.rs",
+            "",
+            &[],
+            false,
+            true,
+            "--target aarch64-apple-darwin ",
+        )
+    }
+
+    #[test]
+    fn cross_compiled_lib_names_the_target() {
+        let out = gen_cross("lib", None);
+        assert!(out.contains("compile --externconfig externconfig --target aarch64-apple-darwin "));
+    }
+
+    #[test]
+    fn cross_compiled_proc_macro_stays_on_the_host() {
+        let out = gen_cross("proc-macro", None);
+        assert!(!out.contains("--target aarch64-apple-darwin"));
+    }
+
+    #[test]
+    fn cross_compiled_build_script_stays_on_the_host() {
+        let out = gen_cross("lib", Some("build.rs"));
+        // The crate itself is cross-compiled...
+        assert!(out.contains("--target aarch64-apple-darwin "));
+        // ...but the script that runs during the build is not. Its command
+        // is the one invoking the build-script subcommand.
+        let script_cmd = out
+            .lines()
+            .find(|l| l.contains("$TOOLS_PLEASE_RUST build-script"))
+            .expect("build script command");
+        assert!(!script_cmd.contains("--target"));
+    }
+
+    #[test]
+    fn host_build_names_no_target() {
+        let out = gen("lib", &[], &[], None, "");
+        assert!(!out.contains("--target "));
+    }
+
     #[test]
     fn linked_deps_feed_build_script() {
         let out = generate_build_file(
@@ -1305,6 +1386,7 @@ mod tests {
             &["///third_party/rust/libz_sys//:_libz_sys_build_script|buildscript".to_string()],
             false,
             true,
+            "",
         );
         assert!(out.contains("\"dep_metadata\": ["));
         assert!(out.contains("///third_party/rust/libz_sys//:_libz_sys_build_script|buildscript"));
@@ -1443,6 +1525,7 @@ mod run_tests {
             tool_label: "@//custom:tool".to_string(),
             rustc_label: "@//custom:rustc".to_string(),
             sysroot_label: "@//custom:sysroot".to_string(),
+            compile_target: None,
             cc_label: "@//custom:cc".to_string(),
         }
     }

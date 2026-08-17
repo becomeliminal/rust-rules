@@ -78,6 +78,12 @@ pub struct CompileArgs {
     #[arg(long)]
     pub sysroot: Option<PathBuf>,
 
+    /// Target triple to compile for, when it is not the host's. The sysroot
+    /// has to carry a standard library for it; rust_toolchain installs one
+    /// for every platform in its architectures list.
+    #[arg(long)]
+    pub target: Option<String>,
+
     /// Crate name
     #[arg(long)]
     pub crate_name: String,
@@ -278,6 +284,10 @@ fn build_command(args: &CompileArgs) -> Result<Command> {
     // Set sysroot if provided (tells rustc where to find std/core)
     if let Some(sysroot) = &args.sysroot {
         cmd.arg("--sysroot").arg(sysroot);
+    }
+
+    if let Some(target) = &args.target {
+        cmd.arg("--target").arg(target);
     }
 
     // The proc_macro crate is compiler-provided; cargo injects it into the
@@ -614,6 +624,7 @@ mod command_tests {
             manifest_path: None,
             rustc: PathBuf::from("rustc"),
             sysroot: Some(PathBuf::from("/sysroot")),
+            target: None,
             crate_name: "demo".to_string(),
             edition: "2021".to_string(),
             crate_type: "lib".to_string(),

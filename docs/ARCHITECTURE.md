@@ -154,10 +154,16 @@ against go-rules' architecture. What remains open, deliberately:
   versions are preferences, not requirements, so adding one crate does not
   churn the rest. Releases needing a newer rustc than the declared toolchain
   are filtered out.
-- **Single-platform resolution**: one target triple per resolve
-  (`x86_64-unknown-linux-gnu` by default; `--target` on resolve/sync/lock).
-  The host/target unit split is in place, so cross-compilation needs only a
-  second triple threaded through, not a redesign.
+- **Resolution is per-platform, declarations are not**: a resolve is for one
+  triple, derived from what is being built for (`--target` overrides it), so
+  a mac developer resolves the darwin graph rather than a checked-in linux
+  one. Declarations are shared by everyone in the repo, so `lock` and
+  `sync --prune` cover every triple in `--targets` and write the union: a
+  linux run still declares the crates a darwin build reaches.
+- **Cross-compilation**: `--arch` picks the target platform, `rust_toolchain`
+  puts that platform's `rust-std` in the one sysroot, and compiles name it
+  with `--target`. Build scripts, proc macros and installed binaries stay on
+  the host, matching cargo's split of its unit graph.
 - **Not enforced**: `rust-version` (MSRV) checks; `CARGO_CFG_TARGET_FEATURE`
   is approximated for x86_64/aarch64; dev-dependencies are ignored (nothing
   builds third-party crates' own tests).

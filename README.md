@@ -376,10 +376,10 @@ Contributions are welcome! Please open or submit a pull request with your change
 ### Extra Features for Contribution
 Here are some extra features that would be valuable additions to this project:
 
-- **Target (OS and Architecture) Compatibility**: primarily built and tested
-  on x86_64-unknown-linux-gnu. The resolver's host/target unit split is in
-  place, so cross-compilation needs `--target` threading and per-target
-  `rust-std`, not a redesign. Needs a contributor who runs the target.
+- **Target (OS and Architecture) Compatibility**: built and tested on
+  x86_64-unknown-linux-gnu, and cross-compiled from there to
+  aarch64-apple-darwin. Running the produced binaries, and building natively
+  on macOS, needs a contributor who runs the target.
 
 C toolchains stay host-provided by convention (the `CCTool` config accepts
 a build label for anyone who wants their own), and private registries are

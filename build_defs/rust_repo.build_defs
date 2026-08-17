@@ -59,17 +59,19 @@ def rust_git_download(name:str, crate:str, version:str, repo:str, revision:str, 
     )
 
 
-def host_triple():
-    """The target triple of the machine parsing this, derived the way
-    rust_toolchain derives its download URL. Resolution is per-target because
-    Rust's cfg-gated dependencies differ by platform, so a mac developer must
-    resolve the darwin graph rather than a checked-in linux one."""
+def build_triple():
+    """The triple this repo is being built for, derived the way rust_toolchain
+    derives its download URL. Resolution is per-platform because Rust's
+    cfg-gated dependencies differ by platform, so a mac developer must resolve
+    the darwin graph rather than a checked-in linux one, and a cross-compile
+    must resolve the graph of the platform it is producing rather than the one
+    it is running on. Without --arch these are the same machine."""
     oses = {'linux': 'unknown-linux-gnu', 'darwin': 'apple-darwin'}
     arches = {'amd64': 'x86_64', 'x86': 'i686', 'arm64': 'aarch64', 'arm': 'arm'}
-    os = oses.get(CONFIG.OS, '')
-    arch = arches.get(CONFIG.ARCH, '')
+    os = oses.get(CONFIG.TARGET_OS, '')
+    arch = arches.get(CONFIG.TARGET_ARCH, '')
     if not os or not arch:
-        raise ParseError('Unsupported platform %s/%s; pass target explicitly to rust_resolve' % (CONFIG.OS, CONFIG.ARCH))
+        raise ParseError('Unsupported platform %s/%s; pass target explicitly to rust_resolve' % (CONFIG.TARGET_OS, CONFIG.TARGET_ARCH))
     return '%s-%s' % (arch, os)
 
 
@@ -234,7 +236,13 @@ def rust_repo(
     # Generate BUILD files
     # Note: remote_file with extract=True extracts contents into a directory named after the crate
     lock_flag = "--lock $SRCS_LOCK " if lock else ""
-    target_triple = host_triple()
+    target_triple = build_triple()
+    # Cross-compiling: libraries are built for the target, while build scripts,
+    # proc macros and installed binaries run during the build and stay on the
+    # host. Without --arch there is nothing to say.
+    cross_flag = ""
+    if CONFIG.TARGET_OS != CONFIG.HOSTOS or CONFIG.TARGET_ARCH != CONFIG.HOSTARCH:
+        cross_flag = f"--compile-target {target_triple} "
     pipeline_flag = "--pipeline " if CONFIG.RUST.PIPELINED_COMPILATION else ""
     cc_is_label = CONFIG.RUST.CC_TOOL and (CONFIG.RUST.CC_TOOL.startswith("//") or CONFIG.RUST.CC_TOOL.startswith(":"))
     cc_ref = _subrepo_ref(CONFIG.RUST.CC_TOOL) if CONFIG.RUST.CC_TOOL else ""
@@ -247,7 +255,7 @@ def rust_repo(
         "rm -rf $SRCS_CRATE/.plzconfig",
         "find $SRCS_CRATE -name BUILD -delete",
         # Run please_rust generate (SRCS_CRATE points directly to the extracted directory)
-        f"$TOOL generate --crate-name {crate} --version {version} --src-root $SRCS_CRATE --subrepo {subrepo_path} --features '{features_arg}' --install '{install_arg}' --third-party-folder '{third_party_path}' --target {target_triple} --tool-label '{tool_ref}' --rustc-label '{rustc_ref}' --sysroot-label '{sysroot_ref}' {cc_flag}{lock_flag}{pipeline_flag}" + " ".join([f"--override {k}={v}" for k, v in sorted(dep_overrides.items())]),
+        f"$TOOL generate --crate-name {crate} --version {version} --src-root $SRCS_CRATE --subrepo {subrepo_path} --features '{features_arg}' --install '{install_arg}' --third-party-folder '{third_party_path}' --target {target_triple} --tool-label '{tool_ref}' --rustc-label '{rustc_ref}' --sysroot-label '{sysroot_ref}' {cc_flag}{cross_flag}{lock_flag}{pipeline_flag}" + " ".join([f"--override {k}={v}" for k, v in sorted(dep_overrides.items())]),
         # Move to output
         "mv $SRCS_CRATE $OUT",
     ]
@@ -342,7 +350,7 @@ def rust_resolve(name:str, entries:list, target:str="", visibility:list=["PUBLIC
         visibility: Visibility specification.
     """
     if not target:
-        target = host_triple()
+        target = build_triple()
     pkg = package_name()
     entry_flags = " ".join([f"--entry '{e}'" for e in entries])
     manifest_srcs = []

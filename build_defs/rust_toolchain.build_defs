@@ -4,7 +4,31 @@ We do not use Cargo so try and replicate what Cargo does.
 
 """
 
-def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=None, visibility=None, nightly=False):
+RUST_OSES = {
+    'linux': 'unknown-linux-gnu',
+    'darwin': 'apple-darwin',
+}
+
+# Please's architecture names on the left, the Rust target triple's on the right
+RUST_ARCHES = {
+    'amd64': 'x86_64',
+    'x86': 'i686',
+    'arm64': 'aarch64',
+    'arm': 'arm',
+}
+
+
+def rust_triple(plz_os:str, plz_arch:str, context:str='rust_toolchain'):
+    """The Rust target triple for one of Please's os_arch pairs."""
+    os = RUST_OSES.get(plz_os, '')
+    arch = RUST_ARCHES.get(plz_arch, '')
+    if not os or not arch:
+        raise ParseError('Unknown platform %s_%s, pass its triple explicitly to %s' % (plz_os, plz_arch, context))
+    return '%s-%s' % (arch, os)
+
+
+def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=None, visibility=None, nightly=False,
+                   architectures:list=[], std_hashes:dict={}):
     """Defines rules to fetch a Rust toolchain.
 
     Typically you'd set the name of this rule into rustc_toolchain, either in your .plzconfig
@@ -14,33 +38,33 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
       name (str): Name of the rule.
       version (str): Version of Rust to download.
       os (str): Operating system to download for, as the full triple, e.g. 'unknown-linux-gnu', 'pc-windows-msvc', etc.
-                Defaults to the current OS, as best we can.
-      arch (str): Architecture to download for, e.g. 'i686' or 'x86_64'. Defaults to the current one.
+                Defaults to the host OS, as best we can.
+      arch (str): Architecture to download for, e.g. 'i686' or 'x86_64'. Defaults to the host one.
       hashes (list) List of hashes to verify on download.
       deps (list): Extra dependencies of the rule.
       visibility (list): Visibility declaration of the rule.
+      architectures (list): Additional platforms to install the standard library for, in Please's format
+                            e.g. 'darwin_arm64'. The platform passed to --arch is installed automatically;
+                            listing others here is only useful to cross-compile part of a repo by hand.
+      std_hashes (dict): Hashes for those standard libraries, keyed the same way as architectures.
     """
+    # rustc runs on the machine doing the building whatever it is compiling for,
+    # so the toolchain is downloaded for the host and cross-compilation is a
+    # matter of which standard libraries sit in its sysroot.
     if not os:
-        if CONFIG.OS == 'linux':
-            os = 'unknown-linux-gnu'
-        elif CONFIG.OS == 'darwin':
-            os = 'apple-darwin'
-        else:
-            raise ParseError('Unknown OS %s, you must pass os explicitly to rust_toolchain' % CONFIG.OS)
+        os = RUST_OSES.get(CONFIG.HOSTOS, '')
+        if not os:
+            raise ParseError('Unknown OS %s, you must pass os explicitly to rust_toolchain' % CONFIG.HOSTOS)
     if not arch:
-        # Please's names on the left, the Rust target triple's on the right
-        arches = {
-            'amd64': 'x86_64',
-            'x86': 'i686',
-            'arm64': 'aarch64',
-            'arm': 'arm',
-        }
-        arch = arches.get(CONFIG.ARCH, '')
+        arch = RUST_ARCHES.get(CONFIG.HOSTARCH, '')
         if not arch:
-            raise ParseError('Unknown architecture %s, you must pass arch explicitly to rust_toolchain' % CONFIG.ARCH)
+            raise ParseError('Unknown architecture %s, you must pass arch explicitly to rust_toolchain' % CONFIG.HOSTARCH)
 
     base = '-'.join(['rust', version, arch, os])
     triple = '%s-%s' % (arch, os)
+
+    if CONFIG.TARGET_OS != CONFIG.HOSTOS or CONFIG.TARGET_ARCH != CONFIG.HOSTARCH:
+        architectures += ['%s_%s' % (CONFIG.TARGET_OS, CONFIG.TARGET_ARCH)]
     download_rule = remote_file(
         name = '_%s#download' % name,
         url = 'https://static.rust-lang.org/dist/%s.tar.gz' % base,
@@ -59,17 +83,42 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
     #
     # clippy-driver and rustfmt resolve librustc_driver the same way, so they
     # move next to rustc rather than being copied out into rules of their own.
+    llvm_bin = '%s/llvm-tools-preview/lib/rustlib/%s/bin' % (name, triple)
+    sysroot = '%s/rust-std-%s' % (name, triple)
+
+    # A standard library for another platform goes into this same sysroot,
+    # under its own triple, which is where rustc --target looks for it. One
+    # sysroot serving every target is what rustup produces too, and it keeps
+    # cross-compiling to a matter of passing --target.
+    std_rules = []
+    std_cmds = []
+    for plat in architectures:
+        plat_os, _, plat_arch = plat.partition('_')
+        plat_triple = rust_triple(plat_os, plat_arch)
+        if plat_triple == triple:
+            continue
+        std_base = 'rust-std-%s-%s' % (version, plat_triple)
+        std_rules += [remote_file(
+            name = '_%s#std_%s' % (name, plat),
+            url = 'https://static.rust-lang.org/dist/%s.tar.gz' % std_base,
+            hashes = [std_hashes[plat]] if plat in std_hashes else None,
+        )]
+        std_cmds += [
+            'mv %s/rust-std-%s/lib/rustlib/%s $OUT/rust-std-%s/lib/rustlib/' % (std_base, plat_triple, plat_triple, triple),
+        ]
+
+    extract = ['for f in $SRCS_STD; do tar -xzf $f; done'] if std_rules else []
     cmds = [
-        'tar -xzf $SRCS',
+        'tar -xzf $SRCS_DIST',
+    ] + extract + [
         'mv %s $OUT' % base,
         'mv $OUT/clippy-preview/bin/clippy-driver $OUT/rustc/bin/',
         'mv $OUT/rustfmt-preview/bin/rustfmt $OUT/rustc/bin/',
-    ]
-    llvm_bin = '%s/llvm-tools-preview/lib/rustlib/%s/bin' % (name, triple)
-    sysroot = '%s/rust-std-%s' % (name, triple)
+    ] + std_cmds
+
     return build_rule(
         name = name,
-        srcs = [download_rule],
+        srcs = {'dist': [download_rule], 'std': std_rules},
         outs = [name],
         cmd = ' && '.join(cmds),
         entry_points = {

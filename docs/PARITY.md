@@ -43,15 +43,21 @@ binary-link time.
 - [ ] Per-platform toolchain URLs in `rust_toolchain` (darwin-aarch64,
       darwin-x86_64, linux-aarch64) + macOS CI validation (plz itself is
       cross-platform; this is toolchain plumbing)
-- [ ] Cross-compilation: `--target` threading through resolve → generate →
-      compile with per-target `rust-std`; map onto plz's cross-arch labels
-- [ ] True exec/target artifact split (unit split exists in resolution;
-      artifacts currently share one triple — fine while host == target)
+- [x] Cross-compilation: `plz build --arch darwin_arm64 //...`.
+      `rust_toolchain` installs the `rust-std` for whatever `--arch` names
+      (plus anything in `architectures`), and the triple threads through
+      resolve → generate → compile. Verified from linux: first-party and
+      third-party rlibs come out as Mach-O arm64 objects. Linking a binary
+      for another platform additionally needs a cross linker, which comes
+      from `CCTool` like every other C toolchain here
+- [x] True exec/target artifact split: build scripts, proc macros and
+      installed binaries compile for the host, libraries for the target,
+      the same split cargo makes in its unit graph
 - [ ] wasm32 targets (+ wasm-bindgen rule later). Groundwork done: the
       bindgen-cli pattern (tool built from crates via rust_repo, aliased
       through a config knob) is exactly how wasm-bindgen-cli will ship;
-      the blocker is --target threading through resolve/generate/compile
-      with a wasm32 rust-std, tracked above
+      --target threading is now in place, so what remains is a wasm32
+      rust-std and the bindgen-shaped rule around it
 - [ ] Nightly / channel toolchains policy
 
 ### Build speed

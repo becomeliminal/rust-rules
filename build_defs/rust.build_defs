@@ -19,6 +19,30 @@ def _rustdoc_tools():
     }
 
 
+def target_flag(crate_type:str=''):
+    """`--target` when building for a platform other than the host.
+
+    rustc runs on the host whatever it compiles for, so cross-compiling is a
+    matter of naming the target and having its standard library in the
+    sysroot; `rust_toolchain(architectures = [...])` puts one there, and the
+    platform passed to `--arch` is installed without being listed.
+
+    Proc macros are loaded into rustc itself, so they are compiled for the
+    host even when everything around them is not. Cargo does the same.
+    """
+    if CONFIG.TARGET_OS == CONFIG.HOSTOS and CONFIG.TARGET_ARCH == CONFIG.HOSTARCH:
+        return ''
+    if crate_type == 'proc-macro':
+        return ''
+    oses = {'linux': 'unknown-linux-gnu', 'darwin': 'apple-darwin'}
+    arches = {'amd64': 'x86_64', 'x86': 'i686', 'arm64': 'aarch64', 'arm': 'arm'}
+    os = oses.get(CONFIG.TARGET_OS, '')
+    arch = arches.get(CONFIG.TARGET_ARCH, '')
+    if not os or not arch:
+        raise ParseError('Cannot cross-compile Rust to %s_%s' % (CONFIG.TARGET_OS, CONFIG.TARGET_ARCH))
+    return '--target %s-%s ' % (arch, os)
+
+
 def toolchain_entry(entry:str):
     """Another entry point of whatever toolchain target rustc comes from.
 
@@ -114,7 +138,8 @@ def _compile_cmds(crate_name:str, edition:str, crate_type:str, emit:str, feature
     native_arg = '--native $SRCS_NATIVE ' if cc_deps else ''
     rmeta_arg = '--pipeline-rmeta ' if pipeline_rmeta else ''
     extra_args = extra_flags + ' ' if extra_flags else ''
-    base = f'{_AGGREGATE_EXTERNCONFIGS} && $TOOLS_PLEASE_RUST compile --externconfig externconfig {rmeta_arg}{extra_args}{manifest_arg}{dep_args}{cc_arg}{static_arg}{native_arg}--rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --crate-name {crate_name} --edition {edition} --crate-type {crate_type} --emit {emit} {test_arg}{feature_args}'
+    target_arg = target_flag(crate_type)
+    base = f'{_AGGREGATE_EXTERNCONFIGS} && $TOOLS_PLEASE_RUST compile --externconfig externconfig {rmeta_arg}{target_arg}{extra_args}{manifest_arg}{dep_args}{cc_arg}{static_arg}{native_arg}--rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --crate-name {crate_name} --edition {edition} --crate-type {crate_type} --emit {emit} {test_arg}{feature_args}'
     lib_file = lib_file or f'lib{crate_name}.rlib'
     externconfig_lines = [f'{crate_name}={lib_file}']
     for f in (native_files or []):
