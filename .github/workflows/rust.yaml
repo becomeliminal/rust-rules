@@ -28,14 +28,13 @@ jobs:
           name: logs
           path: plz-out/log
 
-  # macOS is where the platform assumptions show up: three bugs that made a
-  # Mac checkout unbuildable were found by the release workflow building
-  # there, one release at a time. This runs the whole suite so they surface
-  # here instead. Allowed to fail until it has been green a few times, since
-  # nobody develops on a Mac day to day.
+  # macOS is where the platform assumptions show up: five bugs that made a
+  # Mac checkout unbuildable were found by building there, one release at a
+  # time, and the last two were found by this job. Gating, because a platform
+  # nobody develops on daily is exactly the one that needs a build to fail
+  # loudly when it breaks.
   macos:
     runs-on: macos-latest
-    continue-on-error: true
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

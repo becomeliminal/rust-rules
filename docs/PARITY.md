@@ -40,12 +40,15 @@ binary-link time.
       header → bindings → rust_test end to end
 
 ### Platforms and configurations
-- [ ] macOS validation. The toolchain URL follows the host and a
-      declaration carries a hash per platform, so a Mac fetches the tarball
-      it can run; the release workflow builds on macos-latest, which is how
-      the two bugs that made a Mac checkout unbuildable were found. Still
-      wanted: a green native macOS build of the whole repo, not just of the
-      tool. darwin_amd64 is not built (macos-13 runners are retiring)
+- [x] macOS: `plz build //...` and `plz test //...` are green natively on
+      macos-latest in CI, and the release publishes a darwin_arm64 binary.
+      Five bugs stood between here and there, each found by a build on a
+      Mac rather than by reading: a toolchain hash that could only match
+      linux, a tool target declared for no platform a Mac has, BUILD
+      colliding with crates that ship a build/ directory on a
+      case-insensitive filesystem, proc macros named .so where macOS
+      produces .dylib, and build scripts told they were targeting linux.
+      darwin_amd64 is not built (macos-13 runners are retiring)
 - [x] Cross-compilation: `plz build --arch darwin_arm64 //...`.
       `rust_toolchain` installs the `rust-std` for whatever `--arch` names
       (plus anything in `architectures`), and the triple threads through
