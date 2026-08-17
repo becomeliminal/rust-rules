@@ -41,12 +41,6 @@ Help = A file path or build label for a rust stdlib.
 Inherit = true
 Optional = true
 
-[PluginConfig "repo_root"]
-DefaultValue = //third_party/rust:toolchain_target
-Help = An absolute filepath of the repo root. Used for linking external dependencies.
-Inherit = true
-Optional = true
-
 [alias "rustc"]
 Desc = Runs the rustc binary and sets required env vars.
 Cmd = run //scripts:rustc

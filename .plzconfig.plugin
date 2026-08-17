@@ -17,12 +17,6 @@ Help = A file path or build label for a rust stdlib.
 Inherit = true
 Optional = true
 
-[PluginConfig "repo_root"]
-DefaultValue = //third_party/rust:toolchain_target
-Help = An absolute filepath of the repo root. Used for linking external dependencies.
-Inherit = true
-Optional = true
-
 [PluginConfig "proto_plugin"]
 ConfigKey = ProtoPlugin
 DefaultValue = ///third_party/rust/protoc_gen_prost//:protoc_gen_prost_bin
