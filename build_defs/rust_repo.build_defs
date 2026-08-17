@@ -268,6 +268,13 @@ def rust_repo(
         tools = [CONFIG.RUST.PLEASE_RUST_TOOL],
         deps = deps,
         output_is_complete = True,
+        # Downloading a tarball and writing BUILD files gains nothing from a
+        # remote worker, and running them there means Please reads the
+        # subrepo's config through its remote filesystem. That path segfaults
+        # when the subrepo's tree is absent from the remote cache
+        # (remotefs.New dereferences a nil tree), so keep these local unless
+        # a consumer asks otherwise.
+        local = CONFIG.RUST.LOCAL_SUBREPOS,
         labels = labels + [f"rust_crate:{crate}@{version}"],
     )
 

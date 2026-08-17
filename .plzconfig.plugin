@@ -161,3 +161,10 @@ DefaultValue =
 Optional = true
 Help = Cargo from the toolchain, used only by the bootstrap that breaks the egg (nothing else runs cargo). Empty derives it from Rustc, whose sibling it is, so the bootstrap uses whichever toolchain you configured rather than downloading another.
 Inherit = true
+
+[PluginConfig "local_subrepos"]
+ConfigKey = LocalSubrepos
+DefaultValue = true
+Type = bool
+Help = Run crate download and BUILD generation locally rather than on a remote worker. These steps fetch a tarball and write BUILD files, so there is little to gain remotely, and Please crashes reading a remote subrepo's config when its tree is not in the remote cache.
+Inherit = true
