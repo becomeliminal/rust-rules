@@ -85,6 +85,18 @@ plugin. Point `CCTool` at a build label to use something else. For crates
 whose build scripts publish link metadata, `links` and
 `DEP_<LINKS>_<KEY>` propagation is wired; see `test/links`.
 
+## A cold checkout downloads a Rust toolchain during `plz query`
+
+Parsing a package that references a crate subrepo has to build that subrepo,
+and building it needs `please_rust`. With the default the tool is built from
+source, which pulls a toolchain and runs the cargo bootstrap — expensive, and
+it needs network, which remote execution setups often do not grant build
+actions.
+
+Pin the released binary instead (see PleaseRustTool in the README). It is
+hash-verified, downloads in seconds, and removes cargo from the picture
+entirely.
+
 ## Reporting something not listed here
 
 The tool prints the exact rustc invocation before running it, so a failing

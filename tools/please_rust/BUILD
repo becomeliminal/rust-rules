@@ -93,10 +93,13 @@ genrule(
         cp $TMP_DIR/target/release/please_rust $OUTS
     """,
     sandbox = False,  # Needed for cargo to download dependencies
+    # Take the toolchain from config rather than naming this repo's own: a
+    # consumer building the tool from source already has a Rust toolchain, and
+    # hardcoding ours made them download a second one.
     tools = {
-        "rustc": ["//third_party/rust:toolchain_rustc"],
-        "sysroot": ["//third_party/rust:toolchain_sysroot"],
-        "cargo": ["//third_party/rust:toolchain_cargo"],
+        "rustc": [CONFIG.RUST.RUSTC],
+        "sysroot": [CONFIG.RUST.SYSROOT],
+        "cargo": [CONFIG.RUST.CARGO_TOOL],
     },
     visibility = ["PUBLIC"],
 )

@@ -154,3 +154,9 @@ ConfigKey = CriterionDep
 DefaultValue = //third_party/rust:criterion
 Help = The criterion crate that rust_benchmark rules link against.
 Inherit = true
+
+[PluginConfig "cargo_tool"]
+ConfigKey = CargoTool
+DefaultValue = //third_party/rust:toolchain_cargo
+Help = Cargo from the toolchain, used only by the bootstrap that breaks the egg (nothing else runs cargo).
+Inherit = true

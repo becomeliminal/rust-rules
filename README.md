@@ -283,6 +283,32 @@ plugin's default.
 CCTool = //third_party/cc:toolchain
 ```
 
+### PleaseRustTool
+The `please_rust` binary. The default builds it from source inside the
+plugin, which needs a Rust toolchain and, because that bootstrap is the
+cargo egg-breaker, network access at build time. That is fine for trying
+the plugin out, but for CI — especially with remote execution — pin the
+released binary instead, which is hash-verified and downloads in seconds:
+
+```python
+# third_party/rust/BUILD
+remote_file(
+    name = "please_rust_tool",
+    url = "https://github.com/becomeliminal/rust-rules/releases/download/<tag>/please_rust-linux_amd64",
+    hashes = ["<sha256 from the release>"],
+    binary = True,
+    visibility = ["PUBLIC"],
+)
+```
+```ini
+[Plugin "rust"]
+PleaseRustTool = //third_party/rust:please_rust_tool
+```
+
+Note that a parse-only command such as `plz query` still has to build the
+crate subrepos it touches, and building those needs this tool — so the
+choice affects far more than a full build.
+
 ### Profiles
 Cargo's profile settings, mapped onto Please's build configs. The tuning
 knobs apply to optimised builds (`plz build -c opt`); `DebugAssertions`
