@@ -82,6 +82,26 @@ binary-link time.
       dep, not srcs — plz excludes test-target srcs from coverage reports)
 
 ### Hardening
+- [x] Remote execution: verified against a real cluster by the labs pilot
+      (1461 build tasks, 525 third-party crates, CI green). Six bugs fixed,
+      all of one shape — an action assuming the environment around it rather
+      than naming what it needs, because a worker stages only what is named:
+      subrepo configs carrying cross-repo labels, the tool default resolving
+      into the consuming repo, a second toolchain download, Please crashing
+      on a subrepo with no remote tree (mitigated by building crate subrepos
+      locally, fixed upstream in thought-machine/please#3577), rustc's
+      driver library unstaged for every compile, and copies into a nested
+      output directory that does not exist yet
+- [ ] Three paths remain **expected but not demonstrated** under remote
+      execution, because the reference consumer cannot reach them: the test
+      wrapper's use of `$RESULTS_FILE` and its coverage-profile directory
+      (its Rust targets live under an `experimentaldir`, excluded from its
+      CI's affected-target queries, so no Rust test has ever run remotely),
+      rustdoc staging its driver library (no doc targets there), and the
+      coverage tools staging libLLVM (no coverage step). Reasoning says they
+      are fine and an audit of the wrapper found nothing; an audit also
+      missed the compile-action instance before v0.4.5, so treat these as
+      unverified. Pointing a remote executor at them, in that order, closes it
 - [ ] Upstream plz WaitForPackage race (found 2026-08): a lost-wakeup
       TOCTOU on `packageWaits` in src/core/state.go hangs builds when many
       packages concurrently subinclude the plugin's build_defs — all plz
