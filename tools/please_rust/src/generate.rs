@@ -1105,14 +1105,24 @@ fn generate_build_script_rule(
         out_dir, aggregate_cmd, out_dir, target, externconfig_arg, dep_metadata_arg, feature_str
     );
 
+    // Cargo runs build scripts from the package root with the whole package
+    // present (scripts read source and data files, and a -sys crate's script
+    // compiles a vendored C tree). The package goes behind a filegroup rather
+    // than into srcs: plz exports every named source in the environment, and
+    // shaderc-sys vendors enough of shaderc, glslang and SPIRV-Tools to push
+    // that past the exec argument limit. A dependency is staged just the
+    // same without being enumerated.
+    content.push_str(&format!("# Package sources for {}\n", normalized_name));
+    content.push_str("filegroup(\n");
+    content.push_str(&format!("    name = \"_{}#package\",\n", normalized_name));
+    content.push_str(&format!("    srcs = glob([\"*\", \"**/*\"], exclude=[\"{}\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\", \"{}\"], allow_empty=True),\n", script_path, out_dir));
+    content.push_str(")\n\n");
+
     content.push_str(&format!("# Stage 1: Run build script for {}\n", normalized_name));
     content.push_str("build_rule(\n");
     content.push_str(&format!("    name = \"_{}_build_script\",\n", normalized_name));
     content.push_str("    srcs = {\n");
     content.push_str(&format!("        \"script\": [\"{}\"],\n", script_path));
-    // Cargo runs build scripts from the package root with the whole package
-    // present (scripts read source/data files, e.g. blake3 reads c/).
-    content.push_str(&format!("        \"package\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"Cargo.toml\", \"BUILD\", \".plzconfig\", \"{}\"], allow_empty=True),\n", script_path, out_dir));
     content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
     if has_build_deps {
         content.push_str("        \"externconfigs\": [\n");
@@ -1136,14 +1146,15 @@ fn generate_build_script_rule(
     content.push_str(&format!("        \"out\": [\"{}\"],\n", out_dir));
     content.push_str("    },\n");
 
-    // Add build-dependencies if any
+    // The package, plus build-dependencies if any.
+    content.push_str("    deps = [\n");
+    content.push_str(&format!("        \":_{}#package\",\n", normalized_name));
     if has_build_deps {
-        content.push_str("    deps = [\n");
         for (_name, target) in build_deps {
             content.push_str(&format!("        \"{}\",\n", target));
         }
-        content.push_str("    ],\n");
     }
+    content.push_str("    ],\n");
 
     content.push_str("    tools = {\n");
     content.push_str("        \"please_rust\": [\"@//tools/please_rust:bootstrap\"],\n");
@@ -1684,6 +1695,10 @@ mod tests {
         let out = gen("lib", &[], &[], Some("build/main.rs"), "");
         assert!(out.contains("name = \"_my_crate_build_script\""));
         assert!(out.contains("\"script\": [\"build/main.rs\"]"));
+        // The package is a dependency, not a named source: plz exports every
+        // named source in the environment and a vendored C tree overflows it.
+        assert!(out.contains("name = \"_my_crate#package\""), "{}", out);
+        assert!(out.contains("\":_my_crate#package\""), "{}", out);
         assert!(out.contains("--buildscript $SRCS_BUILDSCRIPT"));
         assert!(out.contains("\"out\": [\"my_crate_out\"]"));
         assert!(!out.contains("dep_metadata"));
