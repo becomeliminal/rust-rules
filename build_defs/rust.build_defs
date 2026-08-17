@@ -30,6 +30,34 @@ def rustc_lib_label():
     return rustc.replace("_rustc", "_rustc_lib")
 
 
+def _rustdoc_tools():
+    """Tools for rustdoc actions. rustdoc loads librustc_driver just as rustc
+    does, so the same directory has to be staged."""
+    tools = {
+        'please_rust': [CONFIG.RUST.PLEASE_RUST_TOOL],
+        'rustdoc': ['//third_party/rust:toolchain_rustdoc'],
+        'sysroot': [CONFIG.RUST.SYSROOT],
+    }
+    lib = rustc_lib_label()
+    if lib:
+        tools['rustc_lib'] = [lib]
+    return tools
+
+
+def llvm_tools_lib_label():
+    """The directory holding libLLVM, beside the coverage tools that load it.
+    Same reasoning as rustc_lib_label: naming it is what gets it staged on a
+    remote worker."""
+    if CONFIG.RUST.LLVM_TOOLS_LIB:
+        return CONFIG.RUST.LLVM_TOOLS_LIB
+    tools = CONFIG.RUST.LLVM_TOOLS
+    if not tools.startswith("//") and not tools.startswith(":") and not tools.startswith("@") and not tools.startswith("/"):
+        return ""
+    if "_llvm_tools" not in tools:
+        return ""
+    return tools.replace("_llvm_tools", "_llvm_tools_lib")
+
+
 def _rust_tools(link:bool=False):
     # Evaluated at rule-call time; plugin config is not available when the
     # build defs are preloaded.
@@ -394,6 +422,9 @@ def rust_test(name:str, root:str, modules:list=None, deps:list=[], cc_deps:list=
     if CONFIG.BUILD_CONFIG == 'cover':
         test_cmd = f'$TOOLS_PLEASE_RUST test --suite {name} --coverage --llvm-tools $TOOLS_LLVM -- $TEST'
         test_tools['llvm'] = [CONFIG.RUST.LLVM_TOOLS]
+        llvm_lib = llvm_tools_lib_label()
+        if llvm_lib:
+            test_tools['llvm_lib'] = [llvm_lib]
 
     # plz excludes a test target's own srcs from coverage reports, but Rust
     # unit tests recompile the library sources (tests live inside them), so
@@ -466,11 +497,7 @@ def rust_doc_test(name:str, root:str, crate_name:str="", modules:list=None, deps
             _AGGREGATE_EXTERNCONFIGS,
             f'$TOOLS_PLEASE_RUST test --suite {name} --externs-from-cwd -- $TOOLS_RUSTDOC --test $DATA_MAIN --crate-name {crate_name} --edition {edition} --sysroot $TOOLS_SYSROOT -L . {feature_args}',
         ]),
-        test_tools = {
-            'please_rust': [CONFIG.RUST.PLEASE_RUST_TOOL],
-            'rustdoc': ['//third_party/rust:toolchain_rustdoc'],
-            'sysroot': [CONFIG.RUST.SYSROOT],
-        },
+        test_tools = _rustdoc_tools(),
         visibility = visibility,
         labels = ['rust'],
     )
@@ -617,11 +644,7 @@ def rust_doc(name:str, root:str, crate_name:str="", modules:list=None, deps:list
             f'$TOOLS_PLEASE_RUST test --suite {name} --externs-from-cwd -- $TOOLS_RUSTDOC $SRCS_MAIN --crate-name {crate_name} --edition {edition} --out-dir $OUT --sysroot $TOOLS_SYSROOT -L . {feature_args}',
         ]),
         deps = deps,
-        tools = {
-            'please_rust': [CONFIG.RUST.PLEASE_RUST_TOOL],
-            'rustdoc': ['//third_party/rust:toolchain_rustdoc'],
-            'sysroot': [CONFIG.RUST.SYSROOT],
-        },
+        tools = _rustdoc_tools(),
         needs_transitive_deps = True,
         visibility = visibility,
         labels = ['rust'],

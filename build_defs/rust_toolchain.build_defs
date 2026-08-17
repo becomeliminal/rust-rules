@@ -121,6 +121,14 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
         binary = True,
         deps = [llvm_lib_rule],
     )
+    # As with rustc's driver library: a dependency is enough locally, but an
+    # action that runs these on a remote worker has to name the directory.
+    llvm_tools_lib_rule = filegroup(
+        name = name + '_llvm_tools_lib',
+        srcs = [extract_rule + '|llvm_tools_lib'],
+        visibility = visibility,
+        binary = True,
+    )
     # clippy-driver and rustfmt link librustc_driver via RUNPATH $ORIGIN/../lib,
     # so they are copied next to rustc where that resolves to the staged libs.
     # The copy creates that directory itself: cp will not, and a remote worker

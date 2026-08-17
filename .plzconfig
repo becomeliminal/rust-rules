@@ -208,3 +208,10 @@ DefaultValue =
 Optional = true
 Help = Directory holding rustc's driver library. Empty derives it from Rustc, whose sibling it is. Every action that runs rustc stages it, because a remote worker stages only what an action names and rustc loads the library from beside its own binary.
 Inherit = true
+
+[PluginConfig "llvm_tools_lib"]
+ConfigKey = LlvmToolsLib
+DefaultValue =
+Optional = true
+Help = Directory holding libLLVM, which the coverage tools load from beside their own binaries. Empty derives it from LlvmTools.
+Inherit = true
