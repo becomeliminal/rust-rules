@@ -156,7 +156,9 @@ pub fn run(args: GenerateArgs) -> Result<()> {
             let entry = lock.crates.get(&subrepo_key).cloned();
             if entry.is_none() {
                 eprintln!(
-                    "warning: {} not in lock file, falling back to heuristic resolution",
+                    "warning: {} is declared but not in the resolved graph, so its features \
+                     cannot be unified; building it standalone with default features. Run \
+                     `please_rust sync --prune` to drop declarations nothing depends on.",
                     subrepo_key
                 );
             }
@@ -207,12 +209,19 @@ pub fn run(args: GenerateArgs) -> Result<()> {
             entry.build_deps.iter().map(mk).collect::<Vec<_>>(),
         )
     } else {
-        // Heuristic path: requested features + name-based dep routing
-        let requested_features: Vec<String> = if args.features.is_empty() {
+        // Heuristic path: requested features + name-based dep routing. With
+        // no resolution to unify against, cargo's behaviour for a crate built
+        // on its own applies: default features are on, expanded through the
+        // manifest's own feature graph.
+        let mut requested: Vec<String> = if args.features.is_empty() {
             Vec::new()
         } else {
             args.features.split(',').map(|s| s.trim().to_string()).collect()
         };
+        if manifest.features.contains_key("default") && !requested.iter().any(|f| f == "default") {
+            requested.push("default".to_string());
+        }
+        let requested_features = expand_features(&manifest, &requested);
 
         // Dependency overrides (package -> subrepo name)
         let overrides: std::collections::HashMap<String, String> = args
@@ -346,6 +355,29 @@ pub fn run(args: GenerateArgs) -> Result<()> {
     );
 
     Ok(())
+}
+
+/// Expands a feature request through the manifest's own feature table, the
+/// way cargo does before compiling: `default = ["std"]`, `std = ["alloc"]`
+/// means asking for `default` enables all three. Entries that activate
+/// dependencies rather than features (`dep:x`, `x/y`, `x?/y`) are not
+/// features of this crate and are skipped.
+fn expand_features(manifest: &Manifest, requested: &[String]) -> Vec<String> {
+    let table = &manifest.features;
+    let mut out: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut stack: Vec<String> = requested.to_vec();
+    while let Some(f) = stack.pop() {
+        if f.starts_with("dep:") || f.contains('/') {
+            continue;
+        }
+        if !out.insert(f.clone()) {
+            continue;
+        }
+        if let Some(children) = table.get(&f) {
+            stack.extend(children.iter().cloned());
+        }
+    }
+    out.into_iter().collect()
 }
 
 fn determine_crate_type(manifest: &Manifest) -> String {
@@ -1473,6 +1505,38 @@ mod run_tests {
     }
 
     #[test]
+    fn standalone_crate_gets_its_default_features() {
+        // A crate declared but absent from the resolved graph is built on its
+        // own, and cargo would enable its default features. Without this, a
+        // crate whose std/alloc feature guards its own source (form_urlencoded
+        // and friends) fails to compile with a bare compile_error!.
+        let root = scratch("standalone_defaults");
+        let src = crate_dir(
+            &root,
+            "[package]\nname = \"demo\"\nversion = \"1.0.0\"\n\n[features]\ndefault = [\"std\"]\nstd = [\"alloc\"]\nalloc = []\n",
+            &[("src/lib.rs", "")],
+        );
+        // A lock that does not mention this crate at all
+        let lock = root.join("rust.lock");
+        fs::write(
+            &lock,
+            serde_json::to_string(&LockFile {
+                target: "x86_64-unknown-linux-gnu".to_string(),
+                crates: Default::default(),
+                host_crates: Default::default(),
+                missing: Vec::new(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        run(args(src.clone(), Some(lock))).unwrap();
+        let build = fs::read_to_string(src.join("BUILD")).unwrap();
+        for f in ["--feature default", "--feature std", "--feature alloc"] {
+            assert!(build.contains(f), "missing {}: {}", f, build);
+        }
+    }
+
+    #[test]
     fn heuristic_fallback_without_lock() {
         let root = scratch("heuristic");
         let src = crate_dir(
@@ -1529,6 +1593,18 @@ mod heuristic_tests {
             format!("[package]\nname = \"t\"\nversion = \"1.0.0\"\n{}", body).as_bytes(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn feature_expansion_walks_the_manifest_graph() {
+        let m = manifest(
+            "[features]\ndefault = [\"std\"]\nstd = [\"alloc\"]\nalloc = []\nextra = [\"dep:x\", \"other/y\"]\n",
+        );
+        let got = expand_features(&m, &["default".to_string()]);
+        assert_eq!(got, vec!["alloc", "default", "std"]);
+        // dep: and dep/feature entries activate dependencies, not features
+        let got = expand_features(&m, &["extra".to_string()]);
+        assert_eq!(got, vec!["extra"]);
     }
 
     #[test]

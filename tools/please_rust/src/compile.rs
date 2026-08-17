@@ -521,6 +521,14 @@ fn build_command(args: &CompileArgs) -> Result<Command> {
         if args.crate_type == "bin" || args.test {
             cmd.arg("-C").arg("link-arg=--coverage");
         }
+        // Instrumented code that runs *during* a build (a proc-macro rustc
+        // expands, say) writes its profile to the cwd unless told otherwise,
+        // littering the repo with default_*.profraw. Keep those in the build
+        // sandbox; the test wrapper sets its own path for the profiles that
+        // actually matter.
+        if std::env::var_os("LLVM_PROFILE_FILE").is_none() {
+            cmd.env("LLVM_PROFILE_FILE", "build-%p.profraw");
+        }
     }
     for flag in &args.rustc_flags {
         cmd.arg(flag);
