@@ -47,6 +47,13 @@ pub struct SyncArgs {
     #[arg(long, default_value = "x86_64-unknown-linux-gnu")]
     pub target: String,
 
+    /// Triples the declaration set must cover, comma-separated. Declarations
+    /// are shared by everyone building the repo, so they have to name every
+    /// crate any of those platforms needs; resolution itself still happens
+    /// per-host, in the build graph.
+    #[arg(long, default_value = "x86_64-unknown-linux-gnu,aarch64-apple-darwin,x86_64-apple-darwin")]
+    pub targets: String,
+
     /// Where to write the resolved lock (defaults to rust.lock next to the BUILD file)
     #[arg(long)]
     pub lock_output: Option<PathBuf>,
@@ -66,6 +73,20 @@ pub struct SyncArgs {
     /// Report what would change without writing anything
     #[arg(long)]
     pub dry_run: bool,
+}
+
+/// The triples a declaration set has to cover, always including the one
+/// resolution is primarily for.
+fn target_list(targets: &str, primary: &str) -> Vec<String> {
+    let mut out: Vec<String> = targets
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if !out.iter().any(|t| t == primary) {
+        out.insert(0, primary.to_string());
+    }
+    out
 }
 
 /// Scaffolds a minimal third-party BUILD (toolchain + rust_repo subinclude)
@@ -256,10 +277,27 @@ pub fn run_reporting(args: SyncArgs) -> Result<Vec<crate::resolve::MissingDep>> 
     // Crates imported this run that did not activate for this target (e.g.
     // windows-only) are dropped again rather than declared dead weight; with
     // --prune, ALL inactive indirect declarations go.
+    // A crate needed only on darwin is not dead weight on linux, so activity
+    // is judged across every covered platform rather than this one.
+    let mut active_anywhere: BTreeSet<String> = lock.crates.keys().cloned().collect();
+    active_anywhere.extend(lock.host_crates.keys().cloned());
+    for triple in target_list(&args.targets, &args.target) {
+        if triple == args.target {
+            continue;
+        }
+        match resolve_entries(&entries, &triple) {
+            Ok(other) => {
+                active_anywhere.extend(other.crates.keys().cloned());
+                active_anywhere.extend(other.host_crates.keys().cloned());
+            }
+            Err(e) => eprintln!("sync: could not resolve for {}: {:#}", triple, e),
+        }
+    }
+
     let before = decls.len();
     let mut deleted_spans: Vec<(usize, usize)> = Vec::new();
     decls.retain(|d| {
-        let active = lock.crates.contains_key(&d.subrepo());
+        let active = active_anywhere.contains(&d.subrepo());
         let keep = if d.imported {
             active
         } else if args.prune && !d.root {
@@ -866,6 +904,13 @@ pub struct LockCmdArgs {
     #[arg(long, default_value = "x86_64-unknown-linux-gnu")]
     pub target: String,
 
+    /// Triples the declaration set must cover, comma-separated. Declarations
+    /// are shared by everyone building the repo, so they have to name every
+    /// crate any of those platforms needs; resolution itself still happens
+    /// per-host, in the build graph.
+    #[arg(long, default_value = "x86_64-unknown-linux-gnu,aarch64-apple-darwin,x86_64-apple-darwin")]
+    pub targets: String,
+
     /// curl binary for index fetches
     #[arg(long, default_value = "curl")]
     pub curl: String,
@@ -1236,6 +1281,7 @@ fn finish_lock(args: &LockCmdArgs, mut decls: Vec<Decl>) -> Result<Vec<crate::re
         import: None,
         import_workspace: None,
         target: args.target.clone(),
+        targets: args.targets.clone(),
         lock_output: None,
         plz: args.plz.clone(),
         no_rename: false,
@@ -1296,8 +1342,15 @@ fn lock_round(
         return Ok(Vec::new());
     }
 
-    let source = IndexSource { index, target: &args.target };
-    let mut solver = crate::pubgrub_solver::Solver::new(&source);
+    // Solve once per platform the declaration set covers and declare the
+    // union: a crate gated behind cfg(target_os = "macos") is invisible to a
+    // linux solve, and a checked-in declaration set missing it leaves mac
+    // developers unable to build.
+    let triples = target_list(&args.targets, &args.target);
+    let mut solution: BTreeMap<String, (Version, String)> = BTreeMap::new();
+    for triple in &triples {
+        let source = IndexSource { index, target: triple };
+        let mut solver = crate::pubgrub_solver::Solver::new(&source);
 
     // Declared versions are preferences, not requirements: the solve is
     // driven by the additions, so `lock --add` never needs index entries for
@@ -1325,9 +1378,14 @@ fn lock_round(
         }
         tc
     };
-    solver.msrv(toolchain);
+        solver.msrv(toolchain);
 
-    let solution = solver.solve()?;
+        // Later platforms only add what earlier ones could not see; a crate
+        // both need is already pinned to one version by the first solve.
+        for (key, value) in solver.solve()? {
+            solution.entry(key).or_insert(value);
+        }
+    }
 
     // Fold the solution into the declarations: an existing crate in the same
     // compatibility bucket is upgraded in place (cargo's behaviour when a new
@@ -1471,6 +1529,7 @@ fn clone_lock_args(args: &LockCmdArgs) -> LockCmdArgs {
         cache_dir: args.cache_dir.clone(),
         offline: args.offline,
         target: args.target.clone(),
+        targets: args.targets.clone(),
         curl: args.curl.clone(),
         plz: args.plz.clone(),
         greedy: args.greedy,
@@ -1820,6 +1879,7 @@ rust_repo(
             import: None,
             import_workspace: None,
             target: "x86_64-unknown-linux-gnu".to_string(),
+            targets: "x86_64-unknown-linux-gnu".to_string(),
             lock_output: None,
             plz: "".to_string(),
             no_rename: false,
@@ -1862,6 +1922,7 @@ rust_repo(
             import: None,
             import_workspace: None,
             target: "x86_64-unknown-linux-gnu".to_string(),
+            targets: "x86_64-unknown-linux-gnu".to_string(),
             lock_output: None,
             plz: "".to_string(),
             no_rename: true,
@@ -1961,6 +2022,7 @@ mod lock_cmd_tests {
             cache_dir: Some(cache),
             offline: true,
             target: "x86_64-unknown-linux-gnu".to_string(),
+            targets: "x86_64-unknown-linux-gnu".to_string(),
             curl: "false".to_string(),
             plz: "".to_string(),
             greedy: false,
@@ -1995,6 +2057,7 @@ mod lock_cmd_tests {
             cache_dir: Some(dir.join("empty-cache")),
             offline: true,
             target: "x86_64-unknown-linux-gnu".to_string(),
+            targets: "x86_64-unknown-linux-gnu".to_string(),
             curl: "false".to_string(),
             plz: "".to_string(),
             greedy: false,
@@ -2021,6 +2084,7 @@ mod lock_cmd_tests {
             cache_dir: Some(dir.join("cache")),
             offline: true,
             target: "x86_64-unknown-linux-gnu".to_string(),
+            targets: "x86_64-unknown-linux-gnu".to_string(),
             curl: "false".to_string(),
             plz: "".to_string(),
             greedy: false,
