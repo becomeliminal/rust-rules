@@ -153,7 +153,7 @@ pub fn run(args: GenerateArgs) -> Result<()> {
     }
 
     // Determine crate type
-    let crate_type = determine_crate_type(&manifest);
+    let crate_type = determine_crate_type(&manifest, has_lib);
 
     // Prefer the resolved lock entry for this subrepo when available
     let subrepo_key = args
@@ -428,7 +428,7 @@ fn expand_features(manifest: &Manifest, requested: &[String]) -> Vec<String> {
     out.into_iter().collect()
 }
 
-fn determine_crate_type(manifest: &Manifest) -> String {
+fn determine_crate_type(manifest: &Manifest, has_lib: bool) -> String {
     // Check if it's a proc-macro
     if let Some(lib) = &manifest.lib {
         if lib.proc_macro {
@@ -439,6 +439,15 @@ fn determine_crate_type(manifest: &Manifest) -> String {
             return "proc-macro".to_string();
         }
         // If lib section exists, it's a library
+        return "lib".to_string();
+    }
+
+    // Cargo discovers src/lib.rs without a [lib] section, so a crate can
+    // have both a library and binaries while declaring only the binaries.
+    // Treating that as binary-only compiles its lib.rs as a bin, which fails
+    // for want of a main - and for a no_std crate, for want of a panic
+    // handler as well.
+    if has_lib {
         return "lib".to_string();
     }
 
@@ -1030,7 +1039,7 @@ fn generate_build_script_rule(
     content.push_str(&format!("        \"script\": [\"{}\"],\n", script_path));
     // Cargo runs build scripts from the package root with the whole package
     // present (scripts read source/data files, e.g. blake3 reads c/).
-    content.push_str(&format!("        \"package\": glob([\"**/*\"], exclude=[\"{}\", \"Cargo.toml\", \"BUILD\", \".plzconfig\", \"{}\"], allow_empty=True),\n", script_path, out_dir));
+    content.push_str(&format!("        \"package\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"Cargo.toml\", \"BUILD\", \".plzconfig\", \"{}\"], allow_empty=True),\n", script_path, out_dir));
     content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
     if has_build_deps {
         content.push_str("        \"externconfigs\": [\n");
@@ -1326,10 +1335,14 @@ mod tests {
 
     #[test]
     fn crate_type_detection() {
-        assert_eq!(determine_crate_type(&manifest("")), "lib");
-        assert_eq!(determine_crate_type(&manifest("[lib]\nproc-macro = true\n")), "proc-macro");
-        assert_eq!(determine_crate_type(&manifest("[lib]\ncrate-type = [\"proc-macro\"]\n")), "proc-macro");
-        assert_eq!(determine_crate_type(&manifest("[[bin]]\nname = \"tool\"\n")), "bin");
+        assert_eq!(determine_crate_type(&manifest(""), true), "lib");
+        assert_eq!(determine_crate_type(&manifest("[lib]\nproc-macro = true\n"), true), "proc-macro");
+        assert_eq!(determine_crate_type(&manifest("[lib]\ncrate-type = [\"proc-macro\"]\n"), true), "proc-macro");
+        assert_eq!(determine_crate_type(&manifest("[[bin]]\nname = \"tool\"\n"), false), "bin");
+        // A crate with binaries and an undeclared src/lib.rs is still a
+        // library: alloc-no-stdlib is one, and compiling its lib.rs as a bin
+        // fails for want of a main function.
+        assert_eq!(determine_crate_type(&manifest("[[bin]]\nname = \"tool\"\n"), true), "lib");
     }
 
     fn gen(
@@ -1441,6 +1454,16 @@ mod tests {
         assert!(out.contains("echo 'md5@third_party/crates/md_5=libmd5-0_11_0.rlib'"), "{}", out);
         // ...while the rule keeps the package name, which is what a label says
         assert!(out.contains("name = \"md_5\""), "{}", out);
+    }
+
+    /// plz's `**/*` does not match files at the top level, only inside
+    /// directories - so a build script doing `mod configure;` or
+    /// `include!("no_atomic.rs")` never saw the file beside it. libm and
+    /// crossbeam-utils both do exactly that.
+    #[test]
+    fn build_script_stages_top_level_files() {
+        let out = gen("lib", &[], &[], Some("build.rs"), "");
+        assert!(out.contains("glob([\"*\", \"**/*\"]"), "{}", out);
     }
 
     #[test]
