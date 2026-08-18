@@ -114,6 +114,16 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
         'mv %s $OUT' % base,
         'mv $OUT/clippy-preview/bin/clippy-driver $OUT/rustc/bin/',
         'mv $OUT/rustfmt-preview/bin/rustfmt $OUT/rustc/bin/',
+        # Everything a build never opens. This output is one directory so that
+        # a binary cannot be staged without the libraries beside it, which
+        # means every action naming an entry point takes the whole tree as an
+        # input - locally free, and on a remote executor a Merkle tree to hash,
+        # upload and materialise per worker. The dist tarball ships the HTML
+        # documentation, which is 65,529 of the 65,735 files in it: keeping it
+        # costs every remote action 99.7% of its input file count for something
+        # rustc never reads.
+        'rm -rf $OUT/rust-docs $OUT/rust-docs-json-preview $OUT/rust-analyzer-preview'
+        ' $OUT/rust-analysis-* $OUT/llvm-bitcode-linker-preview',
     ] + std_cmds
 
     return build_rule(
