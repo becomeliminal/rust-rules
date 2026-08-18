@@ -117,7 +117,11 @@ def _dep_names(deps:list):
         target_parts = label_parts[-1].split('#')
         target = target_parts[0]
         if target.startswith('_'):
-            target = target.replace('_', '', 1)
+            # plz's replace takes no count, and slicing is not supported
+            # either; splitting is what is left. This matters for generated
+            # targets, which is how a proto library is exposed.
+            target_bits = target.split('_')
+            target = '_'.join(target_bits[1:])
         qualifier = pkg + '/' + target if pkg else target
         names += ['%s@%s' % (crate, qualifier)]
     return names
@@ -127,10 +131,17 @@ def _self_qualifier(name:str):
     """How dependents will name this rule: its package and rule name.
 
     A dependent derives the same string from the label it wrote, so the two
-    agree without either having to know the other's version.
+    agree without either having to know the other's version - which means
+    normalising the name the same way it does. plz's internal `_name#tag`
+    targets are how generated libraries are exposed, and a dependent writes
+    the label with the tag while the rule is created without it.
     """
     pkg = package_name()
-    return pkg + '/' + name if pkg else name
+    target = name.split('#')[0]
+    if target.startswith('_'):
+        bits = target.split('_')
+        target = '_'.join(bits[1:])
+    return pkg + '/' + target if pkg else target
 
 
 def _profile_flags(optimised:bool):
