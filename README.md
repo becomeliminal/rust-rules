@@ -365,6 +365,19 @@ Strip = symbols       ; none, debuginfo, symbols
 DebugAssertions = false
 ```
 
+### BuildScriptJobs
+`NUM_JOBS`, which is what cc-rs and cmake-rs read to decide how many C
+compilers to run. It reaches nothing else — not rustc, which parallelises
+by codegen units, and not Please's own scheduler — so it is the width of a
+`-sys` crate's vendored C tree and of nothing else. Unset it is half the
+machine, on the grounds that Please is already running other actions beside
+this one and several heavy C builds each going flat out is worse than
+either extreme.
+```ini
+[Plugin "rust"]
+BuildScriptJobs = 8
+```
+
 ### PipelinedCompilation
 Splits each library crate into a metadata-only compile that dependents'
 compiles hang off and a full compile that runs in parallel (the scheme

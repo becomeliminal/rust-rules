@@ -262,6 +262,10 @@ def rust_repo(
     if CONFIG.TARGET_OS != CONFIG.HOSTOS or CONFIG.TARGET_ARCH != CONFIG.HOSTARCH:
         cross_flag = f"--compile-target {target_triple} "
     pipeline_flag = "--pipeline " if CONFIG.RUST.PIPELINED_COMPILATION else ""
+    # Only baked in when somebody picked a number. Left alone the generated
+    # rules say nothing about NUM_JOBS and please_rust reads the machine, so
+    # the same BUILD file is generated on a laptop and a build farm.
+    jobs_flag = f"--build-script-jobs {CONFIG.RUST.BUILD_SCRIPT_JOBS} " if CONFIG.RUST.BUILD_SCRIPT_JOBS else ""
     cc_is_label = CONFIG.RUST.CC_TOOL and (CONFIG.RUST.CC_TOOL.startswith("//") or CONFIG.RUST.CC_TOOL.startswith(":"))
     cc_ref = _subrepo_ref(CONFIG.RUST.CC_TOOL) if CONFIG.RUST.CC_TOOL else ""
     cc_flag = f"--cc-label '{cc_ref}' " if cc_is_label else ""
@@ -275,7 +279,7 @@ def rust_repo(
         # case-insensitive filesystem, where find matches it by either name
         "find $SRCS_CRATE -type f \\( -name BUILD -o -name BUILD.plz \\) -delete",
         # Run please_rust generate (SRCS_CRATE points directly to the extracted directory)
-        f"$TOOL generate --crate-name {crate} --version {version} --src-root $SRCS_CRATE --subrepo {subrepo_path} --features '{features_arg}' --install '{install_arg}' --third-party-folder '{third_party_path}' --target {target_triple} --tool-label '{tool_ref}' --rustc-label '{rustc_ref}' --sysroot-label '{sysroot_ref}' {cc_flag}{cross_flag}{lock_flag}{pipeline_flag}" + " ".join([f"--override {k}={v}" for k, v in sorted(dep_overrides.items())]),
+        f"$TOOL generate --crate-name {crate} --version {version} --src-root $SRCS_CRATE --subrepo {subrepo_path} --features '{features_arg}' --install '{install_arg}' --third-party-folder '{third_party_path}' --target {target_triple} --tool-label '{tool_ref}' --rustc-label '{rustc_ref}' --sysroot-label '{sysroot_ref}' {cc_flag}{cross_flag}{lock_flag}{pipeline_flag}{jobs_flag}" + " ".join([f"--override {k}={v}" for k, v in sorted(dep_overrides.items())]),
         # Move to output
         "mv $SRCS_CRATE $OUT",
     ]

@@ -115,6 +115,13 @@ Optional = true
 Help = rustc -C lto for the opt config (thin, fat, off). Empty leaves rustc's default.
 Inherit = true
 
+[PluginConfig "build_script_jobs"]
+ConfigKey = BuildScriptJobs
+DefaultValue = 
+Optional = true
+Help = NUM_JOBS for build scripts. cc-rs and cmake-rs read it to decide how many C compilers to run, so a -sys crate with a vendored C tree builds at this width. Empty uses half the machine, because plz is already running other actions alongside it.
+Inherit = true
+
 [PluginConfig "codegen_units"]
 ConfigKey = CodegenUnits
 DefaultValue = 

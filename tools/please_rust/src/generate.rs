@@ -80,6 +80,13 @@ pub struct GenerateArgs {
     #[arg(long, default_value_t = crate::build_script::running_triple())]
     pub target: String,
 
+    /// NUM_JOBS for build scripts, when the consumer has picked one. Absent
+    /// leaves the generated rules saying nothing, so the tool derives it from
+    /// whichever machine runs them - which keeps a generated BUILD file the
+    /// same on every machine unless somebody deliberately fixed the number.
+    #[arg(long)]
+    pub build_script_jobs: Option<usize>,
+
     /// Emit pipelined-compilation rule shapes: each crate splits into a
     /// `_X#link` compile rule, a `_X#rmeta` metadata-only rule that
     /// dependents' compiles hang off, and a public `X` filegroup that
@@ -365,6 +372,13 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         .replace("@//tools/please_rust:bootstrap", &args.tool_label)
         .replace("@//third_party/rust:toolchain_rustc", &args.rustc_label)
         .replace("@//third_party/rust:toolchain_sysroot", &args.sysroot_label);
+    build_content = match args.build_script_jobs {
+        Some(n) => build_content.replace("__JOBS__", &n.to_string()),
+        // Nothing said, so say nothing: the tool derives NUM_JOBS from the
+        // machine that runs the script rather than from the one that
+        // generated the rule.
+        None => build_content.replace("--jobs __JOBS__ ", ""),
+    };
     if args.cc_label.is_empty() {
         build_content = build_content
             .replace("--cc $TOOLS_CC ", "")
@@ -1140,7 +1154,7 @@ fn generate_build_script_rule(
         "--dep-metadata $SRCS_DEP_METADATA "
     };
     let build_script_cmd = format!(
-        "mkdir -p {} && {}$TOOLS_PLEASE_RUST build-script --manifest-path $SRCS_MANIFEST --build-script $SRCS_SCRIPT --out-dir {} --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cc $TOOLS_CC --target {} {}{}--output $OUTS_BUILDSCRIPT {}",
+        "mkdir -p {} && {}$TOOLS_PLEASE_RUST build-script --manifest-path $SRCS_MANIFEST --build-script $SRCS_SCRIPT --out-dir {} --rustc $TOOLS_RUSTC --sysroot $TOOLS_SYSROOT --cc $TOOLS_CC --jobs __JOBS__ --target {} {}{}--output $OUTS_BUILDSCRIPT {}",
         out_dir, aggregate_cmd, out_dir, target, externconfig_arg, dep_metadata_arg, feature_str
     );
 
@@ -1998,6 +2012,7 @@ mod run_tests {
             sysroot_label: "@//custom:sysroot".to_string(),
             compile_target: None,
             cc_label: "@//custom:cc".to_string(),
+            build_script_jobs: None,
         }
     }
 
@@ -2042,6 +2057,38 @@ mod run_tests {
         let path = dir.join("rust.lock");
         fs::write(&path, serde_json::to_string(&lock).unwrap()).unwrap();
         path
+    }
+
+    /// NUM_JOBS is what cc-rs and cmake-rs read to decide how many C
+    /// compilers to run, so a -sys crate with a vendored C tree builds at
+    /// whatever width it says. Left unconfigured the generated rule must not
+    /// name a number at all: baking in the generating machine's core count
+    /// would put a laptop's answer into a BUILD file a build farm reads.
+    #[test]
+    fn build_script_jobs_are_named_only_when_chosen() {
+        let root = scratch("jobs");
+        let src = crate_dir(
+            &root,
+            "[package]\nname = \"demo\"\nversion = \"1.0.0\"\nedition = \"2021\"\nbuild = \"build.rs\"\n",
+            &[("src/lib.rs", ""), ("build.rs", "fn main() {}")],
+        );
+        run(args(src.clone(), None)).unwrap();
+        let build = fs::read_to_string(src.join("BUILD")).unwrap();
+        assert!(build.contains("build-script"), "{}", build);
+        assert!(!build.contains("--jobs"), "{}", build);
+        assert!(!build.contains("__JOBS__"), "{}", build);
+
+        let src = crate_dir(
+            &scratch("jobs_set"),
+            "[package]\nname = \"demo\"\nversion = \"1.0.0\"\nedition = \"2021\"\nbuild = \"build.rs\"\n",
+            &[("src/lib.rs", ""), ("build.rs", "fn main() {}")],
+        );
+        let mut a = args(src.clone(), None);
+        a.build_script_jobs = Some(4);
+        run(a).unwrap();
+        let build = fs::read_to_string(src.join("BUILD")).unwrap();
+        assert!(build.contains("--jobs 4 "), "{}", build);
+        assert!(!build.contains("__JOBS__"), "{}", build);
     }
 
     /// A crate shipping a `build` directory takes the name BUILD on a

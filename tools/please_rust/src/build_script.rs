@@ -103,6 +103,27 @@ pub struct BuildScriptArgs {
     /// metadata is exposed as DEP_<LINKS>_<KEY> env vars (cargo semantics)
     #[arg(long = "dep-metadata", num_args = 0..)]
     pub dep_metadata: Vec<PathBuf>,
+
+    /// NUM_JOBS for the build script. Unset derives it from the machine.
+    #[arg(long)]
+    pub jobs: Option<usize>,
+}
+
+/// How wide a build script may compile C.
+///
+/// Cargo sets NUM_JOBS to its own job count, and cc-rs and cmake-rs read it
+/// to decide how many compilers to run; it reaches nothing else, so this is
+/// the width of a -sys crate's vendored C tree and not of anything rustc
+/// does. Unset it is half the machine rather than all of it, because plz is
+/// scheduling other actions at the same time and several heavy C builds each
+/// running flat out is worse than either extreme. `BuildScriptJobs` overrides
+/// it for anyone who would rather pick.
+fn default_jobs(configured: Option<usize>) -> usize {
+    configured.filter(|n| *n > 0).unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(|n| (n.get() / 2).max(1))
+            .unwrap_or(1)
+    })
 }
 
 /// Parsed build script directives
@@ -321,7 +342,7 @@ fn build_environment(
     env.insert("OUT_DIR".to_string(), out_dir.display().to_string());
     env.insert("TARGET".to_string(), args.target.clone());
     env.insert("HOST".to_string(), args.host.clone());
-    env.insert("NUM_JOBS".to_string(), "1".to_string());
+    env.insert("NUM_JOBS".to_string(), default_jobs(args.jobs).to_string());
     env.insert("RUSTC".to_string(), args.rustc.display().to_string());
     env.insert("RUSTDOC".to_string(), "rustdoc".to_string());
 
@@ -831,6 +852,7 @@ mod env_tests {
             renames: vec![],
             cc: None,
             dep_metadata: vec![],
+            jobs: None,
         }
     }
 
@@ -958,6 +980,7 @@ mod run_e2e_tests {
             renames: vec![],
             cc: None,
             dep_metadata: vec![],
+            jobs: None,
         })
         .unwrap();
 
@@ -996,6 +1019,7 @@ mod run_e2e_tests {
             renames: vec![],
             cc: None,
             dep_metadata: vec![],
+            jobs: None,
         })
         .unwrap_err();
         assert!(err.to_string().contains("reported errors"));
@@ -1005,6 +1029,23 @@ mod run_e2e_tests {
 #[cfg(test)]
 mod dep_metadata_tests {
     use super::*;
+
+    /// NUM_JOBS reaches cc-rs and cmake-rs and nothing else, so it is the
+    /// width of a -sys crate's C build. Unset it is half the machine, because
+    /// plz is scheduling other actions beside this one; a configured number
+    /// wins, and a nonsensical one does not become a hang.
+    #[test]
+    fn jobs_defaults_to_half_the_machine() {
+        assert_eq!(default_jobs(Some(4)), 4);
+        assert_eq!(default_jobs(Some(1)), 1);
+        // Zero would mean "no compilers", which is not a thing to ask for.
+        assert_eq!(default_jobs(Some(0)), default_jobs(None));
+        let half = std::thread::available_parallelism()
+            .map(|n| (n.get() / 2).max(1))
+            .unwrap_or(1);
+        assert_eq!(default_jobs(None), half);
+        assert!(default_jobs(None) >= 1);
+    }
 
     #[test]
     fn links_metadata_becomes_dep_env() {
