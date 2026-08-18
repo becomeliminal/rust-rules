@@ -108,22 +108,30 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
         ]
 
     extract = ['for f in $SRCS_STD; do tar -xzf $f; done'] if std_rules else []
+    # Build the output from a keep-list rather than extracting everything and
+    # deleting what we do not want. Same reason either way - the dist ships
+    # 887M of HTML documentation, and this output is one directory so that a
+    # binary cannot be staged without the libraries beside it, which means
+    # every action naming an entry point takes the whole tree as an input.
+    # Locally that is free; on a remote executor it is a Merkle tree to hash,
+    # upload and materialise per worker. rust-docs alone is 65,529 of the
+    # 65,735 files in a full extraction.
+    #
+    # Selecting is preferred over deleting because what lands in $OUT is then
+    # stated rather than implied: no glob decides it, and a component the dist
+    # adds later cannot quietly start riding along.
     cmds = [
         'tar -xzf $SRCS_DIST',
     ] + extract + [
-        'mv %s $OUT' % base,
-        'mv $OUT/clippy-preview/bin/clippy-driver $OUT/rustc/bin/',
-        'mv $OUT/rustfmt-preview/bin/rustfmt $OUT/rustc/bin/',
-        # Everything a build never opens. This output is one directory so that
-        # a binary cannot be staged without the libraries beside it, which
-        # means every action naming an entry point takes the whole tree as an
-        # input - locally free, and on a remote executor a Merkle tree to hash,
-        # upload and materialise per worker. The dist tarball ships the HTML
-        # documentation, which is 65,529 of the 65,735 files in it: keeping it
-        # costs every remote action 99.7% of its input file count for something
-        # rustc never reads.
-        'rm -rf $OUT/rust-docs $OUT/rust-docs-json-preview $OUT/rust-analyzer-preview'
-        ' $OUT/rust-analysis-* $OUT/llvm-bitcode-linker-preview $OUT/*/share/doc',
+        'mkdir $OUT',
+        'mv {b}/rustc {b}/cargo {b}/rust-std-{t} {b}/llvm-tools-preview $OUT/'.format(b = base, t = triple),
+        # clippy-driver and rustfmt resolve librustc_driver relative to their
+        # own binary, so they move next to rustc rather than keeping the
+        # components they ship in.
+        'mv %s/clippy-preview/bin/clippy-driver $OUT/rustc/bin/' % base,
+        'mv %s/rustfmt-preview/bin/rustfmt $OUT/rustc/bin/' % base,
+        # rustc's own component carries 16M of licence HTML.
+        'rm -rf $OUT/rustc/share/doc',
     ] + std_cmds
 
     return build_rule(
