@@ -677,6 +677,25 @@ fn generate_build_file(
     content.push_str(&format!("    srcs = glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\", \"lib{}-*\", \"*.externconfig\", \"{}_out\", \"{}_out/**\"], allow_empty=True),\n", lib_path, crate_ident, normalized_name, normalized_name));
     content.push_str(")\n\n");
 
+    // What a compile stages: the package, minus three things. Guessing at
+    // which files a crate reads does not work - sysinfo includes md_doc/*.md
+    // into its docs, icu_*_data includes data/*.rs.data - so the default is
+    // everything, less the artifacts we generate into the same directory,
+    // less C sources, and less the build script's own directory. rustc reads
+    // none of those, and shaderc-sys keeps 5,000 files of vendored glslang
+    // and SPIRV-Tools under build/, which is enough to put the action past
+    // the exec argument limit: plz exports every named source in the
+    // environment.
+    let script_dir = build_script_path
+        .and_then(|p| p.rsplit_once('/'))
+        .map(|(dir, _)| format!("\"{}/**\", ", dir))
+        .unwrap_or_default();
+    let mods_glob = format!(
+        "        \"mods\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\", \"lib{}-*\", \"*.externconfig\", \"{}_out\", \"{}_out/**\", {}\"**/*.c\", \"**/*.cc\", \"**/*.cpp\", \"**/*.cxx\", \"**/*.h\", \"**/*.hpp\", \"**/*.hxx\", \"**/*.S\", \"**/*.asm\"], allow_empty=True),\n",
+        lib_path, crate_ident, normalized_name, normalized_name, script_dir
+    );
+
+
 
     // Bin-only crates (e.g. bindgen-cli) have no library to compile; run()
     // emits an alias to the binary instead.
@@ -789,6 +808,7 @@ fn generate_build_file(
             pipeline,
             target_arg,
             &ec_key,
+            &mods_glob,
         ));
     } else {
         content.push_str(&generate_compile_rule(
@@ -805,6 +825,7 @@ fn generate_build_file(
             pipeline,
             target_arg,
             &ec_key,
+            &mods_glob,
         ));
     }
 
@@ -852,6 +873,7 @@ fn generate_build_file(
                 build_script_path.is_some(),
                 target_arg,
                 &ec_key,
+                &mods_glob,
             ));
         }
     }
@@ -894,6 +916,7 @@ fn generate_rmeta_rule(
     has_buildscript: bool,
     target_arg: &str,
     ec_key: &str,
+    mods_glob: &str,
 ) -> String {
     let mut content = String::new();
 
@@ -930,7 +953,7 @@ fn generate_rmeta_rule(
     // C sources, which only a build script ever reads. shaderc-sys vendors
     // enough C++ that including it puts the action past the exec argument
     // limit, and rustc would not have looked at any of it.
-    content.push_str(&format!("        \"mods\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\", \"lib{}-*\", \"*.externconfig\", \"{}_out\", \"{}_out/**\", \"**/*.c\", \"**/*.cc\", \"**/*.cpp\", \"**/*.cxx\", \"**/*.h\", \"**/*.hpp\", \"**/*.hxx\", \"**/*.S\", \"**/*.asm\"], allow_empty=True),\n", lib_path, crate_ident, normalized_name, normalized_name));
+    content.push_str(mods_glob);
     content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
     if !deps.is_empty() {
         content.push_str("        \"externconfigs\": [\n");
@@ -1234,6 +1257,7 @@ fn generate_compile_rule_with_buildscript(
     pipeline: bool,
     target_arg: &str,
     ec_key: &str,
+    mods_glob: &str,
 ) -> String {
     let mut content = String::new();
     let (rule_name, dep_label, dep_ec): (String, fn(&str) -> String, fn(&str) -> String) =
@@ -1274,7 +1298,7 @@ fn generate_compile_rule_with_buildscript(
     // C sources, which only a build script ever reads. shaderc-sys vendors
     // enough C++ that including it puts the action past the exec argument
     // limit, and rustc would not have looked at any of it.
-    content.push_str(&format!("        \"mods\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\", \"lib{}-*\", \"*.externconfig\", \"{}_out\", \"{}_out/**\", \"**/*.c\", \"**/*.cc\", \"**/*.cpp\", \"**/*.cxx\", \"**/*.h\", \"**/*.hpp\", \"**/*.hxx\", \"**/*.S\", \"**/*.asm\"], allow_empty=True),\n", lib_path, crate_ident, normalized_name, normalized_name));
+    content.push_str(mods_glob);
     content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
     if !deps.is_empty() {
         content.push_str("        \"externconfigs\": [\n");
@@ -1335,6 +1359,7 @@ fn generate_compile_rule(
     pipeline: bool,
     target_arg: &str,
     ec_key: &str,
+    mods_glob: &str,
 ) -> String {
     let mut content = String::new();
     let (rule_name, dep_label, dep_ec): (String, fn(&str) -> String, fn(&str) -> String) =
@@ -1373,7 +1398,7 @@ fn generate_compile_rule(
     // C sources, which only a build script ever reads. shaderc-sys vendors
     // enough C++ that including it puts the action past the exec argument
     // limit, and rustc would not have looked at any of it.
-    content.push_str(&format!("        \"mods\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\", \"lib{}-*\", \"*.externconfig\", \"{}_out\", \"{}_out/**\", \"**/*.c\", \"**/*.cc\", \"**/*.cpp\", \"**/*.cxx\", \"**/*.h\", \"**/*.hpp\", \"**/*.hxx\", \"**/*.S\", \"**/*.asm\"], allow_empty=True),\n", lib_path, crate_ident, normalized_name, normalized_name));
+    content.push_str(mods_glob);
     content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
     if !deps.is_empty() {
         content.push_str("        \"externconfigs\": [\n");
@@ -1709,7 +1734,11 @@ mod tests {
         assert!(!out.contains("\"*.a\""), "{}", out);
         // A compile never reads C sources, and a crate that vendors a C tree
         // puts the action past the exec argument limit if they are staged.
+        // (On the compile rules; the build script's filegroup keeps them.)
         assert!(out.contains("\"**/*.cpp\""), "{}", out);
+        // The build script's own directory is for the build script.
+        let with_script = gen("lib", &[], &[], Some("build/main.rs"), "");
+        assert!(with_script.contains("\"build/**\""), "{}", with_script);
     }
 
     #[test]
