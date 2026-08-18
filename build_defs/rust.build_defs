@@ -84,32 +84,25 @@ _AGGREGATE_EXTERNCONFIGS = "find . -name '*.externconfig' -type f 2>/dev/null | 
 
 
 def _dep_names(deps:list):
-    """Crate names of direct deps, for --extern filtering.
+    """The declarations of the direct deps, for --extern filtering.
 
-    The rule name is the crate name, with two exceptions. plz's internal
-    `_name#tag` targets expose generated libraries (proto and gRPC stubs, for
-    instance) and the crate they build is `name`. And a crate declared
-    alongside another version of itself is named `<crate>-<version>`, where
-    the crate is still `<crate>`: getting that wrong costs the dep its
-    --extern, which does not fail loudly - rustc falls back to searching -L
-    and reports `multiple candidates` only if more than one version happens to
-    be reachable.
+    A dep names the declaration it wants and nothing else. It cannot name the
+    crate, because a label carries the *package* name and a crate that sets
+    `[lib] name` is not called that: rustls-webpki builds webpki, md-5 builds
+    md5. Nor can it derive the crate by stripping a version off the label,
+    because a version is not a single hyphenated part: toml 1.1.4+spec-1.1.0
+    is declared `toml-1.1.4+spec-1.1.0`. Both guesses produced a name that
+    matched no externconfig entry, which costs the dep its --extern - and
+    that does not fail loudly. rustc falls back to searching -L and reports
+    `multiple candidates` only when more than one version happens to be
+    reachable, which in a small graph is never.
+
+    So the crate name comes from the entry the declaration selects, the same
+    way rust_repo's generated rules have named their deps since they had two
+    versions of anything to tell apart.
     """
-    names = []
+    quals = []
     for dep in deps:
-        name = canonicalise(dep).split(':')[-1]
-        name = name.split('#')[0]
-        if name.startswith('_'):
-            name = name[1:]
-        parts = name.split('-')
-        if len(parts) > 1 and parts[-1][0] in '0123456789':
-            name = '-'.join(parts[:-1])
-        crate = name.replace('-', '_')
-        # Name the declaration, not just the crate. Two versions of one crate
-        # both answer to `hashbrown`, so a bare name cannot say which this
-        # rule asked for, and the choice falls to whichever entry came last.
-        # The qualifier is the dep's own package and name, which is what the
-        # crate wrote into its externconfig.
         label = canonicalise(dep)
         label_parts = label.split(':')
         pkg_parts = label_parts[0].split('//')
@@ -123,8 +116,8 @@ def _dep_names(deps:list):
             target_bits = target.split('_')
             target = '_'.join(target_bits[1:])
         qualifier = pkg + '/' + target if pkg else target
-        names += ['%s@%s' % (crate, qualifier)]
-    return names
+        quals += ['@' + qualifier]
+    return quals
 
 
 def _self_qualifier(name:str):
