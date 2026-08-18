@@ -1147,6 +1147,11 @@ fn generate_build_script_rule(
     content.push_str("    },\n");
 
     // The package, plus build-dependencies if any.
+    // A build script that compiles a vendored C library is not a quick
+    // action: shaderc-sys builds glslang and SPIRV-Tools, jemalloc-sys runs
+    // autotools. Both exceeded the default deadline and were reported as
+    // failures rather than as slow builds.
+    content.push_str("    build_timeout = 3600,\n");
     content.push_str("    deps = [\n");
     content.push_str(&format!("        \":_{}#package\",\n", normalized_name));
     if has_build_deps {
@@ -1699,6 +1704,9 @@ mod tests {
         // named source in the environment and a vendored C tree overflows it.
         assert!(out.contains("name = \"_my_crate#package\""), "{}", out);
         assert!(out.contains("\":_my_crate#package\""), "{}", out);
+        // Compiling a vendored C library is not a quick action, and the
+        // default deadline reported slow builds as failures.
+        assert!(out.contains("build_timeout = 3600"), "{}", out);
         assert!(out.contains("--buildscript $SRCS_BUILDSCRIPT"));
         assert!(out.contains("\"out\": [\"my_crate_out\"]"));
         assert!(!out.contains("dep_metadata"));
