@@ -7,11 +7,11 @@ subinclude("//build_defs:rust")
 # developing these rules.
 #
 # Update on release: publish the tag, then pin the hashes it produced.
-PLEASE_RUST_VERSION = "v0.5.5"
+PLEASE_RUST_VERSION = "v0.6.0"
 
 PLEASE_RUST_HASHES = {
-    "linux_amd64": "24adce72568ea2491cd77d3d3e542562ba95a99638b3ebb4a4527b70121e6c4d",
-    "darwin_arm64": "38ba71cf8429b58e6fb97a04d6ab288baa25273f16c7c5b2b1238648938732e7",
+    "linux_amd64": "0553599c42bc4282996695a448cc01f7aa4e0ca85861209126aee225a050d656",
+    "darwin_arm64": "209e34660060b9f011775286ad88d0b171c12489a8bf9f324fb08baafc9c3b81",
     # darwin_amd64 is not published: its runners are being retired, so Intel
     # Macs build the tool from source
 }

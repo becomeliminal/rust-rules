@@ -28,6 +28,38 @@ jobs:
           name: logs
           path: plz-out/log
 
+  # The binary consumers actually download, against the build_defs it ships
+  # alongside. This repo builds itself with //tools/please_rust:bootstrap, so
+  # every other job here runs a tool compiled from the same commit as the
+  # rules - which means nothing exercised the pinned release at all.
+  #
+  # That blind spot shipped a plugin whose build_defs emitted `--dep
+  # @declaration` while its own pinned tool predated the qualifier scheme
+  # entirely, so first-party deps silently lost their --extern. The pin lags
+  # a release by construction (a tag is published, then its hashes are
+  # recorded), so nothing stops it lagging a breaking change too. This job is
+  # what stops it: if the pinned tool cannot drive these rules, it fails here
+  # rather than in somebody's repo.
+  pinned-tool:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      # Enough to exercise generation, first-party deps and a version-
+      # disambiguated declaration - which is where a stale tool shows up.
+      - name: Test against the pinned release tool
+        run: |
+          ./pleasew test -p -v notice \
+            -o plugin.rust.pleaserusttool://tools/please_rust:please_rust_release \
+            //test/firstparty/... //examples/... \
+            --log_file plz-out/log/pinned.log
+      - name: Archive logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pinned-tool-logs
+          path: plz-out/log
+
   # macOS is where the platform assumptions show up: five bugs that made a
   # Mac checkout unbuildable were found by building there, one release at a
   # time, and the last two were found by this job. Gating, because a platform
