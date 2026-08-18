@@ -129,7 +129,8 @@ binary-link time.
       thought-machine/please#3576 and **merged**; until it lands in a
       released plz, large plugin consumers can rarely hit a wedged parse
 - [ ] Remote execution audit (absolute-path canonicalization, cwd walks)
-- [ ] Scale test: 1k+ crate graph through sync/resolve/build
+- [x] Scale test: the corpus graph is 1,102 crates through
+      sync/resolve/build
 - [x] Subrepo name collision, reproduced and fixed (2026-08). plz derives
       subrepo names from package path + name (`filepath.Join(pkg.Name,
       name)` in its subrepo builtin) with no qualification by the declaring
@@ -149,7 +150,12 @@ binary-link time.
 ## Track 2: Cargo parity (log)
 
 ### Resolver
-- [ ] Differential testing: cargo resolution as a dev-time oracle — pick
+- [x] Differential testing: `scripts/differential.sh` in the corpus puts the
+      same request to cargo, which is what tells a bug in these rules apart
+      from a crate that cannot be built as asked. It settled sqlx-postgres
+      (cargo fails the same way), derive_more and moka (features must be
+      chosen), and four -sys crates blocked on missing system packages
+- [ ] Differential testing at rule level: cargo resolution as an oracle — pick
       real-world repos, resolve with cargo and with us, diff. Lives in a
       separate corpus repo (rust-rules-corpus), not here; run several repos
       and expand over time
@@ -197,8 +203,13 @@ binary-link time.
       CARGO_CRATE_NAME et al.)
 
 ### Ecosystem burn-down
-- [ ] Top-100-crates corpus in the separate corpus repo, run in its CI;
-      pass-rate is the public metric
+- [x] Crate corpus: 240 deliberately awkward crates, 1,102 in the graph,
+      all building. Chosen by what predicts trouble (links, build deps,
+      platform-gated deps, feature and optional-dep counts, live majors)
+      rather than by download count, and each drop verified against cargo
+      before dropping. 19 bugs found, none of which had appeared in this
+      repo's own ~190 crates. Lives in the private becomeliminal/rust-corpus.
+      Still wanted: running it in CI, and a public pass-rate
 - [ ] Per-crate escape hatches: patches (arg exists, unexercised), source
       overrides (done via download=), env injection for build scripts
 
