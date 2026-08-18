@@ -638,6 +638,9 @@ fn generate_build_file(
     let mut content = String::new();
     // Proc macros are loaded into rustc itself, so they are built for the
     // machine running the build however the rest of the graph is targeted.
+
+
+
     let target_arg = if cross && crate_type != "proc-macro" {
         format!("--target {} ", build_target)
     } else {
@@ -662,6 +665,17 @@ fn generate_build_file(
     } else {
         format!("{}@{}{}", crate_ident, qualifier, suffix)
     };
+
+    // Everything in the package except the roots each rule names itself and
+    // the artifacts we generate into it. Behind a filegroup rather than in
+    // srcs because plz exports every named source in the environment, and a
+    // crate that vendors a C tree - shaderc-sys vendors glslang and
+    // SPIRV-Tools - pushes that past the exec argument limit.
+    content.push_str(&format!("# Package sources for {}\n", normalized_name));
+    content.push_str("filegroup(\n");
+    content.push_str(&format!("    name = \"_{}#package\",\n", normalized_name));
+    content.push_str(&format!("    srcs = glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\", \"lib{}-*\", \"*.externconfig\", \"{}_out\", \"{}_out/**\"], allow_empty=True),\n", lib_path, crate_ident, normalized_name, normalized_name));
+    content.push_str(")\n\n");
 
 
     // Bin-only crates (e.g. bindgen-cli) have no library to compile; run()
@@ -909,12 +923,14 @@ fn generate_rmeta_rule(
     content.push_str(&format!("    name = \"_{}#rmeta\",\n", normalized_name));
     content.push_str("    srcs = {\n");
     content.push_str(&format!("        \"main\": [\"{}\"],\n", lib_path));
-    // The whole package, the way cargo has it. Guessing at which files a
-    // crate reads does not work: sysinfo includes md_doc/*.md into its docs
-    // and icu_*_data includes data/*.rs.data, and neither is reachable from a
-    // glob written around src. Non-Rust files cost nothing to stage and are
-    // exactly what include_str! and include! reach for.
-    content.push_str(&format!("        \"mods\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\", \"lib{}-*\", \"*.externconfig\", \"{}_out\", \"{}_out/**\"], allow_empty=True),\n", lib_path, crate_ident, normalized_name, normalized_name));
+    // The whole package, the way cargo has it, minus two things. Guessing at
+    // which files a crate reads does not work - sysinfo includes md_doc/*.md
+    // into its docs, icu_*_data includes data/*.rs.data - so everything is
+    // staged except the artifacts we generate into the same directory and the
+    // C sources, which only a build script ever reads. shaderc-sys vendors
+    // enough C++ that including it puts the action past the exec argument
+    // limit, and rustc would not have looked at any of it.
+    content.push_str(&format!("        \"mods\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\", \"lib{}-*\", \"*.externconfig\", \"{}_out\", \"{}_out/**\", \"**/*.c\", \"**/*.cc\", \"**/*.cpp\", \"**/*.cxx\", \"**/*.h\", \"**/*.hpp\", \"**/*.hxx\", \"**/*.S\", \"**/*.asm\"], allow_empty=True),\n", lib_path, crate_ident, normalized_name, normalized_name));
     content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
     if !deps.is_empty() {
         content.push_str("        \"externconfigs\": [\n");
@@ -1112,12 +1128,6 @@ fn generate_build_script_rule(
     // shaderc-sys vendors enough of shaderc, glslang and SPIRV-Tools to push
     // that past the exec argument limit. A dependency is staged just the
     // same without being enumerated.
-    content.push_str(&format!("# Package sources for {}\n", normalized_name));
-    content.push_str("filegroup(\n");
-    content.push_str(&format!("    name = \"_{}#package\",\n", normalized_name));
-    content.push_str(&format!("    srcs = glob([\"*\", \"**/*\"], exclude=[\"{}\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\", \"{}\"], allow_empty=True),\n", script_path, out_dir));
-    content.push_str(")\n\n");
-
     content.push_str(&format!("# Stage 1: Run build script for {}\n", normalized_name));
     content.push_str("build_rule(\n");
     content.push_str(&format!("    name = \"_{}_build_script\",\n", normalized_name));
@@ -1257,12 +1267,14 @@ fn generate_compile_rule_with_buildscript(
     content.push_str(&format!("    name = \"{}\",\n", rule_name));
     content.push_str("    srcs = {\n");
     content.push_str(&format!("        \"main\": [\"{}\"],\n", lib_path));
-    // The whole package, the way cargo has it. Guessing at which files a
-    // crate reads does not work: sysinfo includes md_doc/*.md into its docs
-    // and icu_*_data includes data/*.rs.data, and neither is reachable from a
-    // glob written around src. Non-Rust files cost nothing to stage and are
-    // exactly what include_str! and include! reach for.
-    content.push_str(&format!("        \"mods\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\", \"lib{}-*\", \"*.externconfig\", \"{}_out\", \"{}_out/**\"], allow_empty=True),\n", lib_path, crate_ident, normalized_name, normalized_name));
+    // The whole package, the way cargo has it, minus two things. Guessing at
+    // which files a crate reads does not work - sysinfo includes md_doc/*.md
+    // into its docs, icu_*_data includes data/*.rs.data - so everything is
+    // staged except the artifacts we generate into the same directory and the
+    // C sources, which only a build script ever reads. shaderc-sys vendors
+    // enough C++ that including it puts the action past the exec argument
+    // limit, and rustc would not have looked at any of it.
+    content.push_str(&format!("        \"mods\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\", \"lib{}-*\", \"*.externconfig\", \"{}_out\", \"{}_out/**\", \"**/*.c\", \"**/*.cc\", \"**/*.cpp\", \"**/*.cxx\", \"**/*.h\", \"**/*.hpp\", \"**/*.hxx\", \"**/*.S\", \"**/*.asm\"], allow_empty=True),\n", lib_path, crate_ident, normalized_name, normalized_name));
     content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
     if !deps.is_empty() {
         content.push_str("        \"externconfigs\": [\n");
@@ -1354,12 +1366,14 @@ fn generate_compile_rule(
     content.push_str(&format!("    name = \"{}\",\n", rule_name));
     content.push_str("    srcs = {\n");
     content.push_str(&format!("        \"main\": [\"{}\"],\n", lib_path));
-    // The whole package, the way cargo has it. Guessing at which files a
-    // crate reads does not work: sysinfo includes md_doc/*.md into its docs
-    // and icu_*_data includes data/*.rs.data, and neither is reachable from a
-    // glob written around src. Non-Rust files cost nothing to stage and are
-    // exactly what include_str! and include! reach for.
-    content.push_str(&format!("        \"mods\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\", \"lib{}-*\", \"*.externconfig\", \"{}_out\", \"{}_out/**\"], allow_empty=True),\n", lib_path, crate_ident, normalized_name, normalized_name));
+    // The whole package, the way cargo has it, minus two things. Guessing at
+    // which files a crate reads does not work - sysinfo includes md_doc/*.md
+    // into its docs, icu_*_data includes data/*.rs.data - so everything is
+    // staged except the artifacts we generate into the same directory and the
+    // C sources, which only a build script ever reads. shaderc-sys vendors
+    // enough C++ that including it puts the action past the exec argument
+    // limit, and rustc would not have looked at any of it.
+    content.push_str(&format!("        \"mods\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\", \"lib{}-*\", \"*.externconfig\", \"{}_out\", \"{}_out/**\", \"**/*.c\", \"**/*.cc\", \"**/*.cpp\", \"**/*.cxx\", \"**/*.h\", \"**/*.hpp\", \"**/*.hxx\", \"**/*.S\", \"**/*.asm\"], allow_empty=True),\n", lib_path, crate_ident, normalized_name, normalized_name));
     content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
     if !deps.is_empty() {
         content.push_str("        \"externconfigs\": [\n");
@@ -1693,6 +1707,9 @@ mod tests {
         assert!(out.contains("\"libmy_crate-*\""), "{}", out);
         assert!(!out.contains("\"*.so\""), "{}", out);
         assert!(!out.contains("\"*.a\""), "{}", out);
+        // A compile never reads C sources, and a crate that vendors a C tree
+        // puts the action past the exec argument limit if they are staged.
+        assert!(out.contains("\"**/*.cpp\""), "{}", out);
     }
 
     #[test]
