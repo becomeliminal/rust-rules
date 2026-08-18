@@ -123,7 +123,7 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
         # costs every remote action 99.7% of its input file count for something
         # rustc never reads.
         'rm -rf $OUT/rust-docs $OUT/rust-docs-json-preview $OUT/rust-analyzer-preview'
-        ' $OUT/rust-analysis-* $OUT/llvm-bitcode-linker-preview',
+        ' $OUT/rust-analysis-* $OUT/llvm-bitcode-linker-preview $OUT/*/share/doc',
     ] + std_cmds
 
     return build_rule(
