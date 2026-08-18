@@ -244,10 +244,8 @@ pub fn run_reporting(args: SyncArgs) -> Result<Vec<crate::resolve::MissingDep>> 
 
     // Naming normalization: newest declared version of a crate gets the plain
     // normalized name; older duplicates get `crate_norm-x.y.z`.
-    let mut renames: BTreeMap<String, String> = BTreeMap::new();
     if !args.no_rename {
-        renames = normalize_names(&mut decls)?;
-        for (old, new) in &renames {
+        for (old, new) in &normalize_names(&mut decls)? {
             eprintln!("sync: rename {} -> {}", old, new);
         }
     }
@@ -292,7 +290,7 @@ pub fn run_reporting(args: SyncArgs) -> Result<Vec<crate::resolve::MissingDep>> 
     // it is written into a file everyone shares.
     let mut oses: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut covered_oses: BTreeSet<String> = BTreeSet::new();
-    let mut note = |triple: &str, lock: &crate::resolve::LockFile,
+    let note = |triple: &str, lock: &crate::resolve::LockFile,
                     oses: &mut BTreeMap<String, BTreeSet<String>>,
                     covered: &mut BTreeSet<String>| {
         let os = target_os_of(triple);
@@ -1013,21 +1011,13 @@ struct IndexDep {
     name: String,
     req: String,
     #[serde(default)]
-    features: Vec<String>,
-    #[serde(default)]
     optional: bool,
-    #[serde(default = "default_true")]
-    default_features: bool,
     #[serde(default)]
     target: Option<String>,
     #[serde(default)]
     kind: Option<String>,
     #[serde(default)]
     package: Option<String>,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 #[derive(serde::Deserialize, Clone)]

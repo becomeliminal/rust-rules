@@ -265,7 +265,7 @@ pub(crate) fn parse_buildscript(path: &Path) -> Result<BuildScriptDirectives> {
 }
 
 pub fn run(args: CompileArgs) -> Result<()> {
-    let mut cmd = build_command(&args)?;
+    let cmd = build_command(&args)?;
 
     eprintln!("please_rust compile: {:?}", cmd);
 
@@ -899,6 +899,7 @@ mod command_tests {
         assert!(s.contains("--extern md5=./libmd5-0_11_0.rlib"), "{}", s);
     }
 
+    #[test]
     fn renames_add_aliased_externs() {
         let _guard = CWD_LOCK.lock().unwrap();
         let dir = fixture("renames");

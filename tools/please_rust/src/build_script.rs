@@ -5,7 +5,6 @@
 //! can be consumed by the compile command.
 
 use anyhow::{Context, Result};
-use cargo_toml::Manifest;
 use clap::Args;
 use std::collections::HashMap;
 use std::fs;

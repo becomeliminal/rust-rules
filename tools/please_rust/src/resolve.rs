@@ -158,8 +158,6 @@ enum Unit {
     Host = 1,
 }
 
-const UNITS: [Unit; 2] = [Unit::Target, Unit::Host];
-
 /// A dependency declaration extracted from a manifest, pre-filtered by target cfg.
 struct DepDecl {
     name: String,    // declared name (may be a rename)
