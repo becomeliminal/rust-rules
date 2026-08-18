@@ -122,6 +122,7 @@ def rust_repo(
     download: str = None,
     git_repo: str = "",
     git_revision: str = "",
+    platforms: list = None,
 ):
     """Downloads a crate and generates BUILD files as a subrepo.
 
@@ -166,7 +167,24 @@ def rust_repo(
         git_repo: owner/repo shorthand: fetch the source from this git forge
                   repository instead of crates.io.
         git_revision: Commit sha or tag for git_repo.
+        platforms: The operating systems (in Rust's `target_os` vocabulary)
+                   whose resolution reaches this crate. Omitted for the
+                   overwhelming majority of crates, which build anywhere;
+                   `please_rust sync` writes it only when a crate is gated,
+                   and what it writes is a property of the crate rather than
+                   of the machine that ran sync, so everyone's checkout agrees.
+                   On a platform not listed the target is labelled `manual`,
+                   which keeps `plz build //...` from compiling a crate that
+                   cannot compile here - objc2 says so in a compile_error! -
+                   while an explicit build of it still works.
     """
+    if platforms != None:
+        # Rust's target_os on the left, plz's CONFIG.OS on the right.
+        plz_os = {'macos': 'darwin', 'linux': 'linux', 'windows': 'windows'}
+        here = [p for p in platforms if plz_os.get(p, p) == CONFIG.OS]
+        if not here:
+            labels = labels + ['manual']
+
     if not crate:
         fail("crate is required for rust_repo")
 

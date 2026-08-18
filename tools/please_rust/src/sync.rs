@@ -174,6 +174,10 @@ struct Decl {
     span: Option<(usize, usize)>,
     /// True if this entry was added by --import this run
     imported: bool,
+    /// Which operating systems resolution reaches this crate on, or None if
+    /// every covered platform does. A property of the crate rather than of
+    /// the machine, so it is the same in everyone's checkout.
+    platforms: Option<BTreeSet<String>>,
     /// True if this crate is a direct dependency (its features seed resolution)
     root: bool,
     /// Cargo semantics: roots enable default features unless opted out
@@ -281,12 +285,31 @@ pub fn run_reporting(args: SyncArgs) -> Result<Vec<crate::resolve::MissingDep>> 
     // is judged across every covered platform rather than this one.
     let mut active_anywhere: BTreeSet<String> = lock.crates.keys().cloned().collect();
     active_anywhere.extend(lock.host_crates.keys().cloned());
+
+    // Which operating systems each declaration is reachable on. This is a
+    // property of the crate and the graph, not of the machine running sync,
+    // so it is the same wherever it is computed - which it has to be, since
+    // it is written into a file everyone shares.
+    let mut oses: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut covered_oses: BTreeSet<String> = BTreeSet::new();
+    let mut note = |triple: &str, lock: &crate::resolve::LockFile,
+                    oses: &mut BTreeMap<String, BTreeSet<String>>,
+                    covered: &mut BTreeSet<String>| {
+        let os = target_os_of(triple);
+        covered.insert(os.clone());
+        for name in lock.crates.keys().chain(lock.host_crates.keys()) {
+            oses.entry(name.clone()).or_default().insert(os.clone());
+        }
+    };
+    note(&args.target, &lock, &mut oses, &mut covered_oses);
+
     for triple in target_list(&args.targets, &args.target) {
         if triple == args.target {
             continue;
         }
         match resolve_entries(&entries, &triple) {
             Ok(other) => {
+                note(&triple, &other, &mut oses, &mut covered_oses);
                 active_anywhere.extend(other.crates.keys().cloned());
                 active_anywhere.extend(other.host_crates.keys().cloned());
                 // A dependency only another platform reaches is missing there
@@ -305,6 +328,13 @@ pub fn run_reporting(args: SyncArgs) -> Result<Vec<crate::resolve::MissingDep>> 
             }
             Err(e) => eprintln!("sync: could not resolve for {}: {:#}", triple, e),
         }
+    }
+
+    // A crate every covered platform reaches needs no attribute at all: the
+    // absent case means "anywhere", which is what almost every crate is.
+    for d in decls.iter_mut() {
+        let on = oses.get(&d.subrepo()).cloned().unwrap_or_default();
+        d.platforms = if on == covered_oses { None } else { Some(on) };
     }
 
     let before = decls.len();
@@ -582,6 +612,13 @@ fn parse_build(lines: &[String]) -> Result<Vec<Decl>> {
             crate_name,
             version,
             features: getlist("features"),
+            // Recomputed on every sync, but parsed so a hand-written value
+            // survives a run that does not reach the crate at all.
+            platforms: if body.contains("platforms = [") {
+                Some(getlist("platforms").into_iter().collect())
+            } else {
+                None
+            },
             hashes: getlist("hashes"),
             passthrough,
             leading_comments,
@@ -668,6 +705,7 @@ fn import_cargo_lock(path: &Path, decls: &mut Vec<Decl>) -> Result<()> {
             leading_comments: vec![],
             span: None,
             imported: true,
+            platforms: None,
             root: false,
             default_features: true,
             git_repo: git_repo.clone(),
@@ -842,6 +880,20 @@ fn rewrite_build(lines: &[String], decls: &[Decl], deleted: &[(usize, usize)]) -
     out
 }
 
+/// The `target_os` of a triple, which is the vocabulary the attribute uses
+/// because it is the vocabulary the gating is written in.
+fn target_os_of(triple: &str) -> String {
+    if triple.contains("apple") {
+        "macos".to_string()
+    } else if triple.contains("windows") {
+        "windows".to_string()
+    } else if triple.contains("linux") {
+        "linux".to_string()
+    } else {
+        triple.rsplit('-').next().unwrap_or("unknown").to_string()
+    }
+}
+
 fn emit_decl(d: &Decl) -> String {
     let mut s = String::new();
     for c in &d.leading_comments {
@@ -869,6 +921,13 @@ fn emit_decl(d: &Decl) -> String {
     }
     if !d.default_features {
         s.push_str("    default_features = False,\n");
+    }
+    if let Some(on) = &d.platforms {
+        // Absent means anywhere. Present means only these, and an empty list
+        // means none of the platforms this repo covers - objc2 is reachable
+        // only on macOS, and says so itself in a compile_error!.
+        let names: Vec<String> = on.iter().map(|o| format!("\"{}\"", o)).collect();
+        s.push_str(&format!("    platforms = [{}],\n", names.join(", ")));
     }
     for p in &d.passthrough {
         s.push_str(&format!("    {},\n", p.trim()));
@@ -1269,6 +1328,7 @@ pub fn lock(args: LockCmdArgs) -> Result<()> {
             leading_comments: vec![],
             span: None,
             imported: !root,
+            platforms: None,
             root,
             default_features: true,
             git_repo: String::new(),
@@ -1504,6 +1564,7 @@ fn lock_round(
             leading_comments: vec![],
             span: None,
             imported: true,
+            platforms: None,
             root,
             default_features: true,
             git_repo: String::new(),
@@ -1761,6 +1822,7 @@ rust_repo(
             leading_comments: vec![],
             span: None,
             imported: false,
+            platforms: None,
             root: true,
             default_features: true,
             git_repo: String::new(),
@@ -1803,6 +1865,7 @@ rust_repo(
             leading_comments: vec![],
             span: None,
             imported: false,
+            platforms: None,
             root: false,
             default_features: true,
             git_repo: String::new(),
@@ -2129,6 +2192,32 @@ mod lock_cmd_tests {
         assert!(err.to_string().contains("not in index cache"));
     }
 
+    /// A crate every covered platform reaches carries no attribute: absent
+    /// means anywhere, which is what almost every crate is. One that only
+    /// macOS reaches says so, and rust_repo turns that into plz's `manual`
+    /// label on machines where it cannot compile - objc2 refuses in a
+    /// compile_error!, so without this `plz build //...` breaks on linux.
+    ///
+    /// What is written is a property of the crate, not of the machine that
+    /// ran sync, which is what lets one checked-in file serve a Mac and a
+    /// linux box at once.
+    #[test]
+    fn platforms_is_written_only_when_a_crate_is_gated() {
+        let mut everywhere = decl("serde", "1.0.0", true);
+        everywhere.platforms = None;
+        assert!(!emit_decl(&everywhere).contains("platforms"), "{}", emit_decl(&everywhere));
+
+        let mut apple = decl("objc2", "0.6.4", false);
+        apple.platforms = Some(["macos".to_string()].into_iter().collect());
+        assert!(emit_decl(&apple).contains("platforms = [\"macos\"]"), "{}", emit_decl(&apple));
+
+        // Reachable on no platform this repo covers, which is different from
+        // reachable on all of them.
+        let mut nowhere = decl("windows-sys", "0.61.2", false);
+        nowhere.platforms = Some(BTreeSet::new());
+        assert!(emit_decl(&nowhere).contains("platforms = []"), "{}", emit_decl(&nowhere));
+    }
+
     fn decl(crate_name: &str, version: &str, root: bool) -> Decl {
         Decl {
             name: None,
@@ -2140,6 +2229,7 @@ mod lock_cmd_tests {
             leading_comments: vec![],
             span: None,
             imported: true,
+            platforms: None,
             root,
             default_features: true,
             git_repo: String::new(),
