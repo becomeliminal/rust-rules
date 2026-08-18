@@ -508,7 +508,9 @@ fn repo_root(build_file: &Path) -> PathBuf {
     }
 }
 
-const MANAGED_KEYS: &[&str] = &["name", "crate", "version", "features", "hashes", "dep_overrides", "indirect", "default_features", "git_repo", "git_revision"];
+// Attributes sync writes itself. Anything else in a declaration is a user
+// edit and is preserved verbatim; these would otherwise be written twice.
+const MANAGED_KEYS: &[&str] = &["name", "crate", "version", "features", "hashes", "dep_overrides", "indirect", "default_features", "git_repo", "git_revision", "platforms"];
 
 fn parse_build(lines: &[String]) -> Result<Vec<Decl>> {
     let mut decls = Vec::new();

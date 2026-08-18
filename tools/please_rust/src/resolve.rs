@@ -920,6 +920,27 @@ mod tests {
         assert_eq!(dep_names(&lock, "a"), vec!["b"]);
     }
 
+    /// criterion depends on plotters with default-features = false and three
+    /// named features. Enabling plotters' defaults from that edge pulls its
+    /// font backend, then font-kit, then a system fontconfig - a chain
+    /// nothing asked for.
+    #[test]
+    fn an_optional_dep_edge_can_disable_defaults() {
+        let mut g = Graph::new("optional_no_defaults");
+        g.krate(
+            "a", "a", "1.0.0",
+            "[dependencies.b]\nversion = \"1\"\noptional = true\ndefault-features = false\nfeatures = [\"svg\"]\n\n\
+             [features]\ndefault = [\"with_b\"]\nwith_b = [\"dep:b\"]\n",
+        )
+        .krate("b", "b", "1.0.0", "[features]\ndefault = [\"ttf\"]\nttf = []\nsvg = []\n")
+        .root("a", &[], true);
+        let lock = g.resolve();
+        let feats = features(&lock, "b");
+        assert!(feats.contains(&"svg".to_string()), "{:?}", feats);
+        assert!(!feats.contains(&"default".to_string()), "{:?}", feats);
+        assert!(!feats.contains(&"ttf".to_string()), "{:?}", feats);
+    }
+
     #[test]
     fn non_root_does_not_activate() {
         let mut g = Graph::new("nonroot");
