@@ -344,7 +344,7 @@ binary-link time.
       declared). Preloads removed and our own BUILD files subinclude
       explicitly, matching go-rules, whose config has no [Parse] section
 
-## Track 2: Cargo parity (log)
+## Track 2: Cargo parity (log, continued)
 
 ### Resolver
 - [x] Differential testing: `scripts/differential.sh` in the corpus puts the

@@ -17,6 +17,36 @@ repos of your own, move one set of declarations to a package the other does
 not use; `rust_repo` takes its paths from the package it is declared in, so
 that is the whole change.
 
+## `Subrepo <name> is not defined (referenced by <crate>)`
+
+A crate you declared depends on one you did not. The generated build file for
+the dependent names a subrepo nothing creates, so the whole graph stops
+parsing — `plz build //...` fails before building anything.
+
+It happens most often with a crate whose dependency is optional and enabled by
+a default feature, and with platform-specific crates: resolution drops a crate
+that no platform you cover reaches, but the declaration still creates a subrepo
+whose build file is generated from the manifest.
+
+```sh
+please_rust lock --add <dep>@<version> \
+    --build-file third_party/crates/BUILD --third-party-folder third_party/crates
+```
+
+Declaring it is enough even when the crate never builds here — the declaration
+is what makes the graph parseable.
+
+## `Found multiple definitions for subrepo '<plugin>'`
+
+Plugin names are one global namespace. A subrepo that declares a plugin you
+also declare collides with yours, and Please stops rather than choosing. It
+surfaces when something parses that subrepo's own `plugins/` package, which a
+normal build never does but a repo-wide query can.
+
+Nothing needs changing in either repo: query the packages you mean rather than
+the whole subrepo. `rust_project` does this for you — a sweep that fails
+descends and skips only the package that will not parse, naming it.
+
 ## `error: the 'alloc' feature must currently be enabled` (or similar)
 
 A crate is declared but no root reaches it, so there is nothing to unify its
@@ -68,6 +98,66 @@ bumped without the other. Take the hash from the release, or recompute it:
 ```sh
 curl -sL <url> | sha256sum
 ```
+
+## The editor shows no completions, and nothing appears to happen
+
+rust-analyzer has to be installed as an extension before any of this matters;
+the `discoverConfig` setting is ignored without it, silently.
+
+```sh
+code --install-extension rust-lang.rust-analyzer     # or: cursor --install-...
+```
+
+Then check the command works on its own, which is the same command your editor
+runs:
+
+```sh
+plz run //:rust-project        # writes rust-project.json and prints a summary
+```
+
+## `unrecognized subcommand 'ide'`
+
+The `please_rust` in use is older than the rules asking it for a project file.
+Pin a release that has it, or build the tool from the same source as the rules:
+
+```ini
+[Plugin "rust"]
+PleaseRustTool = ///rust//tools/please_rust:bootstrap
+```
+
+Set it in `.plzconfig` rather than passing `plz -o`. **A nested `plz` does not
+inherit command-line overrides**, and project discovery shells out to `plz`, so
+`-o` reaches the outer invocation only — the lock gets rebuilt underneath by
+whichever tool the config names. `PLZ_OVERRIDES` in the environment does carry
+through.
+
+## Third-party crates are listed in the editor but go nowhere
+
+The lock was written by an older `please_rust` than the one generating the
+project, so it does not carry the fields that need. The run says so, naming
+how many crates it affects. Rebuild it — and check which tool the *lock rule*
+uses, not the one you invoked, per the note above.
+
+## `failed to get rustc cfgs ... has no bin/ directory`
+
+rust-analyzer runs `<sysroot>/bin/rustc --print cfg` to learn the target's
+cfgs, so `sysroot` has to be a rustup-shaped root — `bin/` beside `lib/` —
+which is the rustc component and not what `Sysroot` names. Leave
+`rust_project`'s `sysroot` unset and it derives both from the toolchain you
+already configured.
+
+## `Error preparing directories ...: unlinkat ...: directory not empty`
+
+A previous build was killed — Ctrl-C, a timeout, an OOM — leaving a partly
+written directory that Please then cannot clean. `plz-out/tmp` is scratch and
+safe to remove:
+
+```sh
+rm -rf plz-out/tmp
+```
+
+Rust makes this more visible than most languages: a killed `rustc` leaves
+codegen units behind, so the directory refills as Please is emptying it.
 
 ## Builds are slower than expected, or everything rebuilds after an upgrade
 
