@@ -93,7 +93,9 @@ if [ -z "$FRAGS" ]; then
     echo "$NAME: no Rust crates found under $TARGETS" >&2
     exit 1
 fi
-plz build $TOOL_LABEL $LOCK_LABEL $FRAGS >/dev/null
+# The toolchain too: resolving where it lands is not the same as it being
+# there, and a sysroot_src that was never built is a std with no sources.
+plz build $TOOL_LABEL $LOCK_LABEL $SYSROOT_TARGET $SYSROOT_SRC_TARGET $FRAGS >/dev/null
 TOOL=`plz query outputs $TOOL_LABEL`
 # The toolchain is wherever whoever declared it put it, so ask rather than
 # assume. An explicit sysroot in the rule wins and skips this.
