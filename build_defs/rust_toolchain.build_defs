@@ -165,6 +165,46 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
         visibility = visibility,
     )
 
+    # The compiler, extracted so that an action naming rustc does not stage
+    # the whole distribution behind it. This is go-rules' shape: go_toolchain
+    # keeps its entry points and each hot tool is also lifted into a target of
+    # its own with output_is_complete, which is what severs the dependency.
+    #
+    # bin and lib together and never apart: rustc resolves librustc_driver
+    # through ../lib relative to its own binary, so a target holding only the
+    # binaries stages a compiler that cannot start. clippy-driver and rustfmt
+    # were moved next to rustc above for the same reason, which is also why
+    # all four entry points have to live on this one target - toolchain_entry
+    # derives its siblings from whatever Rustc points at.
+    build_rule(
+        name = '%s_rustc' % name,
+        srcs = [toolchain],
+        outs = ['rustc'],
+        cmd = 'mv $SRCS/rustc $OUT',
+        entry_points = {
+            'rustc': 'rustc/bin/rustc',
+            'rustdoc': 'rustc/bin/rustdoc',
+            'clippy': 'rustc/bin/clippy-driver',
+            'rustfmt': 'rustc/bin/rustfmt',
+        },
+        binary = True,
+        output_is_complete = True,
+        visibility = visibility,
+    )
+
+    # Only the from-source bootstrap runs cargo, so nothing that compiles Rust
+    # should be staging it.
+    build_rule(
+        name = '%s_cargo' % name,
+        srcs = [toolchain],
+        outs = ['cargo'],
+        cmd = 'mv $SRCS/cargo $OUT',
+        entry_points = {'cargo': 'cargo/bin/cargo'},
+        binary = True,
+        output_is_complete = True,
+        visibility = visibility,
+    )
+
     # rustc wants a directory, so the directory is the whole output. Splitting
     # it out is safe in a way that splitting rustc is not: a sysroot is rlibs
     # and rmeta, with no binary resolving its libraries through ../lib.
