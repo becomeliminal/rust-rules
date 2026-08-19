@@ -84,6 +84,11 @@ pub struct IdeArgs {
 
     /// The build file to report as the one this project came from. Only
     /// meaningful with --discover; rust-analyzer keys a workspace on it.
+    ///
+    /// Must be absolute. rust-analyzer calls `AbsPathBuf::try_from` on it and
+    /// *panics* on a relative one - taking the language server down with it -
+    /// so this is made absolute here rather than trusted, whatever the
+    /// protocol's own example looks like.
     #[arg(long, default_value = "BUILD")]
     pub buildfile: String,
 }
@@ -435,6 +440,19 @@ fn expand_features(
 /// compiled for a different platform and may have different features.
 type Key = (String, bool);
 
+/// rust-analyzer panics rather than errors on a relative buildfile, so no
+/// caller gets to pass one.
+fn absolute(path: &str) -> String {
+    let p = Path::new(path);
+    if p.is_absolute() {
+        return path.to_string();
+    }
+    match std::env::current_dir() {
+        Ok(cwd) => cwd.join(p).display().to_string(),
+        Err(_) => path.to_string(),
+    }
+}
+
 fn read_fragment(path: &Path) -> Result<FirstParty> {
     let text =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
@@ -683,7 +701,7 @@ fn describe_project(args: IdeArgs) -> Result<()> {
         // One line, because the protocol is JSONL and a pretty-printed object
         // is a hundred lines of syntax error to a line-oriented reader.
         let line = serde_json::to_string(&DiscoverData::Finished {
-            buildfile: &args.buildfile,
+            buildfile: &absolute(&args.buildfile),
             project: &project,
         })?;
         println!("{}", line);

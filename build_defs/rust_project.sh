@@ -31,11 +31,17 @@ say() {
     fi
 }
 
+# JSON has no opinion about shell quoting, so anything that reaches a message
+# is escaped: plz's own errors arrive here and contain quotes and newlines.
+esc() {
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\n\r\t' '   '
+}
+
 # A failure has to reach rust-analyzer as protocol too: exiting non-zero with
 # nothing on stdout tells it only that something went wrong.
 die() {
     if [ "$DISCOVER" = 1 ]; then
-        printf '{"kind":"error","error":"%s","source":null}\n' "$1"
+        printf '{"kind":"error","error":"%s","source":null}\n' "`esc \"$1\"`"
         exit 0
     fi
     echo "$NAME: $1" >&2
@@ -119,11 +125,16 @@ sweep() {
     done
 }
 
-# This repo's own crates.
-FRAGS=`plz query alltargets $TARGETS --include rust_ide --hidden || true`
+# This repo's own crates. plz's own failures are reported rather than swallowed:
+# an empty result and a failed query look identical from here, and the first
+# time this ran under an editor it reported "no crates found" when the truth
+# was that plz had not run at all.
+if ! FRAGS=`plz query alltargets $TARGETS --include rust_ide --hidden 2>"$WORK/queryerr"`; then
+    die "plz could not query $TARGETS: `cat \"$WORK/queryerr\"`"
+fi
 FRAGS=`drop_excluded "$FRAGS"`
 if [ -z "$FRAGS" ]; then
-    die "no Rust crates found under $TARGETS"
+    die "no Rust crates found under $TARGETS (plz said: `cat \"$WORK/queryerr\"`)"
 fi
 say "describing `echo $FRAGS | wc -w` crates"
 # The toolchain too: resolving where it lands is not the same as it being
