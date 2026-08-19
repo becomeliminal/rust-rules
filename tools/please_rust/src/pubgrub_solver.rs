@@ -199,9 +199,7 @@ impl<'a, S: ReleaseSource> Solver<'a, S> {
             .filter(|r| bucket.contains(&r.version))
             .filter(|r| {
                 !r.yanked
-                    || pinned
-                        .map(|ps| ps.iter().any(|p| *p == r.version))
-                        .unwrap_or(false)
+                    || pinned.is_some_and(|ps| ps.contains(&r.version))
             })
             .collect();
         in_bucket.sort_by(|a, b| b.version.cmp(&a.version));

@@ -453,7 +453,7 @@ pub fn package_env(pkg: &cargo_toml::Package) -> Vec<(String, String)> {
     // CARGO_PKG_VERSION and components
     // pkg.version is Inheritable<String>, .get() returns Result<&String, Error>
     let version_str = pkg.version.get()
-        .map(|v| v.clone())
+        .cloned()
         .unwrap_or_else(|_| "0.0.0".to_string());
     env.push(("CARGO_PKG_VERSION".to_string(), version_str.clone()));
 

@@ -598,7 +598,7 @@ def rust_benchmark(name:str, root:str, modules:list=None, deps:list=[], edition:
     )
 
 
-def rust_clippy(name:str, root:str, crate_name:str="", modules:list=None, deps:list=[], edition:str="2018", features:list=None, deny:list=["warnings"], visibility:list=None):
+def rust_clippy(name:str, root:str, crate_name:str="", crate_type:str="lib", modules:list=None, deps:list=[], edition:str="2018", features:list=None, manifest:str=None, deny:list=["warnings"], visibility:list=None):
     """Lints a crate with clippy (clippy-driver is a rustc-compatible
     frontend, so this is the crate's compile run through it, metadata-only).
 
@@ -606,10 +606,18 @@ def rust_clippy(name:str, root:str, crate_name:str="", modules:list=None, deps:l
         name (str): Name of the lint rule.
         root (str): The crate's root source file.
         crate_name (str): Name of the crate. Defaults to the rule name.
+        crate_type (str): What the root is. A binary linted as a lib reports
+                          every function reachable only from main as dead
+                          code, so a rust_binary wants 'bin' here.
         modules (list): Local modules that make up the crate.
         deps (list): Dependencies of the crate.
         edition (str): Rust edition to compile with (2015, 2018, 2021, 2024).
         features (list): Feature cfgs to enable.
+        manifest (str): The crate's Cargo.toml, for a crate that reads its own
+                        package metadata. Without it CARGO_PKG_* is unset, and
+                        anything deriving from it - clap's `#[command(version)]`
+                        among them - fails to compile under the linter while
+                        compiling fine everywhere else.
         deny (list): Lint groups promoted to errors (default: warnings, so
                      any clippy finding fails the build).
         visibility (list): Visibility declaration.
@@ -618,20 +626,24 @@ def rust_clippy(name:str, root:str, crate_name:str="", modules:list=None, deps:l
         crate_name = name.replace('-', '_')
     # extra-filename disambiguates from the library's own rmeta outputs
     deny_flags = ' '.join([f'--rustc-flag=-D{d}' for d in deny] + ['--rustc-flag=-Cextra-filename=-clippy'])
+    srcs = {
+        'main': [root],
+        'mods': modules or [],
+    }
+    if manifest:
+        srcs['manifest'] = [manifest]
     return build_rule(
         name = name,
-        srcs = {
-            'main': [root],
-            'mods': modules or [],
-        },
+        srcs = srcs,
         outs = [f'lib{crate_name}-clippy.rmeta'],
         cmd = _compile_cmds(
             crate_name = crate_name,
             edition = edition,
-            crate_type = 'lib',
+            crate_type = crate_type,
             emit = 'metadata',
             features = features,
             deps = deps,
+            manifest = manifest,
             extra_flags = deny_flags,
         ),
         deps = deps,

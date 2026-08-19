@@ -371,7 +371,7 @@ pub fn resolve_entries(entries: &[EntryInput], target: &str) -> Result<LockFile>
                 }
                 resolver
                     .select(&d.package, d.req.as_ref(), &nodes)
-                    .map_or(false, |c| dual.contains(&c))
+                    .is_some_and(|c| dual.contains(&c))
             });
             if reaches_dual {
                 dual.insert(i);
@@ -478,7 +478,7 @@ fn edge_unit(parent_unit: Unit, kind: DepKind) -> Unit {
 }
 
 fn process(
-    nodes: &mut Vec<CrateNode>,
+    nodes: &mut [CrateNode],
     resolver: &Resolver,
     mut work: Vec<Work>,
     missing: &mut Vec<MissingDep>,
@@ -557,7 +557,7 @@ fn process(
 }
 
 fn enable_feature(
-    nodes: &mut Vec<CrateNode>,
+    nodes: &mut [CrateNode],
     resolver: &Resolver,
     idx: usize,
     unit: Unit,
@@ -636,7 +636,7 @@ fn enable_feature(
 
 /// Activate an optional (or any) dependency of nodes[idx] by declared name.
 fn activate_dep(
-    nodes: &mut Vec<CrateNode>,
+    nodes: &mut [CrateNode],
     resolver: &Resolver,
     idx: usize,
     unit: Unit,
@@ -710,7 +710,7 @@ fn activate_dep(
 
 /// Enable a feature on the resolved target of nodes[idx]'s dep `dep_name`.
 fn forward_feature(
-    nodes: &mut Vec<CrateNode>,
+    nodes: &mut [CrateNode],
     resolver: &Resolver,
     idx: usize,
     unit: Unit,

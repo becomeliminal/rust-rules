@@ -339,9 +339,7 @@ pub fn run_reporting(args: SyncArgs) -> Result<Vec<crate::resolve::MissingDep>> 
     let mut deleted_spans: Vec<(usize, usize)> = Vec::new();
     decls.retain(|d| {
         let active = active_anywhere.contains(&d.subrepo());
-        let keep = if d.imported {
-            active
-        } else if args.prune && !d.root {
+        let keep = if d.imported || (args.prune && !d.root) {
             active
         } else {
             true
@@ -1588,7 +1586,7 @@ fn lock_round(
         }
     }
 
-    finish_lock(args, decls).map(|m| m)
+    finish_lock(args, decls)
 }
 
 /// Feed dependencies that feature unification turned on back into the solver

@@ -101,8 +101,10 @@ rust_clippy(
     name = "lint",
     root = "src/main.rs",
     crate_name = "please_rust",
+    crate_type = "bin",
     modules = _MODULES,
     edition = "2021",
+    manifest = "Cargo.toml",
     deps = _DEPS,
 )
 

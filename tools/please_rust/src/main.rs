@@ -10,6 +10,14 @@
 //! Set PLEASE_RUST_TIMINGS=1 for per-phase timings, call counts and peak RSS
 //! on stderr.
 
+// Both of these are the same piece of work: generate_build_file threads
+// seventeen positional arguments and the dep vectors it passes are nested
+// tuples, because nothing ever hoisted per-crate state into a struct. That
+// hoist is planned as part of `please_rust ide`, which needs exactly that
+// struct to serialise. Allowed here rather than silenced at each site so it
+// stays one visible debt rather than twenty invisible ones.
+#![allow(clippy::too_many_arguments, clippy::type_complexity)]
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 

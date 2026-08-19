@@ -170,16 +170,19 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         .unwrap_or(&args.subrepo)
         .to_string();
     let lock_file = match args.lock.as_ref() {
-        Some(p) if p.exists() => match {
-            let _t = crate::timing::phase("generate/lock_parse");
-            crate::resolve::LockFile::load(p)
-        } {
+        Some(p) if p.exists() => {
+            let loaded = {
+                let _t = crate::timing::phase("generate/lock_parse");
+                crate::resolve::LockFile::load(p)
+            };
+            match loaded {
             Ok(lock) => Some(lock),
             Err(e) => {
                 eprintln!("warning: {:#}", e);
                 None
             }
-        },
+            }
+        }
         _ => None,
     };
     let (lock_entry, host_entry) = match &lock_file {
@@ -276,7 +279,7 @@ pub fn run(args: GenerateArgs) -> Result<()> {
     // that cannot execute. The _host twin below passes false for the same
     // reason; this covers crates that have no twin because the host unit is
     // the only one they have.
-    let host_unit = lock_entry.as_ref().map_or(false, |e| e.host);
+    let host_unit = lock_entry.as_ref().is_some_and(|e| e.host);
     let cross = args.compile_target.is_some() && !host_unit;
 
     // Externconfig keys carry which declaration produced them. Two versions of
@@ -816,7 +819,7 @@ fn generate_build_file(
     // If this crate has a build script, generate two-stage build
     if let Some(script_path) = build_script_path {
         content.push_str(&generate_build_script_rule(&normalized_name, features, build_deps, script_path, linked_deps, pipeline, build_target));
-        content.push_str("\n");
+        content.push('\n');
         content.push_str(&generate_compile_rule_with_buildscript(
             &normalized_name,
             &crate_ident,

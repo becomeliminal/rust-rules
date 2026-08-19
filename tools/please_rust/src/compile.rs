@@ -399,7 +399,7 @@ fn build_command(args: &CompileArgs) -> Result<Command> {
                                     // alone is the useful form: the label
                                     // says md_5 where the crate is md5.
                                     (dep_name.is_empty() || dep_name == name)
-                                        && qualifier.map_or(true, |q| {
+                                        && qualifier.is_none_or(|q| {
                                             q == dep_qual || q.ends_with(&format!("/{}", dep_qual))
                                         })
                                 }
