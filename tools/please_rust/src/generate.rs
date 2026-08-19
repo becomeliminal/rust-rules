@@ -170,19 +170,13 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         .unwrap_or(&args.subrepo)
         .to_string();
     let lock_file = match args.lock.as_ref() {
-        Some(p) if p.exists() => {
-            let loaded = {
-                let _t = crate::timing::phase("generate/lock_parse");
-                crate::resolve::LockFile::load(p)
-            };
-            match loaded {
-                Ok(lock) => Some(lock),
-                Err(e) => {
-                    eprintln!("warning: {:#}", e);
-                    None
-                }
+        Some(p) if p.exists() => match crate::resolve::LockFile::load(p) {
+            Ok(lock) => Some(lock),
+            Err(e) => {
+                eprintln!("warning: {:#}", e);
+                None
             }
-        }
+        },
         _ => None,
     };
     let (lock_entry, host_entry) = match &lock_file {

@@ -50,7 +50,6 @@ _MODULES = [
     "src/sync.rs",
     "src/workspace.rs",
     "src/test.rs",
-    "src/timing.rs",
 ]
 
 _DEPS = [

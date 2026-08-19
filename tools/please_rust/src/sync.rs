@@ -1113,7 +1113,6 @@ impl Index {
     }
 
     fn versions(&self, name: &str) -> Result<Vec<IndexVersion>> {
-        let _t = crate::timing::phase("index/versions");
         if let Some(v) = self.cache.borrow().get(name) {
             return Ok(v.clone());
         }
@@ -1125,7 +1124,6 @@ impl Index {
             bail!("{} not in index cache and --offline is set", name)
         } else {
             let url = format!("{}/{}", self.url, rel);
-            let _t = crate::timing::phase("index/fetch_curl");
             let out = Command::new(&self.curl)
                 .args(["--fail", "--silent", "--show-error", "--location", &url])
                 .output()

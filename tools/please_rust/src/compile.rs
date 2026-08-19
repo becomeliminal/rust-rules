@@ -53,10 +53,6 @@ pub(crate) fn rebase_build_path(
 
 /// Recursively search for a file with the given name in the directory tree
 fn find_file_recursive(dir: &str, filename: &str) -> Option<PathBuf> {
-    // Counted rather than timed: one call is microseconds, but it runs once
-    // per externconfig line per compile, and the count is what tells you
-    // whether that matters.
-    crate::timing::count("compile/find_file_recursive");
     let dir_path = Path::new(dir);
     find_file_in_dir(dir_path, filename)
 }

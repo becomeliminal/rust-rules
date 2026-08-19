@@ -194,7 +194,6 @@ impl<'a, S: ReleaseSource> Solver<'a, S> {
     }
 
     fn releases(&self, name: &str) -> Result<Vec<Release>> {
-        let _t = crate::timing::phase("solver/releases");
         if let Some(r) = self.cache.borrow().get(name) {
             return Ok(r.clone());
         }

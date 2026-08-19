@@ -118,7 +118,6 @@ pub struct LockFile {
 /// cargo accepts but cargo_toml's kebab-case parsing silently ignores
 /// (e.g. tonic 0.11 ships `default_features = false`).
 pub fn parse_manifest(bytes: &[u8]) -> Result<Manifest, cargo_toml::Error> {
-    let _t = crate::timing::phase("resolve/parse_manifest");
     let text = String::from_utf8_lossy(bytes)
         .replace("default_features =", "default-features =")
         .replace("dev_dependencies]", "dev-dependencies]")
@@ -264,7 +263,6 @@ fn parse_inline_entry(entry: &str, manifest_dir: &std::path::Path) -> Result<Ent
 
 /// Resolve the declared crate graph; shared by the resolve and sync commands.
 pub fn resolve_entries(entries: &[EntryInput], target: &str) -> Result<LockFile> {
-    let _t = crate::timing::phase("resolve/resolve_entries");
     let target_info = cfg_expr::targets::get_builtin_target_by_triple(target)
         .with_context(|| format!("Unknown target triple {}", target))?;
 
