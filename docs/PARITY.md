@@ -76,11 +76,22 @@ binary-link time.
 - [x] True exec/target artifact split: build scripts, proc macros and
       installed binaries compile for the host, libraries for the target,
       the same split cargo makes in its unit graph
-- [ ] wasm32 targets (+ wasm-bindgen rule later). Groundwork done: the
-      bindgen-cli pattern (tool built from crates via rust_repo, aliased
-      through a config knob) is exactly how wasm-bindgen-cli will ship;
-      --target threading is now in place, so what remains is a wasm32
-      rust-std and the bindgen-shaped rule around it
+- [x] wasm32 targets. `TargetTriple = wasm32-unknown-unknown` compiles for
+      it; CI asserts the emitted object is a WebAssembly module rather than
+      trusting the flag. Please's os_arch pair cannot name wasm32 - it is
+      neither an OS nor an architecture Please knows - so `--arch` will never
+      reach it and the triple has to be named verbatim. `rust_toolchain`
+      fetches the standard library for a TargetTriple the same way it does
+      for an `--arch` platform: only when that is what you are building for,
+      because wasm32's std is 93M against the host's 162M and the sysroot is
+      staged by every compile
+- [ ] wasm-bindgen rule. Same shape as the shipped `rust_bindgen` - a tool
+      built from crates via rust_repo, aliased through a config knob - so it
+      is a rule around a binary rather than new mechanism
+- [ ] musl and embedded targets. `TargetTriple` names them and
+      `rust_toolchain` will fetch their standard library, so what is untested
+      is whether anything else assumes a hosted platform. `no_std` crates in
+      particular have never been built here
 - [ ] Nightly / channel toolchains policy
 
 ### Build speed

@@ -78,9 +78,12 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
       hashes (list) List of hashes to verify on download.
       deps (list): Extra dependencies of the rule.
       visibility (list): Visibility declaration of the rule.
-      architectures (list): Additional platforms to install the standard library for, in Please's format
-                            e.g. 'darwin_arm64'. The platform passed to --arch is installed automatically;
-                            listing others here is only useful to cross-compile part of a repo by hand.
+      architectures (list): Additional platforms to install the standard library for, either in
+                            Please's format e.g. 'darwin_arm64', or as a Rust triple e.g.
+                            'wasm32-unknown-unknown' for targets Please's os_arch pair cannot
+                            express. The platform passed to --arch is installed automatically;
+                            listing others here is for cross-compiling part of a repo by hand,
+                            and is how a TargetTriple target gets its standard library.
       std_hashes (dict): Hashes for those standard libraries, keyed the same way as architectures.
     """
     # rustc runs on the machine doing the building whatever it is compiling for,
@@ -100,6 +103,13 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
 
     if CONFIG.TARGET_OS != CONFIG.HOSTOS or CONFIG.TARGET_ARCH != CONFIG.HOSTARCH:
         architectures += ['%s_%s' % (CONFIG.TARGET_OS, CONFIG.TARGET_ARCH)]
+    # A TargetTriple names a platform --arch cannot, so it needs the same
+    # treatment: fetched when it is what you are building for, and not
+    # otherwise. Listing one in `architectures` instead would put its standard
+    # library in the sysroot of every build - wasm32's is 93M, against 162M
+    # for the host's, and the sysroot is staged by every compile.
+    if CONFIG.RUST.TARGET_TRIPLE and CONFIG.RUST.TARGET_TRIPLE != triple:
+        architectures += [CONFIG.RUST.TARGET_TRIPLE]
     download_rule = remote_file(
         name = '_%s#download' % name,
         url = 'https://static.rust-lang.org/dist/%s.tar.gz' % base,
@@ -128,8 +138,16 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
     std_rules = []
     std_cmds = []
     for plat in architectures:
-        plat_os, _, plat_arch = plat.partition('_')
-        plat_triple = rust_triple(plat_os, plat_arch)
+        # A Please os_arch pair, or a Rust triple named verbatim for the
+        # targets that pair cannot express - wasm32-unknown-unknown is
+        # neither an OS nor an architecture Please knows, and musl needs a
+        # libc dimension it does not have. Triples contain a hyphen and
+        # os_arch pairs do not, which is what tells them apart.
+        if '-' in plat:
+            plat_triple = plat
+        else:
+            plat_os, _, plat_arch = plat.partition('_')
+            plat_triple = rust_triple(plat_os, plat_arch)
         if plat_triple == triple:
             continue
         std_base = 'rust-std-%s-%s' % (version, plat_triple)

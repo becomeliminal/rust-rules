@@ -45,6 +45,20 @@ jobs:
           ./pleasew query print -o plugin.rust.targettriple:wasm32-unknown-unknown \
             '//examples/package:_math#link' | grep -q -- '--target wasm32-unknown-unknown'
 
+      # wasm32 has no os_arch pair, so it exists only through TargetTriple.
+      # Checked by inspecting the emitted object rather than by trusting the
+      # flag, the same way the darwin_arm64 step does.
+      - name: Compile to wasm32
+        run: |
+          ./pleasew build -p -v notice \
+            -o plugin.rust.targettriple:wasm32-unknown-unknown \
+            //examples/package:math
+          rlib=plz-out/gen/examples/package/libmath.rlib
+          obj=$(ar t "$rlib" | grep -m1 '\.o$')
+          ar x "$rlib" "$obj" && file "$obj"
+          file "$obj" | grep -q 'WebAssembly' || {
+            echo "object is not a WebAssembly module"; exit 1; }
+
       - name: Cross-compile third-party crates
         run: |
           ./pleasew build -p -v notice --arch darwin_arm64 \
