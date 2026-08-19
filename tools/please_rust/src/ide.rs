@@ -397,15 +397,15 @@ fn read_fragment(path: &Path) -> Result<FirstParty> {
 /// the fragment carries is relative to the subrepo, so every one hangs off
 /// it - the root module and the manifest CARGO_PKG_* is read from.
 fn rebase(fp: &mut FirstParty, checkout: &str) {
-    let at = |p: &str| {
+    fn at(checkout: &str, p: &str) -> String {
         if checkout.is_empty() {
             p.to_string()
         } else {
             format!("{}/{}", checkout.trim_end_matches('/'), p)
         }
-    };
-    fp.root_module = at(&fp.root_module);
-    fp.manifest = fp.manifest.as_deref().map(at);
+    }
+    fp.root_module = at(checkout, &fp.root_module);
+    fp.manifest = fp.manifest.as_deref().map(|m| at(checkout, m));
 }
 
 /// The package env a first-party crate compiles with, read from its manifest
