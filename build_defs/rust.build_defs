@@ -540,6 +540,11 @@ def _ide_fragment(name:str, crate_name:str, root:str, edition:str, features:list
     )
 
 
+def _sq(value:str):
+    """Single-quote a value for a shell, so nothing in it can be syntax."""
+    return "'" + value.replace("'", "'\\''") + "'"
+
+
 def rust_project(name:str, lock:str='', targets:list=['//...'], exclude:list=[], subrepos:list=[],
                  third_party_dir:str='plz-out/gen/third_party/crates',
                  sysroot:str='plz-out/bin/third_party/rust/rustc',
@@ -590,69 +595,34 @@ def rust_project(name:str, lock:str='', targets:list=['//...'], exclude:list=[],
         out (str): Where to write the file, relative to the repo root.
         visibility (list): Visibility declaration.
     """
-    # The config value arrives subrepo-qualified (`///` and an empty name
-    # when the plugin is its own repo); canonicalise gives the label back in
-    # the form a command line takes.
+    # A config value arrives subrepo-qualified (`///` and an empty name when
+    # the plugin is its own repo); canonicalise gives the label back in the
+    # form a command line takes.
     tool = canonicalise(CONFIG.RUST.PLEASE_RUST_TOOL)
     lock = canonicalise(lock) if lock else ''
-    # Backticks rather than $(...): plz rewrites $(...) sequences in a cmd, and
-    # this text has to survive into the script it writes untouched.
-    filters = ''.join([" | grep -v '^%s'" % e for e in exclude])
-    lock_setup = 'LOCK=`plz query outputs %s`' % lock if lock else 'LOCK='
-    lock_arg = '--lock "$LOCK" ' if lock else ''
-    build_labels = ' '.join([tool] + ([lock] if lock else []))
-    script = '\n'.join([
+    # The script is a file, and everything that varies reaches it as a shell
+    # variable rather than being substituted into its text - a label or a path
+    # spliced into shell is a path that can be read as syntax.
+    prelude = [
         '#!/bin/sh',
-        'set -eu',
-        'cd "`plz query reporoot`"',
-        'FRAGS=`plz query alltargets %s --include rust_ide --hidden%s || true`' % (' '.join(targets), filters),
-        'if [ -z "$FRAGS" ]; then',
-        '    echo "%s: no Rust crates found under %s" >&2' % (name, ' '.join(targets)),
-        '    exit 1',
-        'fi',
-        # One build for the tool, the lock and every fragment. The fragments are
-        # a line of JSON each, so this does not compile any Rust.
-        'plz build %s $FRAGS >/dev/null' % build_labels,
-        'TOOL=`plz query outputs %s`' % tool,
-        lock_setup,
-        'FILES=`plz query outputs $FRAGS`',
-        # Subrepos. Plugin ones plz already knows about; anything else was
-        # named. Third-party crates arrive through the lock and emit no
-        # fragments of their own, so sweeping every subrepo cannot describe
-        # one twice.
-        'SUBS="%s`plz query config | sed -n \'s/^\\[plugin \"\\(.*\\)\"\\]$/\\1/p\'`"' % (
-            ''.join(['%s ' % s for s in subrepos])),
-        'SUBARGS=""',
-        'SUBN=0',
-        'for sub in $SUBS; do',
-        '    subfrags=`plz query alltargets "///$sub//..." --include rust_ide --hidden 2>/dev/null%s || true`' % filters,
-        '    [ -n "$subfrags" ] || continue',
-        '    plz build $subfrags >/dev/null',
-        '    for frag in $subfrags; do',
-        # A subrepo that resolves back to this repo - which is what a plugin
-        # repo declaring itself for its own tests does - returns host labels,
-        # and describing those crates a second time is 23 duplicate entries
-        # with nothing to say they are duplicates.
-        '        case "$frag" in ///*) ;; *) continue ;; esac',
-        # plz reports a subrepo target's inputs relative to *this* repo, which
-        # is the rebasing; the fragment's own idea of its root is relative to
-        # the subrepo. Pairing the two is all the tool needs.
-        '        root=`plz query input "$frag" | head -1`',
-        '        json=`plz query outputs "$frag"`',
-        '        [ -n "$root" ] && [ -n "$json" ] || continue',
-        '        SUBARGS="$SUBARGS --subrepo-crate $root=$json"',
-        '        SUBN=`expr $SUBN + 1`',
-        '    done',
-        'done',
-        '"$TOOL" ide %s--third-party-dir %s --sysroot %s --sysroot-src %s --first-party $FILES $SUBARGS --output %s' % (
-            lock_arg, third_party_dir, sysroot, sysroot_src, out),
-        'echo "%s: wrote %s (`echo $FILES | wc -w` first-party crates, $SUBN from subrepos)"' % (name, out),
-    ])
+        'NAME=%s' % _sq(name),
+        'TOOL_LABEL=%s' % _sq(tool),
+        'LOCK_LABEL=%s' % _sq(lock),
+        'TARGETS=%s' % _sq(' '.join(targets)),
+        'EXCLUDES=%s' % _sq(' '.join(exclude)),
+        'SUBREPOS=%s' % _sq(' '.join(subrepos)),
+        'THIRD_PARTY_DIR=%s' % _sq(third_party_dir),
+        'SYSROOT=%s' % _sq(sysroot),
+        'SYSROOT_SRC=%s' % _sq(sysroot_src),
+        'OUT_FILE=%s' % _sq(out),
+    ]
     return build_rule(
         name = name,
+        srcs = [CONFIG.RUST.PROJECT_SCRIPT],
         outs = [name + '.sh'],
         binary = True,
-        cmd = "cat > $OUT <<'PLZ_PROJECT_EOF'\n" + script + "\nPLZ_PROJECT_EOF",
+        cmd = '{ %s; tail -n +2 $SRCS; } > $OUT' % '; '.join(
+            ['echo %s' % _sq(line) for line in prelude]),
         labels = ['rust'],
         visibility = visibility,
     )

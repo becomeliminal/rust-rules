@@ -178,3 +178,9 @@ Help = Run crate download and BUILD generation locally rather than on a remote w
 Inherit = true
 
 
+
+[PluginConfig "project_script"]
+ConfigKey = ProjectScript
+DefaultValue = //build_defs:project_script
+Help = The discovery script behind rust_project. Internal to the plugin; a consumer has no reason to set it.
+Inherit = true

@@ -192,6 +192,12 @@ Optional = true
 Help = rustc -C debug-assertions (true/false). Empty follows the build config.
 Inherit = true
 
+[PluginConfig "project_script"]
+ConfigKey = ProjectScript
+DefaultValue = //build_defs:project_script
+Help = The discovery script behind rust_project. Internal to the plugin; a consumer has no reason to set it.
+Inherit = true
+
 [PluginConfig "criterion_dep"]
 ConfigKey = CriterionDep
 DefaultValue = //third_party/rust:criterion
