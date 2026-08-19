@@ -13,6 +13,7 @@ use clap::{Parser, Subcommand};
 mod build_script;
 mod compile;
 mod generate;
+mod ide;
 mod pubgrub_solver;
 mod resolve;
 mod sync;
@@ -50,6 +51,9 @@ enum Commands {
 
     /// Run a test command and report per-test results to plz
     Test(test::TestArgs),
+
+    /// Emit a rust-project.json describing the crate graph, for rust-analyzer
+    Ide(ide::IdeArgs),
 }
 
 fn main() -> Result<()> {
@@ -65,6 +69,7 @@ fn dispatch(cli: Cli) -> Result<()> {
         Commands::Sync(args) => sync::run(args),
         Commands::Lock(args) => sync::lock(args),
         Commands::Test(args) => test::run(args),
+        Commands::Ide(args) => ide::run(args),
     }
 }
 

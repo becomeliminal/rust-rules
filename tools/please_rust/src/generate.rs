@@ -470,7 +470,7 @@ fn expand_features(manifest: &Manifest, requested: &[String]) -> Vec<String> {
     out.into_iter().collect()
 }
 
-fn determine_crate_type(manifest: &Manifest, has_lib: bool) -> String {
+pub fn determine_crate_type(manifest: &Manifest, has_lib: bool) -> String {
     // Check if it's a proc-macro
     if let Some(lib) = &manifest.lib {
         if lib.proc_macro {

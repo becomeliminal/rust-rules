@@ -49,6 +49,7 @@ _MODULES = [
     "src/resolve.rs",
     "src/sync.rs",
     "src/workspace.rs",
+    "src/ide.rs",
     "src/test.rs",
 ]
 
