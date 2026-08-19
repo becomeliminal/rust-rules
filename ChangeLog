@@ -1,3 +1,115 @@
+Version 0.7.0
+-------------
+  * Editor integration. `rust_project` describes every Rust crate in the repo
+    for rust-analyzer, and answers `rust-analyzer.workspace.discoverConfig`
+    directly - the shape go-rules uses for gopls, where a driver answers the
+    editor rather than a file being generated and kept in step. One editor
+    setting; a crate added anywhere appears without anyone running anything.
+    `plz run //:rust-project` still writes rust-project.json for CI.
+  * Crates in subrepos are described too, including first-party crates in a
+    plugin or a repo pulled in with github_repo. They are never workspace
+    members: a subrepo is checked in its own repo.
+  * The standard library's own dependency graph is read from rust-src rather
+    than assumed, so `HashMap::new()` infers - std wraps hashbrown's, and
+    without it every HashMap in every crate reported "type annotations
+    needed".
+  * First-party crates carry cfg(test) and CARGO_PKG_*, so #[cfg(test)]
+    modules are live code and `clap::command!()` resolves.
+  * Dependencies are matched by build label rather than by crate name. A repo
+    with a first-party crate sharing a name with a third-party one made that
+    crate depend on itself; rust-corpus had 230 of them.
+  * The sysroot is derived from the toolchain the rules are configured with,
+    rather than from a path that was this repo's layout.
+  * A binary-only crate roots at its binary. bindgen-cli ships main.rs and no
+    src/, and the lock recorded src/lib.rs for it.
+  * sync keeps declaration state it did not write: a feature recorded only in
+    the rust_resolve entries list survives a rewrite, and a run covering
+    fewer platforms than the file names leaves the recorded platforms alone.
+  * **Breaking**: ProtoPlugin, GrpcPlugin, ProtoDep and GrpcDep are no longer
+    declared by this plugin, which never read them. They belong to
+    rust-proto-rules, which declares and uses all four; go-rules declares no
+    proto keys at all. Set them on the proto plugin instead.
+  * Documentation: every config key is now in the README except the internal
+    one; TROUBLESHOOTING covers the failures a consumer hits when integrating
+    rather than the ones we hit developing; ARCHITECTURE describes the editor
+    layer and the toolchain split.
+
+Version 0.6.3
+-------------
+  * A directory cannot be an entry point, so the sysroot, its sources and the
+    llvm tools became outputs of their own. Please validates entry points by
+    membership in the flattened action outputs and a directory's path is
+    never a key there, so this failed only under remote execution.
+  * The toolchain output holds what a build uses rather than everything the
+    distribution ships; the HTML documentation no longer rides along to every
+    remote action.
+
+Version 0.6.2
+-------------
+  * Not released.
+
+Version 0.6.1
+-------------
+  * CI runs the released binary consumers actually download, against the
+    build_defs shipped beside it. Every other job builds the tool from the
+    same commit as the rules, so nothing exercised the pin.
+
+Version 0.6.0
+-------------
+  * Twenty bugs a 1,102-crate corpus found, none of them findable by reading
+    the code: feature unification across a large graph, host/target unit
+    duality being contagious through shared artifacts, optional dependencies
+    reached through a feature not setting their own cfg, renames naming the
+    declaration rather than a guess at the crate, crate types, and build
+    script inputs.
+  * Vendored C trees are staged without enumerating them, which is what
+    shaderc-sys needs: ~5,000 files next to its build script is past the exec
+    argument limit.
+  * A compile stages neither the build script directory nor the crate's C
+    sources; only the build script reads those.
+  * BuildScriptJobs caps how wide a build script compiles C. Unset is half
+    the machine, since Please is already running other actions beside it.
+  * Declarations record which platforms resolution reaches a crate on.
+
+Version 0.5.5
+-------------
+  * Declarations name the dependencies other platforms need, so a linux
+    developer's branch builds on a Mac.
+
+Version 0.5.4
+-------------
+  * Build scripts are told which platform they are building for.
+  * The suite runs on macOS in CI, and cross-compilation is proven there.
+  * The repo_root config knob is gone.
+
+Version 0.5.3
+-------------
+  * Dynamic libraries are named for the platform that loads them.
+  * crt-static is not requested on macOS, which does not support it.
+
+Version 0.5.2
+-------------
+  * A crate shipping a build directory gets BUILD.plz, so its own files do
+    not collide with the generated one.
+  * ARM linux is in the default target set.
+
+Version 0.5.1
+-------------
+  * A macOS checkout builds.
+  * darwin_amd64 is no longer built: GitHub stopped supporting its runner.
+
+Version 0.5.0
+-------------
+  * Cross-compilation with --arch: rust_toolchain installs the standard
+    library for the platform being targeted, and compiles name it.
+  * Declarations cover every platform the repo is built on, resolved as a
+    union so one checked-in set serves linux and macOS alike.
+  * The toolchain is one target with entry points rather than eight siblings.
+  * The tool defaults to a hash-pinned release download per platform, the way
+    go-rules ships please_go: nothing to build, no cargo, works under remote
+    execution.
+  * Darwin binaries are published alongside linux.
+
 Version 0.4.7
 -------------
   * Doc-test, rustdoc and coverage actions stage the libraries their tools
