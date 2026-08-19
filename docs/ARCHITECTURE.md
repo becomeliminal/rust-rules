@@ -39,12 +39,13 @@ so its *contract* is reimplemented under the build system's control.
 
 | Layer | What happens | Network |
 |---|---|---|
-| `rust_toolchain` | rustc/cargo/stdlib fetched from static.rust-lang.org, sha256-pinned | fetch rule only |
+| `rust_toolchain` | rustc/cargo/stdlib fetched from static.rust-lang.org, sha256-pinned, then split into the pieces a build actually uses (`_rustc`, `_cargo`, `_sysroot`, `_llvm_tools`, `_sysroot_src`) so a compile stages the compiler and not the whole distribution | fetch rule only |
 | `rust_repo` | crate tarball fetched from static.crates.io via `remote_file`, sha256-verified | fetch rule only |
 | `please_rust generate` | parses the crate's Cargo.toml, emits BUILD rules into a Please subrepo | none |
 | `please_rust resolve` | semver version routing + cargo resolver-v2 feature unification across the declared graph, computed by the `rust_resolve` rule inside the build graph | none |
 | `please_rust compile` / `build-script` | drives rustc with cargo's full env contract (`CARGO_PKG_*`, `OUT_DIR`, feature cfgs, proc-macro externs, build script directives) | none |
 | `please_rust sync` | maintains the `rust_repo` list: naming, hashes, pruning; imports a cargo `Cargo.lock` wholesale, or a whole workspace with `--import-workspace` | none |
+| `please_rust ide` | describes the whole crate graph for rust-analyzer, from the lock and from per-crate fragments the first-party rules emit | none |
 | `please_rust lock --add crate@req` | PubGrub solve over the crates.io sparse index (cached, `--offline` supported), MSRV-filtered against the declared toolchain; hashes from index checksums | dev-time only |
 
 The `rust_repo` declarations play the role `go.mod` plays for go-rules: the
@@ -106,6 +107,47 @@ rust_test(
 )
 ```
 
+## Editor integration
+
+rust-analyzer learns a crate graph either by running cargo or by being handed
+a `rust-project.json`. There is no cargo to run, so the second applies — but
+generating that file and remembering to regenerate it is not how this works.
+
+go-rules ships a `GOPACKAGESDRIVER` binary that gopls calls instead of
+`go list`. rust-analyzer has the same shape in
+`rust-analyzer.workspace.discoverConfig`: a command it runs when a project is
+opened, and runs again when a watched file changes. `rust_project` answers it.
+
+```
+editor opens, or a BUILD file changes
+        │
+        ▼
+plz run //:rust-project -- --discover {arg}
+        │
+        ├─ query the build graph for every crate, this repo and its subrepos
+        ├─ build what the project is about to point at, from what it points at
+        └─ emit JSONL: progress lines, then a `finished` object carrying the graph
+```
+
+Three things are worth knowing about the shape:
+
+**Discovery is a query, so it cannot be a build rule.** A rule cannot ask the
+graph what is in it while that graph is being parsed. That is why this is a
+run target rather than something `plz build` produces, and why the same target
+also writes a file when run by hand — CI wants a file to assert against.
+
+**Third-party crates never go through the query.** They come from the lock,
+which already records where each crate's sources landed, so a crate in a
+subrepo needs no discovery at all. Only first-party crates are found by
+querying, which is why subrepo support is about the query half only.
+
+**Whatever the project names, gets built.** The toolchain, the standard
+library's sources, the proc-macro dylibs: naming a path is not the same as it
+existing, and the difference is silent every time — rust-analyzer degrades and
+reports something unrelated. The tool emits the paths it is about to write and
+the driver builds anything absent, rather than keeping a list of artifact
+kinds that has to stay right.
+
 ## Bootstrap
 
 `//tools/please_rust:please_rust` is self-hosted: built by these rules from
@@ -133,6 +175,19 @@ its own crates in `third_party/crates`: `rust_repo` derives both
 `third_party_path` and the lock label from the package the declarations live
 in, so a plugin only has to put them somewhere its consumers will not. The
 same applies to any plugin declaring crates on a consumer's behalf.
+
+**Plugin names are a second global namespace, separate from subrepo names.**
+A subrepo that declares a plugin its consumer also declares collides, and
+Please stops rather than choosing. It only surfaces when something parses that
+subrepo's own `plugins/` package — rare, but a repo-wide query does exactly
+that. Anything sweeping a subrepo should be able to skip a package that will
+not parse rather than lose the subrepo.
+
+**A nested `plz` does not inherit command-line overrides.** A tool that shells
+out to `plz` runs a fresh invocation, so `plz -o plugin.rust.pleaserusttool:x`
+applies to the outer one only and the inner build silently uses whatever the
+config names. `PLZ_OVERRIDES` in the environment does carry through. Anything
+that must hold across a nested invocation belongs in `.plzconfig`.
 
 ## Status / known gaps
 

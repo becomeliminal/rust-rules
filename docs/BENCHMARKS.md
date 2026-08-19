@@ -22,6 +22,14 @@ Every number is reproducible with `scripts/benchmark.sh`. Medians of 3 runs.
 Machine: AMD Ryzen AI 9 HX 370, 24 threads, linux-amd64.
 Toolchain: rustc 1.97.1 for both sides.
 
+**Measured 2026-08-16, at 8c8110c.** Seventeen commits since then touch how
+much a compile stages or how crates are scheduled — the toolchain was split
+into separate components so a compile no longer stages the whole distribution,
+and rmeta pipelining landed. Both plausibly move the plz column and neither
+touches the cargo one, so treat the ratio as indicative until it is re-run.
+Re-measure with `scripts/benchmark.sh` on an idle machine; the numbers above
+are useless from a loaded one.
+
 ## Reading the numbers honestly
 
 **plz wins the cold build ~1.7x** — and its number *includes* work cargo
