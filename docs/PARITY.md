@@ -468,9 +468,15 @@ binary-link time.
         rustc component's `lib` for `librustc_driver`. An editor uses its own
 
       Not covered, in rough order of how much it would be missed:
-      * **subrepos.** The query is `//...`, which is this repo only. Rust in
-        a plz subrepo is invisible, and a consumer whose crates live in one
-        gets an empty project. Covering them means querying each subrepo and
+      * **first-party crates declared inside a subrepo.** Third-party ones
+        are covered already, and by a different route: `rust_repo` crates
+        reach the file through the lock, which names every crate resolution
+        produced and where its sources landed, so all 196 of them are
+        described without querying anything. The query is only how
+        first-party crates are found, and `//...` is the host repo. A
+        consumer building crates out of a `github_repo` subrepo gets those
+        crates missing while their third-party deps still resolve, and
+        nothing says so. Covering them means querying each subrepo and
         rebasing its paths, since the file is relative to a single root
       * generated sources — the bindgen case above
       * one lock per project file. A repo with several `rust_resolve` targets
