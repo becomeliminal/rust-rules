@@ -48,13 +48,12 @@ pub struct IdeArgs {
     #[arg(long = "first-party", num_args = 0..)]
     pub first_party: Vec<PathBuf>,
 
-    /// Fragments from crates in a subrepo, as `<root module>=<fragment>`.
+    /// Fragments from crates in a subrepo, as `<checkout>=<fragment>`.
     ///
-    /// A fragment describes its root relative to the repo it was declared in,
-    /// which for a subrepo is not the repo the project file sits at the root
-    /// of. plz already reports a subrepo target's inputs relative to the host
-    /// repo, so the caller pairs each fragment with what `plz query input`
-    /// said, and the difference between the two rebases everything else.
+    /// A fragment describes its paths relative to the repo it was declared
+    /// in, which for a subrepo is not the repo the project file sits at the
+    /// root of. The caller pairs each with where that subrepo is checked out,
+    /// and everything in it hangs off that.
     #[arg(long = "subrepo-crate")]
     pub subrepo_crate: Vec<String>,
 
@@ -394,19 +393,19 @@ fn read_fragment(path: &Path) -> Result<FirstParty> {
 /// Move a fragment's paths from the repo it was declared in to the one the
 /// project file sits at the root of.
 ///
-/// `root` is where the crate's root module really is, as plz reports it. The
-/// fragment says where it is within its own repo, so what is in front of that
-/// is the subrepo's checkout, and every other path in the fragment needs it
-/// too.
-fn rebase(fp: &mut FirstParty, root: &str) {
-    let prefix = root
-        .strip_suffix(&fp.root_module)
-        .map(|p| p.to_string())
-        .unwrap_or_default();
-    fp.root_module = root.to_string();
-    if let Some(manifest) = &fp.manifest {
-        fp.manifest = Some(format!("{}{}", prefix, manifest));
-    }
+/// `checkout` is where that subrepo lives, relative to this repo. Every path
+/// the fragment carries is relative to the subrepo, so every one hangs off
+/// it - the root module and the manifest CARGO_PKG_* is read from.
+fn rebase(fp: &mut FirstParty, checkout: &str) {
+    let at = |p: &str| {
+        if checkout.is_empty() {
+            p.to_string()
+        } else {
+            format!("{}/{}", checkout.trim_end_matches('/'), p)
+        }
+    };
+    fp.root_module = at(&fp.root_module);
+    fp.manifest = fp.manifest.as_deref().map(at);
 }
 
 /// The package env a first-party crate compiles with, read from its manifest
@@ -870,7 +869,7 @@ c = ["other/thing"]
             is_proc_macro: false,
             deps: Vec::new(),
         };
-        rebase(&mut fp, "plz-out/subrepos/plugins/rust/greeter/src/lib.rs");
+        rebase(&mut fp, "plz-out/subrepos/plugins/rust");
         assert_eq!(
             fp.root_module,
             "plz-out/subrepos/plugins/rust/greeter/src/lib.rs"
@@ -895,7 +894,7 @@ c = ["other/thing"]
             is_proc_macro: false,
             deps: Vec::new(),
         };
-        rebase(&mut fp, "greeter/src/lib.rs");
+        rebase(&mut fp, "");
         assert_eq!(fp.root_module, "greeter/src/lib.rs");
         assert_eq!(fp.manifest.as_deref(), Some("greeter/Cargo.toml"));
     }

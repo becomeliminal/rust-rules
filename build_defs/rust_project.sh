@@ -120,6 +120,12 @@ while read -r sub target; do
     if [ -n "${target:-}" ]; then
         root=`plz query outputs "$target" 2>/dev/null | head -1` || root=""
     fi
+    # Without knowing where the subrepo is, its paths cannot be rebased and
+    # every crate in it would point at a file that is not there.
+    if [ -z "$root" ]; then
+        echo "$NAME: cannot locate the $sub subrepo, so its crates are not described" >&2
+        continue
+    fi
     # A plugin subrepo that is not a Rust one - the cc, shell or proto rules -
     # has nothing to find, and descending it on a failed parse is pure cost.
     # One find answers it.
@@ -138,12 +144,13 @@ while read -r sub target; do
         # again is every crate here twice.
         case "$frag" in ///*) ;; *) continue ;; esac
         plz build "$frag" >/dev/null 2>&1 || continue
-        # plz reports a subrepo target's inputs relative to *this* repo, which
-        # is the rebasing; the fragment's own root is relative to the subrepo.
-        real=`plz query input "$frag" 2>/dev/null | head -1` || continue
         json=`plz query outputs "$frag" 2>/dev/null | head -1` || continue
-        if [ -n "$real" ] && [ -n "$json" ]; then
-            echo "--subrepo-crate $real=$json" >> "$WORK/subargs"
+        # Everything the fragment names is relative to the subrepo, and $root
+        # is where that subrepo is. plz reports only *this* repo's files as a
+        # target's inputs, so asking it where the source is does not work
+        # across the boundary - but where the subrepo is checked out does.
+        if [ -n "$json" ]; then
+            echo "--subrepo-crate $root=$json" >> "$WORK/subargs"
         fi
     done < "$WORK/frags"
 done < "$WORK/subrepos"
