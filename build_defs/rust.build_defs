@@ -63,7 +63,7 @@ def target_triple(context:str='rust'):
 
 
 def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=None, visibility=None, nightly=False,
-                   architectures:list=[], std_hashes:dict={}):
+                   architectures:list=[], std_hashes:dict={}, src_hash:str=None):
     """Defines rules to fetch a Rust toolchain.
 
     Typically you'd set the name of this rule into rustc_toolchain, either in your .plzconfig
@@ -85,6 +85,9 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
                             listing others here is for cross-compiling part of a repo by hand,
                             and is how a TargetTriple target gets its standard library.
       std_hashes (dict): Hashes for those standard libraries, keyed the same way as architectures.
+      src_hash (str): Hash of the rust-src component, which carries the standard library's own
+                      sources. Only `<name>_sysroot_src` fetches it, and only rust-analyzer
+                      needs that, so a repo not generating a rust-project.json never downloads it.
     """
     # rustc runs on the machine doing the building whatever it is compiling for,
     # so the toolchain is downloaded for the host and cross-compilation is a
@@ -215,6 +218,27 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
         },
         binary = True,
         building_description = 'Extracting...',
+        visibility = visibility,
+    )
+
+    # The standard library's own sources, which rust-analyzer needs for
+    # go-to-definition into std and cannot get from the rlibs. Its own
+    # download and its own target: nothing but `please_rust ide` wants it, so
+    # a repo that never generates a rust-project.json never fetches it. Not
+    # triple-specific, and 8.7MB against the distribution's 800.
+    src_download = remote_file(
+        name = '_%s#src' % name,
+        url = 'https://static.rust-lang.org/dist/rust-src-%s.tar.gz' % version,
+        hashes = [src_hash] if src_hash else None,
+    )
+    build_rule(
+        name = '%s_sysroot_src' % name,
+        srcs = [src_download],
+        outs = ['rust-src'],
+        # rust-analyzer wants the `library` directory itself, which is what
+        # sysroot_src names in a rust-project.json.
+        cmd = 'tar -xzf $SRCS && mv rust-src-%s/rust-src/lib/rustlib/src/rust/library $OUT' % version,
+        output_is_complete = True,
         visibility = visibility,
     )
 

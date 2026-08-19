@@ -16,6 +16,7 @@ rust_toolchain(
         "darwin_arm64": "27b3da11e1adefeba0213aff73587acf0bf50641c774f09103fb7b29a341ed5d",
         "wasm32-unknown-unknown": "13902d5573eeea50701d75acc774b6df2dfb4942ec88cdbe40bb07e448c307ea",
     },
+    src_hash = "59f02b4f23fd8d7193a3cb17ea192255ccf02f1109783d7988521334891d27ae",
     version = "1.97.1",
     visibility = ["PUBLIC"],
 )
