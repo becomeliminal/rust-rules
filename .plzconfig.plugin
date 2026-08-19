@@ -17,26 +17,6 @@ Help = A file path or build label for a rust stdlib.
 Inherit = true
 Optional = true
 
-[PluginConfig "proto_plugin"]
-ConfigKey = ProtoPlugin
-DefaultValue = ///third_party/rust/protoc_gen_prost//:protoc_gen_prost_bin
-Inherit = true
-
-[PluginConfig "grpc_plugin"]
-ConfigKey = GrpcPlugin
-DefaultValue = ///third_party/rust/protoc_gen_tonic//:protoc_gen_tonic_bin
-Inherit = true
-
-[PluginConfig "proto_dep"]
-ConfigKey = ProtoDep
-DefaultValue = //third_party/rust:prost
-Inherit = true
-
-[PluginConfig "grpc_dep"]
-ConfigKey = GrpcDep
-DefaultValue = //third_party/rust:tonic
-Inherit = true
-
 [PluginConfig "please_rust_tool"]
 ConfigKey = PleaseRustTool
 DefaultValue = //tools/please_rust:please_rust_release
