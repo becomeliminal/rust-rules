@@ -926,7 +926,7 @@
     },
     {
       "display_name": "bindgen_cli",
-      "root_module": "plz-out/gen/third_party/crates/bindgen_cli/src/lib.rs",
+      "root_module": "plz-out/gen/third_party/crates/bindgen_cli/main.rs",
       "edition": "2021",
       "deps": [
         {

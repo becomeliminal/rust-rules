@@ -835,11 +835,16 @@ fn emit_entry(
             _ => "2021",
         }
         .to_string(),
+        // A crate with no [lib] is not a crate with a lib at the default
+        // path: bindgen-cli ships main.rs and no src/ at all, and recording
+        // src/lib.rs for it puts a path in the project file that building the
+        // crate cannot produce. Its binary is the thing to point at.
         root_module: n
             .manifest
             .lib
             .as_ref()
             .and_then(|l| l.path.clone())
+            .or_else(|| n.manifest.bin.iter().find_map(|b| b.path.clone()))
             .unwrap_or_else(|| "src/lib.rs".to_string()),
         is_proc_macro: n.is_proc_macro,
         // Set by the caller, which is what knows whether this is the entry's
@@ -1012,6 +1017,34 @@ mod tests {
         assert_eq!(lock.crates["app"].edition, "2021");
         assert!(!lock.crates["app"].is_proc_macro);
         assert!(lock.crates["mac"].is_proc_macro, "a proc macro says so");
+    }
+
+    /// A crate with no [lib] is not a crate with a lib at the default path.
+    /// bindgen-cli ships main.rs and no src/ at all, so recording src/lib.rs
+    /// put a path in the generated project file that building the crate could
+    /// never produce - reported on every run, forever.
+    #[test]
+    fn a_binary_only_crate_roots_at_its_binary() {
+        let manifest = parse_manifest(
+            br#"
+[package]
+name = "bindgen-cli"
+version = "0.71.1"
+
+[[bin]]
+name = "bindgen"
+path = "main.rs"
+"#,
+        )
+        .unwrap();
+        assert!(manifest.lib.is_none());
+        let root = manifest
+            .lib
+            .as_ref()
+            .and_then(|l| l.path.clone())
+            .or_else(|| manifest.bin.iter().find_map(|b| b.path.clone()))
+            .unwrap_or_else(|| "src/lib.rs".to_string());
+        assert_eq!(root, "main.rs");
     }
 
     /// A build script runs on the machine doing the building, so a crate
