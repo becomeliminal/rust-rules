@@ -263,25 +263,31 @@ SomeConfig = some-value
 ```
 The available configuration options are:
 
-`rust_toolchain` is one target, and each tool it provides is an entry point
-of it:
+`rust_toolchain` extracts the distribution once and then lifts each piece a
+build actually uses into a target of its own:
 
 ```ini
 [Plugin "rust"]
-Rustc   = //third_party/rust:toolchain|rustc
-StdLib  = //third_party/rust:toolchain|stdlib
-Sysroot = //third_party/rust:toolchain|sysroot
+Rustc   = //third_party/rust:toolchain_rustc|rustc
+Sysroot = //third_party/rust:toolchain_sysroot
 ```
 
-`|rustdoc`, `|cargo`, `|clippy`, `|rustfmt`, `|llvm-tools`, `|llvm-cov` and
-`|llvm-profdata` are available the same way, and are derived from `Rustc`
-unless you set them, so most repos configure nothing beyond the three above.
+`|rustdoc`, `|clippy` and `|rustfmt` sit on `toolchain_rustc` beside `|rustc`
+and are derived from `Rustc` unless you set them, so most repos configure
+nothing beyond the two above. `CargoTool` and `LlvmTools` name
+`toolchain_cargo` and `toolchain_llvm_tools`; only the from-source bootstrap
+uses the first and only `plz cover` the second, so nothing that compiles Rust
+stages either.
 
-Keeping the toolchain in one output is deliberate rather than tidy: rustc,
-rustdoc and the llvm tools each load a library from beside their own binary,
-and exposing them as separate targets let a build stage a binary without it.
-That works locally, where the whole toolchain is present, and fails on a
-remote worker, which stages only what an action names.
+Two things shape that layout, both learned from remote execution. A binary
+and the libraries beside it never separate - rustc resolves
+`librustc_driver` through `../lib` relative to itself, so `toolchain_rustc`
+holds `bin` and `lib` together and splitting them produces a compiler that
+cannot start on a worker. And a non-empty directory cannot be an entry point
+at all: Please validates entry points by membership in the flattened action
+outputs, and a directory's own path is never a key there, so a sysroot has to
+be a whole output rather than a path inside one. Locally both mistakes are
+invisible, because the whole tree is already on disk.
 
 ### Cross-compilation
 `plz build --arch darwin_arm64 //...` compiles for another platform.

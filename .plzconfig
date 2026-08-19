@@ -16,7 +16,6 @@ PleaseRustTool = //tools/please_rust:bootstrap
 CriterionDep = //third_party/crates:criterion
 BindgenTool = ///third_party/crates/bindgen_cli//:bindgen_bin
 Rustc = //third_party/rust:toolchain_rustc|rustc
-StdLib = //third_party/rust:toolchain_stdlib
 ; Exercise the pipelined shape in this repo; consumers default to off
 PipelinedCompilation = true
 

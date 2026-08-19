@@ -133,18 +133,25 @@ whatever `--arch` says, since they run during the build. That is cargo's
 split too, and it is why a repo can cross-compile even though its build
 scripts execute.
 
-## Upgrading from separate toolchain targets
+## Upgrading toolchain config
 
-Before 0.5.0 the toolchain was eight sibling targets. Two lines of config:
+The toolchain layout has moved twice. Before 0.5.0 it was eight sibling
+targets; 0.5.0 collapsed them into one output with entry points; 0.6.3 split
+out the pieces a build actually uses again, for reasons remote execution
+made unavoidable. If you set these explicitly:
 
 ```ini
-Rustc   = //third_party/rust:toolchain_rustc    ->  //third_party/rust:toolchain|rustc
-Sysroot = //third_party/rust:toolchain_sysroot  ->  //third_party/rust:toolchain|sysroot
+Rustc      = //third_party/rust:toolchain|rustc   ->  //third_party/rust:toolchain_rustc|rustc
+Sysroot    = //third_party/rust:toolchain|sysroot ->  //third_party/rust:toolchain_sysroot
+LlvmTools  = //third_party/rust:toolchain|llvm-tools -> //third_party/rust:toolchain_llvm_tools
+CargoTool  = (derived from Rustc)                 ->  //third_party/rust:toolchain_cargo|cargo
 ```
 
-`StdLib`, `LlvmTools`, `ClippyTool` and `RustfmtTool` follow the same
-pattern if you set them; `RustcLib` and `LlvmToolsLib` are gone, as the
-separation they compensated for no longer exists.
+`ClippyTool` and `RustfmtTool` stay entry points and move with `Rustc` onto
+`toolchain_rustc`. `StdLib` is gone with the `rust_crate` rules it served;
+`RustcLib` and `LlvmToolsLib` went in 0.5.0.
+
+Nothing here needs setting in a normal repo - the defaults name all of it.
 
 ## Reporting something not listed here
 

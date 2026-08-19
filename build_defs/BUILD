@@ -1,28 +1,14 @@
+# Both names resolve to the same file. `rust_repo` is a documented subinclude
+# target that consumers write, so it keeps working; go-rules keeps `go` and
+# `cgo` separate for the same reason - the label is the API, not the layout.
 filegroup(
     name = "rust",
-    srcs = [
-        "rust_toolchain.build_defs",
-        "rust.build_defs",
-        "rust_crate.build_defs",
-        "rust_repo.build_defs",
-    ],
-    visibility = ["PUBLIC"],
-)
-
-filegroup(
-    name = "triples",
-    srcs = ["rust_toolchain.build_defs"],
+    srcs = ["rust.build_defs"],
     visibility = ["PUBLIC"],
 )
 
 filegroup(
     name = "rust_repo",
-    # rust_toolchain.build_defs holds the triple helpers rust_repo calls, and
-    # this filegroup is a subinclude target in its own right.
-    srcs = [
-        "rust_toolchain.build_defs",
-        "rust_repo.build_defs",
-    ],
+    srcs = ["rust.build_defs"],
     visibility = ["PUBLIC"],
 )
-
