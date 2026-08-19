@@ -271,7 +271,13 @@ pub fn run(args: GenerateArgs) -> Result<()> {
     // platform they run on, since what they emit describes the artifacts;
     // compiles only need naming when it is not the host's.
     let build_target = args.compile_target.clone().unwrap_or_else(|| args.target.clone());
-    let cross = args.compile_target.is_some();
+    // A host unit is never cross-compiled: it runs during the build, on the
+    // machine doing the building, so naming a target would produce something
+    // that cannot execute. The _host twin below passes false for the same
+    // reason; this covers crates that have no twin because the host unit is
+    // the only one they have.
+    let host_unit = lock_entry.as_ref().map_or(false, |e| e.host);
+    let cross = args.compile_target.is_some() && !host_unit;
 
     // Externconfig keys carry which declaration produced them. Two versions of
     // one crate both answer to the same crate name, so a dependent asking for
@@ -2035,6 +2041,7 @@ mod run_tests {
                 }],
                 build_deps: vec![],
                 links: None,
+                host: false,
             },
         );
         let mut host_crates = BTreeMap::new();
@@ -2048,6 +2055,7 @@ mod run_tests {
                     deps: vec![],
                     build_deps: vec![],
                     links: None,
+                    host: false,
                 },
             );
         }

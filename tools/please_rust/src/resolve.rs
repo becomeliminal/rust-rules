@@ -78,6 +78,12 @@ pub struct LockEntry {
     /// to direct dependents as DEP_<LINKS>_<KEY> env vars
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub links: Option<String>,
+    /// This entry is a host unit: a proc macro, or a crate reached only as a
+    /// build dependency. It runs on the machine doing the building, so it is
+    /// compiled for the host triple however the rest of the graph is
+    /// targeted. Absent means the target unit, which is almost everything.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub host: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -323,11 +329,19 @@ pub fn resolve_entries(entries: &[EntryInput], target: &str) -> Result<LockFile>
     // - active in both with identical features -> crates (shared artifact;
     //   valid while host triple == target triple)
     // - active in both with different features -> crates + host_crates
+    //
+    // Cross-compiling, that third case stops holding: identical features do
+    // not make a darwin rlib usable by a build script running on linux. So
+    // when the triples differ, anything reached both ways is dual on those
+    // grounds alone. Resolve runs on the host, so its own triple is the host
+    // triple by definition and native builds are unaffected.
+    let cross = target != crate::build_script::running_triple();
     let mut dual: BTreeSet<usize> = BTreeSet::new();
     for (i, n) in nodes.iter().enumerate() {
         if n.unit(Unit::Target).activated
             && n.unit(Unit::Host).activated
-            && n.unit(Unit::Target).enabled_features != n.unit(Unit::Host).enabled_features
+            && (cross
+                || n.unit(Unit::Target).enabled_features != n.unit(Unit::Host).enabled_features)
         {
             dual.insert(i);
         }
@@ -378,10 +392,12 @@ pub fn resolve_entries(entries: &[EntryInput], target: &str) -> Result<LockFile>
             continue;
         }
         let primary_unit = if target_active { Unit::Target } else { Unit::Host };
-        crates.insert(
-            n.subrepo.clone(),
-            emit_entry(n, primary_unit, &nodes, &resolver, &dual, &mut missing)?,
-        );
+        let mut entry = emit_entry(n, primary_unit, &nodes, &resolver, &dual, &mut missing)?;
+        // Nothing else records this: a pure build dependency is emitted under
+        // its own name with no _host twin, so without the flag generation has
+        // no way to know it must not be built for the target.
+        entry.host = primary_unit == Unit::Host;
+        crates.insert(n.subrepo.clone(), entry);
         if dual.contains(&i) {
             host_crates.insert(
                 n.subrepo.clone(),
@@ -774,6 +790,9 @@ fn emit_entry(
         deps,
         build_deps,
         links: n.manifest.package.as_ref().and_then(|p| p.links.clone()),
+        // Set by the caller, which is what knows whether this is the entry's
+        // primary unit or its _host twin.
+        host: false,
     })
 }
 
@@ -896,8 +915,72 @@ mod tests {
         }
 
         fn resolve(&self) -> LockFile {
-            resolve_entries(&self.entries, "x86_64-unknown-linux-gnu").unwrap()
+            resolve_entries(&self.entries, &crate::build_script::running_triple()).unwrap()
         }
+
+        fn resolve_for(&self, target: &str) -> LockFile {
+            resolve_entries(&self.entries, target).unwrap()
+        }
+    }
+
+    /// A triple this machine is not, so `resolve_for` genuinely cross-
+    /// compiles wherever the suite runs. Hardcoding one would silently stop
+    /// testing anything on the platform it names.
+    fn foreign_triple() -> &'static str {
+        if crate::build_script::running_triple().contains("apple") {
+            "x86_64-unknown-linux-gnu"
+        } else {
+            "aarch64-apple-darwin"
+        }
+    }
+
+    /// A build script runs on the machine doing the building, so a crate
+    /// reached only as a build dependency is a host unit and must be compiled
+    /// for the host triple however the rest of the graph is targeted. Nothing
+    /// else records that: such a crate is emitted under its own name with no
+    /// _host twin, so without the flag generation has no way to know, and
+    /// cross-compiling produced a build script whose own dependency was built
+    /// for the wrong platform - rustc reports E0461.
+    #[test]
+    fn a_build_only_dependency_is_a_host_unit() {
+        let mut g = Graph::new("build_only_host");
+        g.krate("app", "app", "1.0.0", "[build-dependencies]\nhelper = \"1\"\n")
+            .krate("helper", "helper", "1.0.0", "")
+            .root("app", &[], true);
+        let lock = g.resolve();
+        assert!(lock.crates["helper"].host, "a pure build dep is a host unit");
+        assert!(!lock.crates["app"].host, "the crate being built is not");
+    }
+
+    /// Sharing one artifact between the host and target units is sound only
+    /// while the two triples are the same. Identical features do not make a
+    /// darwin rlib usable by a build script running on linux, so cross-
+    /// compiling has to split what a native build may share.
+    #[test]
+    fn cross_compiling_splits_an_artifact_a_native_build_shares() {
+        let mut g = Graph::new("cross_split");
+        g.krate(
+            "app",
+            "app",
+            "1.0.0",
+            "[dependencies]\nshared = \"1\"\n\n[build-dependencies]\nshared = \"1\"\n",
+        )
+        .krate("shared", "shared", "1.0.0", "")
+        .root("app", &[], true);
+
+        // Same features in both units, so natively one artifact serves both.
+        let native = g.resolve();
+        assert!(
+            !native.host_crates.contains_key("shared"),
+            "native build should share the artifact, got {:?}",
+            native.host_crates.keys().collect::<Vec<_>>()
+        );
+
+        let cross = g.resolve_for(foreign_triple());
+        assert!(
+            cross.host_crates.contains_key("shared"),
+            "cross-compiling must emit a host unit of its own"
+        );
     }
 
     fn features(lock: &LockFile, subrepo: &str) -> Vec<String> {

@@ -1382,8 +1382,8 @@ rust_resolve(
         "log|log|0.4.33||false|true",
         "priority_queue|priority-queue|2.7.0||false|true",
         "pubgrub|pubgrub|0.4.0||true|true",
-        "syn|syn|3.0.3||false|true",
-        "thiserror|thiserror|2.0.20||false|true",
+        "syn|syn|3.0.3||true|true",
+        "thiserror|thiserror|2.0.20||true|true",
         "thiserror_impl|thiserror-impl|2.0.20||false|true",
         "version_ranges|version-ranges|0.1.3||false|true",
         "base64-0.12.3|base64|0.12.3||true|true",
@@ -1564,7 +1564,6 @@ rust_repo(
     crate = "syn",
     version = "3.0.3",
     hashes = ["53e9bae58849f64dfa4f5d5ae372c8341f7305f82a3868709269343628b659a3"],
-    indirect = True,
 )
 
 rust_repo(
@@ -1572,7 +1571,6 @@ rust_repo(
     crate = "thiserror",
     version = "2.0.20",
     hashes = ["ec86235f5fcc2a73650310756d2ac5b138a5780bbbdfae3eeccec992c435ba4f"],
-    indirect = True,
 )
 
 rust_repo(
