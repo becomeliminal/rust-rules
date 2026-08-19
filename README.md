@@ -463,14 +463,20 @@ and point your editor at it, once:
 "rust-analyzer.workspace.discoverConfig": {
     "command": ["plz", "run", "-p", "-v", "error", "//:rust-project", "--", "--discover", "{arg}"],
     "progressLabel": "rust-rules",
-    "filesToWatch": ["**/BUILD", ".plzconfig"]
+    "filesToWatch": ["BUILD", ".plzconfig"]
 }
 ```
 
 That is the whole setup. rust-analyzer runs the command when it opens the
-project and runs it again whenever a watched file changes, so **a crate added
-anywhere appears without anyone running anything**. There is no list of crates
-to maintain and no generated file to keep in step.
+project, and again when a watched file changes. There is no list of crates to
+maintain and no generated file to keep in step.
+
+`filesToWatch` entries are globs relative to the repo root, so `BUILD` is the
+root build file only. Widening it to `**/BUILD` also matches the generated
+build file of every crate under `plz-out` — 1187 of them against 10 real ones
+in one repo here — so a build rewrites hundreds of watched files at once.
+After adding a crate in a subdirectory, re-run discovery yourself: *rust-
+analyzer: Restart Server*, or `plz run //:rust-project`.
 
 It finds every `rust_library`, `rust_binary` and `rust_test` in the repo, joins
 them to the third-party crates in the lock, builds what it is about to name —
