@@ -3,6 +3,8 @@
 This implements the subrepo architecture for Rust, similar to go_repo in go-rules.
 """
 
+subinclude("///rust//build_defs:triples")
+
 def rust_crate_download(name:str, crate:str, version:str, hashes:list=None, labels:list=[], visibility:list=None):
     """Downloads a crate from crates.io.
 
@@ -66,13 +68,7 @@ def build_triple():
     the darwin graph rather than a checked-in linux one, and a cross-compile
     must resolve the graph of the platform it is producing rather than the one
     it is running on. Without --arch these are the same machine."""
-    oses = {'linux': 'unknown-linux-gnu', 'darwin': 'apple-darwin'}
-    arches = {'amd64': 'x86_64', 'x86': 'i686', 'arm64': 'aarch64', 'arm': 'arm'}
-    os = oses.get(CONFIG.TARGET_OS, '')
-    arch = arches.get(CONFIG.TARGET_ARCH, '')
-    if not os or not arch:
-        raise ParseError('Unsupported platform %s/%s; pass target explicitly to rust_resolve' % (CONFIG.TARGET_OS, CONFIG.TARGET_ARCH))
-    return '%s-%s' % (arch, os)
+    return target_triple('rust_resolve')
 
 
 def _subrepo_ref(value:str):

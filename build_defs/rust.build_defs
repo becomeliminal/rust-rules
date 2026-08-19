@@ -9,6 +9,8 @@ an on-disk path and passes `--extern name=path` to rustc. This makes first-party
 rules and rust_repo subrepo crates freely interoperable in either direction.
 """
 
+subinclude("///rust//build_defs:triples")
+
 def _rustdoc_tools():
     """Tools for rustdoc actions. rustdoc is an entry point of the same
     toolchain target as rustc, so it arrives with the libraries it loads."""
@@ -29,18 +31,17 @@ def target_flag(crate_type:str=''):
 
     Proc macros are loaded into rustc itself, so they are compiled for the
     host even when everything around them is not. Cargo does the same.
+
+    Comparing triples rather than os_arch pairs so that `TargetTriple` set to
+    the host's own triple produces exactly what deriving it does - which is
+    the property the test for it asserts.
     """
-    if CONFIG.TARGET_OS == CONFIG.HOSTOS and CONFIG.TARGET_ARCH == CONFIG.HOSTARCH:
-        return ''
     if crate_type == 'proc-macro':
         return ''
-    oses = {'linux': 'unknown-linux-gnu', 'darwin': 'apple-darwin'}
-    arches = {'amd64': 'x86_64', 'x86': 'i686', 'arm64': 'aarch64', 'arm': 'arm'}
-    os = oses.get(CONFIG.TARGET_OS, '')
-    arch = arches.get(CONFIG.TARGET_ARCH, '')
-    if not os or not arch:
-        raise ParseError('Cannot cross-compile Rust to %s_%s' % (CONFIG.TARGET_OS, CONFIG.TARGET_ARCH))
-    return '--target %s-%s ' % (arch, os)
+    target = target_triple('rust_library')
+    if target == host_triple():
+        return ''
+    return '--target %s ' % target
 
 
 def _dylib_ext(host:bool=False):

@@ -151,6 +151,13 @@ Optional = true
 Help = rustc -C lto for the opt config (thin, fat, off). Empty leaves rustc's default.
 Inherit = true
 
+[PluginConfig "target_triple"]
+ConfigKey = TargetTriple
+DefaultValue = 
+Optional = true
+Help = The Rust target triple to build for, named verbatim instead of derived from --arch. Please's os_arch pair cannot express wasm32-unknown-unknown, sbf-solana-solana or any musl target, and those fail at parse time without this. Empty derives the triple from --arch as before.
+Inherit = true
+
 [PluginConfig "build_script_jobs"]
 ConfigKey = BuildScriptJobs
 DefaultValue = 

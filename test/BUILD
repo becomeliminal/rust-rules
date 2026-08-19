@@ -5,6 +5,9 @@ exports = [
     "//:config",
     "//build_defs:rust",
     "//build_defs:rust_repo",
+    # rust.build_defs and rust_repo.build_defs subinclude this for the triple
+    # helpers, so it has to ship even though nobody names it directly.
+    "//build_defs:triples",
 ]
 
 genrule(

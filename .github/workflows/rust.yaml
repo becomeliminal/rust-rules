@@ -30,6 +30,21 @@ jobs:
       # Not //third_party/crates:all: three binaries and blake3's NEON C
       # cannot cross without a macOS SDK and a cross C toolchain, which is the
       # CCTool gap rather than this one.
+      # TargetTriple names a triple verbatim, for the ones Please's os_arch
+      # pair cannot express. Set to the host's own triple it must produce
+      # exactly what deriving it produces, or it is not an escape hatch, it
+      # is a second code path.
+      - name: Explicit target triple matches the derived one
+        run: |
+          ./pleasew query print '//examples/package:_math#link' > /tmp/derived.txt
+          ./pleasew query print -o plugin.rust.targettriple:x86_64-unknown-linux-gnu \
+            '//examples/package:_math#link' > /tmp/explicit.txt
+          test -s /tmp/derived.txt || { echo "query produced nothing"; exit 1; }
+          diff /tmp/derived.txt /tmp/explicit.txt
+          # And a triple that has no os_arch pair reaches rustc at all.
+          ./pleasew query print -o plugin.rust.targettriple:wasm32-unknown-unknown \
+            '//examples/package:_math#link' | grep -q -- '--target wasm32-unknown-unknown'
+
       - name: Cross-compile third-party crates
         run: |
           ./pleasew build -p -v notice --arch darwin_arm64 \

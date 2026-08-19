@@ -27,6 +27,29 @@ def rust_triple(plz_os:str, plz_arch:str, context:str='rust_toolchain'):
     return '%s-%s' % (arch, os)
 
 
+def host_triple():
+    """The triple of the machine doing the building."""
+    return rust_triple(CONFIG.HOSTOS, CONFIG.HOSTARCH, 'rust_toolchain')
+
+
+def target_triple(context:str='rust'):
+    """The triple being built for.
+
+    Normally derived from what `--arch` names, the same way rust_toolchain
+    derives its download URL. But Please's model is an os_arch pair, and Rust
+    has targets that pair cannot express: `wasm32-unknown-unknown` is neither
+    an OS nor an architecture Please knows, `sbf-solana-solana` is neither,
+    and a musl target needs a libc dimension Please does not have at all.
+    Those used to fail at parse time, before anything could build.
+
+    `TargetTriple` names one verbatim and skips the derivation. Unset, this is
+    exactly what the two hardcoded copies of the os/arch tables did before.
+    """
+    if CONFIG.RUST.TARGET_TRIPLE:
+        return CONFIG.RUST.TARGET_TRIPLE
+    return rust_triple(CONFIG.TARGET_OS, CONFIG.TARGET_ARCH, context)
+
+
 def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=None, visibility=None, nightly=False,
                    architectures:list=[], std_hashes:dict={}):
     """Defines rules to fetch a Rust toolchain.
