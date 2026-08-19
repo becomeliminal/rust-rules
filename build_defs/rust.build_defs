@@ -476,7 +476,7 @@ def rust_test(name:str, root:str, modules:list=None, deps:list=[], cc_deps:list=
     # Only `plz cover` needs the llvm tools (llvm-profdata / llvm-cov), so
     # gate the dependency on the build config like go-rules does.
     if CONFIG.BUILD_CONFIG == 'cover':
-        test_cmd = f'$TOOLS_PLEASE_RUST test --suite {name} --coverage --llvm-tools $TOOLS_LLVM -- $TEST'
+        test_cmd = f'$TOOLS_PLEASE_RUST test --suite {name} --coverage --llvm-tools $TOOLS_LLVM/bin -- $TEST'
         test_tools['llvm'] = [CONFIG.RUST.LLVM_TOOLS]
 
     # plz excludes a test target's own srcs from coverage reports, but Rust

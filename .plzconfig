@@ -16,7 +16,7 @@ PleaseRustTool = //tools/please_rust:bootstrap
 CriterionDep = //third_party/crates:criterion
 BindgenTool = ///third_party/crates/bindgen_cli//:bindgen_bin
 Rustc = //third_party/rust:toolchain|rustc
-StdLib = //third_party/rust:toolchain|stdlib
+StdLib = //third_party/rust:toolchain_stdlib
 ; Exercise the pipelined shape in this repo; consumers default to off
 PipelinedCompilation = true
 
@@ -40,7 +40,7 @@ Help = A file path or build label for rustc.
 Inherit = true
 
 [PluginConfig "stdlib"]
-DefaultValue = //third_party/rust:toolchain|stdlib
+DefaultValue = //third_party/rust:toolchain_stdlib
 Help = A file path or build label for a rust stdlib.
 Inherit = true
 Optional = true
@@ -72,7 +72,7 @@ Inherit = true
 
 [PluginConfig "sysroot"]
 ConfigKey = Sysroot
-DefaultValue = //third_party/rust:toolchain|sysroot
+DefaultValue = //third_party/rust:toolchain_sysroot
 Help = A build label for the Rust sysroot (contains lib/rustlib/...).
 Inherit = true
 
@@ -96,8 +96,8 @@ PleaseVersion = 17.27.0
 
 [PluginConfig "llvm_tools"]
 ConfigKey = LlvmTools
-DefaultValue = //third_party/rust:toolchain|llvm-tools
-Help = Build label of the llvm-tools directory (llvm-profdata, llvm-cov) used for coverage.
+DefaultValue = //third_party/rust:toolchain_llvm_tools
+Help = Build label of a directory holding the llvm tools as bin/ and lib/ (llvm-cov resolves libLLVM through ../lib). Used only by plz cover.
 Inherit = true
 
 ; plz only aggregates coverage for known file extensions; .rs is not in its

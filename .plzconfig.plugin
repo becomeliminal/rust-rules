@@ -12,7 +12,7 @@ Help = A file path or build label for rustc.
 Inherit = true
 
 [PluginConfig "stdlib"]
-DefaultValue = //third_party/rust:toolchain|stdlib
+DefaultValue = //third_party/rust:toolchain_stdlib
 Help = A file path or build label for a rust stdlib.
 Inherit = true
 Optional = true
@@ -45,7 +45,7 @@ Inherit = true
 
 [PluginConfig "sysroot"]
 ConfigKey = Sysroot
-DefaultValue = //third_party/rust:toolchain|sysroot
+DefaultValue = //third_party/rust:toolchain_sysroot
 Help = A build label for the Rust sysroot (contains lib/rustlib/...).
 Inherit = true
 
@@ -65,8 +65,8 @@ Inherit = true
 
 [PluginConfig "llvm_tools"]
 ConfigKey = LlvmTools
-DefaultValue = //third_party/rust:toolchain|llvm-tools
-Help = Build label of the llvm-tools directory (llvm-profdata, llvm-cov) used for coverage.
+DefaultValue = //third_party/rust:toolchain_llvm_tools
+Help = Build label of a directory holding the llvm tools as bin/ and lib/ (llvm-cov resolves libLLVM through ../lib). Used only by plz cover.
 Inherit = true
 
 [PluginConfig "pipelined_compilation"]

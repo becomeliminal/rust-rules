@@ -134,20 +134,29 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
         'rm -rf $OUT/rustc/share/doc',
     ] + std_cmds
 
-    return build_rule(
+    toolchain = build_rule(
         name = name,
         srcs = {'dist': [download_rule], 'std': std_rules},
         outs = [name],
         cmd = ' && '.join(cmds),
+        # Files only. A non-empty directory cannot be an entry point under
+        # remote execution: plz validates every declared entry point by
+        # membership in the flattened action outputs, and flattening keys
+        # files, symlinks and empty directories - a non-empty directory's own
+        # path is never a key, so the check cannot succeed. Locally plz stats
+        # the path and a directory stats fine, which is why this is invisible
+        # until a worker runs it.
+        #
+        # A whole output that *is* the directory works, which is what the
+        # sysroot rule below is. Note the check runs over every declared entry
+        # point whether or not anything uses it, so a directory entry point
+        # left here for compatibility would keep failing the target.
         entry_points = {
             'rustc': '%s/rustc/bin/rustc' % name,
             'rustdoc': '%s/rustc/bin/rustdoc' % name,
             'clippy': '%s/rustc/bin/clippy-driver' % name,
             'rustfmt': '%s/rustc/bin/rustfmt' % name,
             'cargo': '%s/cargo/bin/cargo' % name,
-            'sysroot': sysroot,
-            'stdlib': '%s/lib/rustlib/%s/lib' % (sysroot, triple),
-            'llvm-tools': llvm_bin,
             'llvm-cov': '%s/llvm-cov' % llvm_bin,
             'llvm-profdata': '%s/llvm-profdata' % llvm_bin,
         },
@@ -155,3 +164,42 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
         building_description = 'Extracting...',
         visibility = visibility,
     )
+
+    # rustc wants a directory, so the directory is the whole output. Splitting
+    # it out is safe in a way that splitting rustc is not: a sysroot is rlibs
+    # and rmeta, with no binary resolving its libraries through ../lib.
+    build_rule(
+        name = '%s_sysroot' % name,
+        srcs = [toolchain],
+        outs = ['rust-std-%s' % triple],
+        cmd = 'mv $SRCS/rust-std-%s $OUT' % triple,
+        # Without this a consumer inherits the toolchain behind it, which is
+        # the whole point of splitting it out.
+        output_is_complete = True,
+        visibility = visibility,
+    )
+
+    # Only the legacy rust_crate path consumes this; kept so setting StdLib
+    # still resolves.
+    build_rule(
+        name = '%s_stdlib' % name,
+        srcs = [toolchain],
+        outs = ['stdlib'],
+        cmd = 'mv $SRCS/rust-std-{t}/lib/rustlib/{t}/lib $OUT'.format(t = triple),
+        output_is_complete = True,
+        visibility = visibility,
+    )
+
+    # bin and lib together, because llvm-cov resolves libLLVM through
+    # $ORIGIN/../lib: an output of the bin directory alone would stage a binary
+    # that cannot start. Consumers point the coverage tools at its bin subdir.
+    build_rule(
+        name = '%s_llvm_tools' % name,
+        srcs = [toolchain],
+        outs = ['llvm-tools'],
+        cmd = 'mv $SRCS/llvm-tools-preview/lib/rustlib/%s $OUT' % triple,
+        output_is_complete = True,
+        visibility = visibility,
+    )
+
+    return toolchain
