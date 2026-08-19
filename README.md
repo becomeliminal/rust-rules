@@ -309,6 +309,34 @@ unit graph the same way. Libraries need nothing further. Linking an
 executable for another platform also needs a linker that targets it, which
 comes from `CCTool`.
 
+`--arch` is an os/arch pair, and some targets are not expressible as one:
+`wasm32-unknown-unknown` has no operating system, and musl and Solana's
+`sbf-solana-solana` are neither. `TargetTriple` names the triple verbatim
+instead:
+
+```ini
+[Plugin "rust"]
+TargetTriple = wasm32-unknown-unknown
+```
+
+Set it and every compile passes that `--target`, whatever `--arch` says;
+leave it empty and the triple is derived from `--arch` as before. The
+standard library still has to be there, which `rust_toolchain` handles —
+`architectures` accepts a raw triple as readily as an os/arch pair:
+
+```python
+rust_toolchain(
+    name = "toolchain",
+    version = "1.97.1",
+    architectures = ["wasm32-unknown-unknown"],
+    std_hashes = {"wasm32-unknown-unknown": "<hash>"},
+)
+```
+
+A triple set this way is checked against the host's to decide whether a
+build is cross-compiling at all, so setting it to the triple you are already
+on is a no-op rather than a second code path.
+
 ### DefaultStatic
 Binaries statically link the C runtime by default, producing self-contained
 executables like Go's. Set to false to default to dynamic linking; either
@@ -325,6 +353,36 @@ plugin's default.
 ```ini
 [Plugin "rust"]
 CCTool = //third_party/cc:toolchain
+```
+
+### Tool overrides
+The other tools the rules drive each take a build label. Every one defaults
+to the toolchain you already configured, so a normal repo sets none of them:
+
+```ini
+[Plugin "rust"]
+ClippyTool   = //third_party/rust:toolchain_rustc|clippy
+RustfmtTool  = //third_party/rust:toolchain_rustc|rustfmt
+BindgenTool  = //third_party/crates:bindgen_cli
+CriterionDep = //third_party/crates:criterion
+```
+
+`ClippyTool` and `RustfmtTool` are entry points on the rustc component and
+follow `Rustc` unless you set them, so moving the toolchain moves them too.
+`BindgenTool` is the `bindgen` binary `rust_bindgen` runs — declared as an
+ordinary crate and built by these rules, so the tool generating your
+bindings is in your build graph rather than on your PATH. `CriterionDep` is
+the crate `rust_benchmark` links against.
+
+### LocalSubrepos
+Crate downloads and BUILD generation run locally rather than on a remote
+worker. They fetch a tarball and write text, so there is little to gain
+remotely, and Please crashes reading a remote subrepo's config when its tree
+is not in the remote cache. Set false if you would rather it went out:
+
+```ini
+[Plugin "rust"]
+LocalSubrepos = false
 ```
 
 ### PleaseRustTool
@@ -405,7 +463,7 @@ and point your editor at it, once:
 "rust-analyzer.workspace.discoverConfig": {
     "command": ["plz", "run", "-p", "-v", "error", "//:rust-project", "--", "--discover", "{arg}"],
     "progressLabel": "rust-rules",
-    "filesToWatch": ["BUILD", ".plzconfig"]
+    "filesToWatch": ["**/BUILD", ".plzconfig"]
 }
 ```
 
