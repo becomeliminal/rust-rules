@@ -42,9 +42,45 @@ pub struct IdeArgs {
     #[arg(long)]
     pub sysroot_src: Option<PathBuf>,
 
+    /// Per-crate JSON emitted by first-party rules. Those rules live only in
+    /// plz's parser - nothing in this tool ever sees a rust_library - so each
+    /// one writes what it knows and this merges them.
+    #[arg(long = "first-party", num_args = 0..)]
+    pub first_party: Vec<PathBuf>,
+
     /// Where to write the project file
     #[arg(long, default_value = "rust-project.json")]
     pub output: PathBuf,
+}
+
+/// What a first-party rule knows about itself, which is everything
+/// rust-project.json wants and none of which reaches this tool any other way.
+#[derive(serde::Deserialize)]
+struct FirstParty {
+    display_name: String,
+    /// Repo-relative; made absolute against `--repo-root`.
+    root_module: String,
+    edition: String,
+    #[serde(default)]
+    features: Vec<String>,
+    #[serde(default)]
+    is_proc_macro: bool,
+    /// Build labels, resolved against the third-party subrepos and against
+    /// the other fragments.
+    #[serde(default)]
+    deps: Vec<FirstPartyDep>,
+}
+
+#[derive(serde::Deserialize)]
+struct FirstPartyDep {
+    name: String,
+    label: String,
+}
+
+/// The subrepo a third-party dep label names: `//third_party/crates:serde`
+/// is the subrepo `serde`, which is how the lock keys it.
+fn label_subrepo(label: &str) -> Option<String> {
+    label.rsplit(':').next().map(|t| t.to_string())
 }
 
 #[derive(Serialize)]
@@ -108,8 +144,8 @@ pub fn run(args: IdeArgs) -> Result<()> {
     // Pass two: describe each one.
     let mut crates = Vec::new();
     let mut skipped = Vec::new();
-    for ((subrepo, host), entry) in &order {
-        match describe(&args.third_party_dir, subrepo, *host, entry, &lock, &index) {
+    for ((subrepo, _host), entry) in &order {
+        match describe(&args.third_party_dir, subrepo, entry, &index) {
             Ok(c) => crates.push(c),
             Err(e) => {
                 skipped.push(format!("{}: {:#}", subrepo, e));
@@ -120,9 +156,62 @@ pub fn run(args: IdeArgs) -> Result<()> {
         }
     }
 
+    // First-party crates go after the third-party ones so the indices
+    // assigned above stay valid.
+    let mut first: Vec<(String, FirstParty)> = Vec::new();
+    for path in &args.first_party {
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        let fp: FirstParty =
+            serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        first.push((path.display().to_string(), fp));
+    }
+    let mut by_label: BTreeMap<String, usize> = BTreeMap::new();
+    for (i, (_, fp)) in first.iter().enumerate() {
+        by_label.insert(fp.display_name.clone(), crates.len() + i);
+    }
+    for (_, fp) in &first {
+        let mut deps = Vec::new();
+        for d in &fp.deps {
+            let name = d.name.replace('-', "_");
+            // A first-party dep names another fragment; anything else is a
+            // declaration in the lock.
+            if let Some(i) = by_label.get(&name) {
+                deps.push(DepEntry { krate: *i, name });
+            } else if let Some(sub) = label_subrepo(&d.label) {
+                if let Some(i) = index.get(&(sub, false)) {
+                    // The crate's own name rather than the label's: a label
+                    // carries the package, and rustls-webpki builds webpki.
+                    let resolved = crates[*i].display_name.clone();
+                    deps.push(DepEntry {
+                        krate: *i,
+                        name: resolved,
+                    });
+                }
+            }
+        }
+        crates.push(CrateEntry {
+            display_name: fp.display_name.clone(),
+            root_module: fp.root_module.clone(),
+            edition: fp.edition.clone(),
+            deps,
+            cfg: fp
+                .features
+                .iter()
+                .map(|f| format!("feature=\"{}\"", f))
+                .collect(),
+            env: BTreeMap::new(),
+            is_proc_macro: fp.is_proc_macro,
+            proc_macro_dylib_path: None,
+            // This is the code being worked on, which is what the flag means:
+            // rust-analyzer checks these on save and only indexes the rest.
+            is_workspace_member: true,
+        });
+    }
+
     let project = Project {
-        sysroot: args.sysroot.as_ref().map(|p| abs(p)),
-        sysroot_src: args.sysroot_src.as_ref().map(|p| abs(p)),
+        sysroot: args.sysroot.as_ref().map(|p| rel(p)),
+        sysroot_src: args.sysroot_src.as_ref().map(|p| rel(p)),
         crates,
     };
     let json = serde_json::to_string_pretty(&project)?;
@@ -161,64 +250,33 @@ fn placeholder(entry: &crate::resolve::LockEntry) -> CrateEntry {
 fn describe(
     third_party: &Path,
     subrepo: &str,
-    host: bool,
     entry: &crate::resolve::LockEntry,
-    lock: &crate::resolve::LockFile,
     index: &BTreeMap<Key, usize>,
 ) -> Result<CrateEntry> {
+    // Everything but the build-script cfgs comes from the lock, so this works
+    // inside a build sandbox where the crate sources are not staged. Reading
+    // each subrepo's Cargo.toml instead looked fine from a shell at the repo
+    // root and produced 196 placeholders when the rule ran it.
+    anyhow::ensure!(
+        !entry.root_module.is_empty(),
+        "no root module recorded; re-run sync to refresh the lock"
+    );
     let dir = third_party.join(subrepo);
-    let manifest_path = dir.join("Cargo.toml");
-    let bytes = std::fs::read(&manifest_path)
-        .with_context(|| format!("reading {}", manifest_path.display()))?;
-    let manifest = crate::resolve::parse_manifest(&bytes)
-        .with_context(|| format!("parsing {}", manifest_path.display()))?;
-
-    // A library root if there is one, and a binary's otherwise: a bin-only
-    // crate like bindgen-cli has no lib.rs, and skipping it would leave a
-    // crate rust-analyzer cannot follow a dep into.
-    let lib_path = manifest
-        .lib
-        .as_ref()
-        .and_then(|l| l.path.clone())
-        .unwrap_or_else(|| "src/lib.rs".to_string());
-    let mut root = dir.join(&lib_path);
-    if !root.exists() {
-        let bin = manifest
-            .bin
-            .iter()
-            .find_map(|b| b.path.clone())
-            .unwrap_or_else(|| "src/main.rs".to_string());
-        root = dir.join(&bin);
-    }
-    anyhow::ensure!(root.exists(), "no root module at {}", root.display());
-
-    let crate_type = crate::generate::determine_crate_type(&manifest, true);
-    let is_proc_macro = crate_type == "proc-macro";
+    let root = dir.join(&entry.root_module);
 
     // The crate name is what source imports, which is not the package name
     // whenever a manifest sets [lib] name.
-    let lib_name = manifest
-        .lib
-        .as_ref()
-        .and_then(|l| l.name.clone())
-        .unwrap_or_else(|| entry.crate_name.clone());
-    let ident = lib_name.replace('-', "_");
+    let ident = entry.crate_name.replace('-', "_");
 
     let mut cfg: Vec<String> = entry
         .features
         .iter()
         .map(|f| format!("feature=\"{}\"", f))
         .collect();
+    // Only available once the crate has been built, and worth having when it
+    // has: libc gates dozens of items on cfgs its build script sets.
     cfg.extend(buildscript_cfgs(&dir));
 
-    let env: BTreeMap<String, String> = manifest
-        .package
-        .as_ref()
-        .map(|p| crate::build_script::package_env(p).into_iter().collect())
-        .unwrap_or_default();
-
-    // A host unit's deps are the host units of what it depends on, which is
-    // exactly what `target_name` records.
     let mut deps = Vec::new();
     for d in &entry.deps {
         let is_host = d.target_name.ends_with("_host");
@@ -229,29 +287,46 @@ fn describe(
             });
         }
     }
-    let _ = (lock, host);
 
-    let proc_macro_dylib_path = if is_proc_macro {
+    let proc_macro_dylib_path = if entry.is_proc_macro {
         let tag = entry.version.replace(['.', '+'], "_");
-        let f = dir.join(format!(
+        Some(rel(&dir.join(format!(
             "lib{}-{}{}",
             ident,
             tag,
             std::env::consts::DLL_SUFFIX
-        ));
-        f.exists().then(|| abs(&f))
+        ))))
     } else {
         None
     };
 
+    // The env a crate reads about itself. The full set needs the manifest,
+    // which is not staged here; these are the ones crates actually use, and
+    // they are all in the lock.
+    let mut env = BTreeMap::new();
+    env.insert("CARGO_PKG_NAME".to_string(), entry.crate_name.clone());
+    env.insert("CARGO_PKG_VERSION".to_string(), entry.version.clone());
+    let mut parts = entry.version.split(['.', '+', '-']);
+    for key in [
+        "CARGO_PKG_VERSION_MAJOR",
+        "CARGO_PKG_VERSION_MINOR",
+        "CARGO_PKG_VERSION_PATCH",
+    ] {
+        env.insert(key.to_string(), parts.next().unwrap_or("0").to_string());
+    }
+
     Ok(CrateEntry {
         display_name: ident,
-        root_module: abs(&root),
-        edition: edition_str(&manifest).to_string(),
+        root_module: rel(&root),
+        edition: if entry.edition.is_empty() {
+            "2021".to_string()
+        } else {
+            entry.edition.clone()
+        },
         deps,
         cfg,
         env,
-        is_proc_macro,
+        is_proc_macro: entry.is_proc_macro,
         proc_macro_dylib_path,
         is_workspace_member: false,
     })
@@ -285,22 +360,16 @@ fn buildscript_cfgs(dir: &Path) -> Vec<String> {
     out
 }
 
-fn edition_str(manifest: &cargo_toml::Manifest) -> &'static str {
-    match manifest.package.as_ref().map(|p| p.edition.get()) {
-        Some(Ok(cargo_toml::Edition::E2015)) => "2015",
-        Some(Ok(cargo_toml::Edition::E2018)) => "2018",
-        Some(Ok(cargo_toml::Edition::E2024)) => "2024",
-        _ => "2021",
-    }
-}
-
-/// rust-analyzer reads the file from wherever it is launched, so every path
-/// in it has to be absolute.
-fn abs(p: &Path) -> String {
-    std::fs::canonicalize(p)
-        .unwrap_or_else(|_| p.to_path_buf())
-        .display()
-        .to_string()
+/// Paths go out exactly as they came in, which means repo-relative, which
+/// means the file has to sit at the repo root - rust-analyzer resolves them
+/// against its working directory and that is where it is launched.
+///
+/// Deliberately not canonicalised. An absolute path would bake this machine's
+/// checkout location into a build output, which is neither cacheable across
+/// machines nor reproducible; verified that rust-analyzer accepts relative
+/// ones before choosing this.
+fn rel(p: &Path) -> String {
+    p.display().to_string()
 }
 
 #[cfg(test)]

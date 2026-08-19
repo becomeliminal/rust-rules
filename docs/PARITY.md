@@ -240,8 +240,12 @@ binary-link time.
       overrides (done via download=), env injection for build scripts
 
 ### Explicit non-goals (decided, revisit only on demand)
-- rust-analyzer / `rust-project.json` generation — parked; emacs- and
-  agent-driven development here
+- ~~rust-analyzer / `rust-project.json` generation~~ — unparked and done
+  2026-08-19. `rust_project` emits one; `examples/ide` is a first-party
+  library with a third-party dependency and a binary depending on the
+  library, and rust-analyzer 0.3.2264 reports no diagnostics across it.
+  Everything but build-script cfgs comes from the lock, because the rule runs
+  in a sandbox where the crate sources are not staged
 - Third-party crates' own test suites
 - `cargo publish`
 - rustc incremental compilation, in any mode (decided 2026-08: crate

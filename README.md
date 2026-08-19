@@ -384,6 +384,28 @@ either extreme.
 BuildScriptJobs = 8
 ```
 
+### rust-analyzer
+`rust_project` writes a `rust-project.json` describing the crate graph, which
+is how rust-analyzer works on a project cargo does not drive.
+
+```python
+rust_project(
+    name = "rust-project",
+    lock = "//third_party/crates:rust_lock",
+    deps = [":my_lib", ":my_bin"],
+)
+```
+
+```sh
+plz build //:rust-project && ln -sf plz-out/gen/rust-project.json .
+```
+
+The paths inside are repo-relative, which is why it belongs at the repo root
+and why the output is the same on every machine. `examples/ide` is a working
+one. Go-to-definition into the standard library additionally needs
+`rust_toolchain(src_hash = ...)`, which fetches the `rust-src` component; a
+repo that never builds `<toolchain>_sysroot_src` never downloads it.
+
 ### PipelinedCompilation
 Splits each library crate into a metadata-only compile that dependents'
 compiles hang off and a full compile that runs in parallel (the scheme

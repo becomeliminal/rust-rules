@@ -2286,6 +2286,7 @@ mod run_tests {
                 build_deps: vec![],
                 links: None,
                 host: false,
+                ..Default::default()
             },
         );
         let mut host_crates = BTreeMap::new();
@@ -2300,6 +2301,7 @@ mod run_tests {
                     build_deps: vec![],
                     links: None,
                     host: false,
+                    ..Default::default()
                 },
             );
         }

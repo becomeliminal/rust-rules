@@ -78,6 +78,17 @@ pub struct LockEntry {
     /// to direct dependents as DEP_<LINKS>_<KEY> env vars
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub links: Option<String>,
+    /// The crate's edition, and its root module relative to its subrepo.
+    /// Recorded so that generating a rust-project.json needs the lock alone:
+    /// the crate sources live in plz-out and a build rule cannot see them.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub edition: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub root_module: String,
+    /// A proc macro is a different kind of crate to rust-analyzer, and
+    /// resolution already knows because it decides the host unit by it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_proc_macro: bool,
     /// This entry is a host unit: a proc macro, or a crate reached only as a
     /// build dependency. It runs on the machine doing the building, so it is
     /// compiled for the host triple however the rest of the graph is
@@ -817,6 +828,20 @@ fn emit_entry(
         deps,
         build_deps,
         links: n.manifest.package.as_ref().and_then(|p| p.links.clone()),
+        edition: match n.manifest.package.as_ref().map(|p| p.edition.get()) {
+            Some(Ok(cargo_toml::Edition::E2015)) => "2015",
+            Some(Ok(cargo_toml::Edition::E2018)) => "2018",
+            Some(Ok(cargo_toml::Edition::E2024)) => "2024",
+            _ => "2021",
+        }
+        .to_string(),
+        root_module: n
+            .manifest
+            .lib
+            .as_ref()
+            .and_then(|l| l.path.clone())
+            .unwrap_or_else(|| "src/lib.rs".to_string()),
+        is_proc_macro: n.is_proc_macro,
         // Set by the caller, which is what knows whether this is the entry's
         // primary unit or its _host twin.
         host: false,
@@ -965,6 +990,28 @@ mod tests {
         } else {
             "aarch64-apple-darwin"
         }
+    }
+
+    /// Generating a rust-project.json happens inside a build rule, where the
+    /// crate sources are not staged - only the lock is. Reading each crate's
+    /// Cargo.toml instead works from a shell at the repo root and produces
+    /// nothing but placeholders when the rule runs it, silently, because
+    /// every crate still occupies its index.
+    #[test]
+    fn the_lock_carries_what_an_ide_file_needs() {
+        let mut g = Graph::new("lock_ide_fields");
+        g.krate("app", "app", "1.0.0", "[lib]\npath = \"src/other.rs\"\n")
+            .krate("mac", "mac", "1.0.0", "[lib]\nproc-macro = true\n")
+            .root("app", &[], true)
+            .root("mac", &[], true);
+        let lock = g.resolve();
+        assert_eq!(
+            lock.crates["app"].root_module, "src/other.rs",
+            "respects [lib] path"
+        );
+        assert_eq!(lock.crates["app"].edition, "2021");
+        assert!(!lock.crates["app"].is_proc_macro);
+        assert!(lock.crates["mac"].is_proc_macro, "a proc macro says so");
     }
 
     /// A build script runs on the machine doing the building, so a crate

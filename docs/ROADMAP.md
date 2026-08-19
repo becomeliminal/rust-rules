@@ -185,12 +185,10 @@ a declaration set generated on linux was quietly wrong for anyone else.
 
 ## What we deliberately do not chase
 
-- **Editor/IDE integration** (`rust-project.json` for rust-analyzer): parked.
-  Development on this codebase is emacs- and agent-driven; the build system's
-  job is fast targeted commands and clear diagnostics, not editor plumbing.
-  The dist tarball ships `rust-analyzer-preview`, so if a consumer ever needs
-  it, `please_rust ide` generating `rust-project.json` is a well-understood
-  add (it is how rules_rust does it) — on request, not on the roadmap.
+- ~~**Editor/IDE integration**~~ — was parked on the grounds that development
+  here is emacs- and agent-driven. Requested and shipped 2026-08-19:
+  `please_rust ide` and the `rust_project` rule, as predicted by the note
+  that used to sit here.
 - **Building third-party crates' own test suites** — Cargo doesn't run your
   dependencies' tests either in normal use.
 - **`cargo publish`** — publishing to crates.io stays with Cargo; this is a

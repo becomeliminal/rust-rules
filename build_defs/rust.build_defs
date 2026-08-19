@@ -503,6 +503,85 @@ def _compile_cmds(crate_name:str, edition:str, crate_type:str, emit:str, feature
     }
 
 
+def _ide_fragment(name:str, crate_name:str, root:str, edition:str, features:list, deps:list, is_proc_macro:bool=False):
+    """Per-crate metadata for `please_rust ide`.
+
+    First-party rules exist only in plz's parser - nothing in please_rust ever
+    sees a rust_library - so each rule writes down what it knows and the tool
+    merges the fragments with the third-party graph it reads from the lock.
+
+    Its own target, built only when a rust_project asks for it, so a normal
+    build never runs one.
+    """
+    pkg = package_name()
+    root_path = pkg + '/' + root if pkg else root
+    dep_json = ', '.join(['{"name": "%s", "label": "%s"}' % (
+        canonicalise(d).split(':')[-1].replace('-', '_'), canonicalise(d)) for d in deps])
+    feature_json = ', '.join(['"%s"' % f for f in (features or [])])
+    body = '{"display_name": "%s", "root_module": "%s", "edition": "%s", "features": [%s], "is_proc_macro": %s, "deps": [%s]}' % (
+        crate_name.replace('-', '_'), root_path, edition, feature_json,
+        'true' if is_proc_macro else 'false', dep_json)
+    return build_rule(
+        name = tag(name, 'ide'),
+        outs = [name + '.ide.json'],
+        # A heredoc rather than echo: the payload is JSON and quoting it
+        # through a shell twice is how you get a file nothing can parse.
+        cmd = "cat > $OUT <<'PLZ_IDE_EOF'\n" + body + "\nPLZ_IDE_EOF",
+        labels = ['rust_ide'],
+        visibility = ['PUBLIC'],
+    )
+
+
+def rust_project(name:str, deps:list=[], lock:str='', third_party_dir:str='plz-out/gen/third_party/crates',
+                 sysroot:str='plz-out/bin/third_party/rust/rustc',
+                 sysroot_src:str='plz-out/gen/third_party/rust/rust-src', visibility:list=None):
+    """Generates a rust-project.json describing the crate graph for rust-analyzer.
+
+    Symlink or copy the result to the repo root, which is where rust-analyzer
+    looks and what the paths inside are relative to:
+
+        plz build //:rust-project && ln -sf plz-out/gen/rust-project.json .
+
+    The paths are repo-relative rather than absolute so the output is the same
+    on every machine and can be cached like anything else.
+
+    Args:
+        name (str): Name of the rule.
+        deps (list): The first-party crates to describe. Their own deps are
+                     followed into the third-party graph automatically.
+        lock (str): The rust_resolve target whose lock describes third-party
+                    crates. Without one only first-party crates are emitted.
+        third_party_dir (str): Where the generated crate subrepos land.
+        sysroot (str): A rustup-shaped toolchain root - `bin/rustc` beside
+                       `lib/rustlib`. That is the rustc component, and
+                       deliberately not what `Sysroot` names: rust-analyzer
+                       runs `<sysroot>/bin/rustc --print cfg`, and the
+                       rust-std component has no bin/.
+        sysroot_src (str): The standard library's sources, from
+                           `<toolchain>_sysroot_src`. Without it there is no
+                           go-to-definition into std.
+        visibility (list): Visibility declaration.
+    """
+    frags = []
+    for d in deps:
+        label = canonicalise(d)
+        pkg, _, target = label.partition(':')
+        frags += ['%s:_%s#ide' % (pkg, target)]
+    srcs = {'frags': frags}
+    if lock:
+        srcs['lock'] = [lock]
+    lock_arg = '--lock $SRCS_LOCK ' if lock else ''
+    return build_rule(
+        name = name,
+        srcs = srcs,
+        outs = ['rust-project.json'],
+        cmd = f'$TOOLS_PLEASE_RUST ide {lock_arg}--third-party-dir {third_party_dir} --sysroot {sysroot} --sysroot-src {sysroot_src} --first-party $SRCS_FRAGS --output $OUT',
+        tools = {'please_rust': [CONFIG.RUST.PLEASE_RUST_TOOL]},
+        labels = ['rust'],
+        visibility = visibility,
+    )
+
+
 def rust_library(name:str, root:str, crate_name:str="", crate_type:str="rlib", modules:list=None, deps:list=[], cc_deps:list=[], edition:str="2018", features:list=None, build_root:str=None, build_deps:list|dict=None, target_dir:str=None, visibility:list=None):
     """Defines a build rule for a Rust library.
 
@@ -634,6 +713,7 @@ def rust_library(name:str, root:str, crate_name:str="", crate_type:str="rlib", m
             needs_transitive_deps = True,
             labels = ['rust'],
         )
+        _ide_fragment(name, crate_name, root, edition, features, deps, crate_type == 'proc-macro')
         return filegroup(
             name = name,
             srcs = [compile_rule],
@@ -685,6 +765,7 @@ def rust_library(name:str, root:str, crate_name:str="", crate_type:str="rlib", m
             deps = [lib_rule],
             labels = ['rust'],
         )
+    _ide_fragment(name, crate_name, root, edition, features, deps, crate_type == 'proc-macro')
     return lib_rule
 
 
@@ -722,7 +803,7 @@ def rust_binary(name:str, main:str, modules:list=None, deps:list=[], cc_deps:lis
     if cc_deps:
         srcs['native'] = cc_deps
 
-    return build_rule(
+    bin_rule = build_rule(
         name = name,
         srcs = srcs,
         outs = [crate_name],
@@ -744,6 +825,8 @@ def rust_binary(name:str, main:str, modules:list=None, deps:list=[], cc_deps:lis
         visibility = visibility,
         labels = ['rust'],
     )
+    _ide_fragment(name, name, main, edition, features, deps)
+    return bin_rule
 
 
 def rust_test(name:str, root:str, modules:list=None, deps:list=[], cc_deps:list=[], edition:str="2018", features:list=None, manifest:str=None, visibility:list=None):
@@ -793,7 +876,7 @@ def rust_test(name:str, root:str, modules:list=None, deps:list=[], cc_deps:list=
     pkg = package_name()
     main_src = f'{pkg}/{root}' if pkg else root
 
-    return build_rule(
+    test_rule = build_rule(
         name = name,
         srcs = srcs,
         outs = [crate_name],
@@ -819,6 +902,8 @@ def rust_test(name:str, root:str, modules:list=None, deps:list=[], cc_deps:list=
         visibility = visibility,
         labels = ['rust'],
     )
+    _ide_fragment(name, crate_name, root, edition, features, deps)
+    return test_rule
 
 
 def rust_doc_test(name:str, root:str, crate_name:str="", modules:list=None, deps:list=[], edition:str="2018", features:list=None, visibility:list=None):
