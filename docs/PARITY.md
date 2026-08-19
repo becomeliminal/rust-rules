@@ -240,12 +240,40 @@ binary-link time.
       overrides (done via download=), env injection for build scripts
 
 ### Explicit non-goals (decided, revisit only on demand)
-- ~~rust-analyzer / `rust-project.json` generation~~ — unparked and done
-  2026-08-19. `rust_project` emits one; `examples/ide` is a first-party
-  library with a third-party dependency and a binary depending on the
-  library, and rust-analyzer 0.3.2264 reports no diagnostics across it.
-  Everything but build-script cfgs comes from the lock, because the rule runs
-  in a sandbox where the crate sources are not staged
+- [ ] rust-analyzer / `rust-project.json` — unparked 2026-08-19 and
+      **partially working**. `rust_project` emits a file, `examples/ide`
+      exercises both a third-party and a first-party edge, and those resolve.
+      Three standard-library errors remain in that twenty-line example:
+      `no method nth on Split<'_, char>`, `no method trim on ()`, and
+      `the trait bound char: Sized is not satisfied` - core's trait impls do
+      not resolve, most likely because the standard library is built with
+      cfgs that are not being reproduced. Not usable until that is closed.
+
+      An earlier commit claimed this was clean. It was measured with
+      rust-analyzer 0.3.2264, seven months older than the 1.97.1 toolchain,
+      which reported nothing because it could not load the sysroot at all -
+      it said so, about its proc-macro server, and the warning was read past.
+      The version-matched analyzer ships in the dist tarball at
+      `rustc/libexec/rust-analyzer-proc-macro-srv` and
+      `rust-analyzer-preview/bin`, and is what any check should use.
+
+      Known environment requirements, none of them yet automatic:
+      * the dist's rust-analyzer needs `LD_LIBRARY_PATH` set to the rustc
+        component's `lib`, for `librustc_driver`
+      * the CLI does not discover the proc-macro server from the project
+        file; it takes `--proc-macro-srv`. An editor uses its own, or
+        `rust-analyzer.procMacro.server`
+      * the generated file has repo-relative paths, so it must sit at the
+        repo root and the repo root is what the editor must open. Fine for a
+        monorepo, wrong for anyone opening a single service directory
+      * `sysroot` wants a rustup-shaped root - `bin/rustc` beside
+        `lib/rustlib` - which is `<toolchain>_rustc`, not `<toolchain>_sysroot`
+
+      The standard library is now emitted as explicit crates rather than
+      discovered, which removed a dependency on whatever `cargo` was on PATH:
+      rust-analyzer loads a sysroot by running `cargo metadata` over the
+      stdlib sources, and an older ambient cargo fails outright. That was a
+      real fix and it took the example from six errors to three
 - Third-party crates' own test suites
 - `cargo publish`
 - rustc incremental compilation, in any mode (decided 2026-08: crate

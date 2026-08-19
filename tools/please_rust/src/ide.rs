@@ -108,7 +108,7 @@ struct CrateEntry {
     is_workspace_member: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct DepEntry {
     /// Index into the crates array. rust-project.json addresses deps
     /// positionally, which is why the graph has to be walked twice - once to
@@ -118,6 +118,28 @@ struct DepEntry {
     name: String,
 }
 
+/// The standard library, as crates rather than as a directory to discover.
+///
+/// rust-analyzer can find these itself from `sysroot_src`, but it does so by
+/// running `cargo metadata` over the stdlib sources - picking up whatever
+/// cargo is on PATH, which in a build system whose point is not depending on
+/// ambient tooling is the wrong answer, and which fails outright when that
+/// cargo is older than the toolchain. Naming them explicitly is what
+/// rules_rust does and needs nothing from the environment.
+const SYSROOT_CRATES: &[(&str, &[&str])] = &[
+    ("core", &[]),
+    ("alloc", &["core"]),
+    ("panic_unwind", &["core", "alloc"]),
+    ("panic_abort", &["core", "alloc"]),
+    ("std", &["core", "alloc", "panic_unwind", "panic_abort"]),
+    ("proc_macro", &["core", "std"]),
+    ("test", &["core", "std", "proc_macro"]),
+];
+
+/// What every non-sysroot crate depends on. Explicit because with the sysroot
+/// named as crates there is no discovery step left to inject them.
+const SYSROOT_DEPS: &[&str] = &["core", "alloc", "std", "proc_macro", "test"];
+
 /// A crate's identity in the lock: its subrepo, and which unit of it. The
 /// host unit of a dual crate is a different crate to rust-analyzer - it is
 /// compiled for a different platform and may have different features.
@@ -126,6 +148,54 @@ type Key = (String, bool);
 pub fn run(args: IdeArgs) -> Result<()> {
     let lock = crate::resolve::LockFile::load(&args.lock)
         .with_context(|| format!("reading {}", args.lock.display()))?;
+
+    // The sysroot goes first, so its indices are stable and everything else
+    // can depend on it by number.
+    let mut crates: Vec<CrateEntry> = Vec::new();
+    let mut sysroot_index: BTreeMap<&str, usize> = BTreeMap::new();
+    if let Some(src) = &args.sysroot_src {
+        for (name, _) in SYSROOT_CRATES {
+            sysroot_index.insert(name, crates.len());
+            crates.push(CrateEntry {
+                display_name: name.to_string(),
+                root_module: rel(&src.join(name).join("src/lib.rs")),
+                // Read rather than assumed: the standard library moved to
+                // edition 2024, and parsing it as 2021 fails in ways that
+                // surface as core's lang items being missing - `char: Sized
+                // is not satisfied` rather than anything mentioning editions.
+                edition: sysroot_edition(&src.join(name)),
+                deps: Vec::new(),
+                cfg: Vec::new(),
+                env: BTreeMap::new(),
+                is_proc_macro: false,
+                proc_macro_dylib_path: None,
+                is_workspace_member: false,
+            });
+        }
+        // Second pass now that every sysroot crate has an index.
+        for (name, deps) in SYSROOT_CRATES {
+            let at = sysroot_index[name];
+            crates[at].deps = deps
+                .iter()
+                .filter_map(|d| {
+                    sysroot_index.get(d).map(|i| DepEntry {
+                        krate: *i,
+                        name: d.to_string(),
+                    })
+                })
+                .collect();
+        }
+    }
+    let sysroot_deps: Vec<DepEntry> = SYSROOT_DEPS
+        .iter()
+        .filter_map(|d| {
+            sysroot_index.get(d).map(|i| DepEntry {
+                krate: *i,
+                name: d.to_string(),
+            })
+        })
+        .collect();
+    let offset = crates.len();
 
     // Pass one: assign an index to every crate, so deps can name them.
     let mut order: Vec<(Key, &crate::resolve::LockEntry)> = Vec::new();
@@ -138,15 +208,17 @@ pub fn run(args: IdeArgs) -> Result<()> {
     let index: BTreeMap<Key, usize> = order
         .iter()
         .enumerate()
-        .map(|(i, (k, _))| (k.clone(), i))
+        .map(|(i, (k, _))| (k.clone(), i + offset))
         .collect();
 
     // Pass two: describe each one.
-    let mut crates = Vec::new();
     let mut skipped = Vec::new();
     for ((subrepo, _host), entry) in &order {
         match describe(&args.third_party_dir, subrepo, entry, &index) {
-            Ok(c) => crates.push(c),
+            Ok(mut c) => {
+                c.deps.extend(sysroot_deps.iter().cloned());
+                crates.push(c)
+            }
             Err(e) => {
                 skipped.push(format!("{}: {:#}", subrepo, e));
                 // A crate that cannot be described must still occupy its
@@ -190,6 +262,7 @@ pub fn run(args: IdeArgs) -> Result<()> {
                 }
             }
         }
+        deps.extend(sysroot_deps.iter().cloned());
         crates.push(CrateEntry {
             display_name: fp.display_name.clone(),
             root_module: fp.root_module.clone(),
@@ -358,6 +431,23 @@ fn buildscript_cfgs(dir: &Path) -> Vec<String> {
     out.sort();
     out.dedup();
     out
+}
+
+/// The edition a sysroot crate declares, defaulting to the current one. Only
+/// the `edition = "..."` line is wanted and a full TOML parse of the stdlib's
+/// manifests is not, so this reads the line.
+fn sysroot_edition(dir: &Path) -> String {
+    let Ok(text) = std::fs::read_to_string(dir.join("Cargo.toml")) else {
+        return "2024".to_string();
+    };
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("edition") {
+            if let Some(v) = rest.split('"').nth(1) {
+                return v.to_string();
+            }
+        }
+    }
+    "2024".to_string()
 }
 
 /// Paths go out exactly as they came in, which means repo-relative, which

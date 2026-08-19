@@ -185,10 +185,10 @@ a declaration set generated on linux was quietly wrong for anyone else.
 
 ## What we deliberately do not chase
 
-- ~~**Editor/IDE integration**~~ — was parked on the grounds that development
-  here is emacs- and agent-driven. Requested and shipped 2026-08-19:
-  `please_rust ide` and the `rust_project` rule, as predicted by the note
-  that used to sit here.
+- **Editor/IDE integration** — unparked 2026-08-19 on request.
+  `please_rust ide` and `rust_project` exist and partially work; see PARITY
+  for what does not and for the environment requirements that are not yet
+  automatic.
 - **Building third-party crates' own test suites** — Cargo doesn't run your
   dependencies' tests either in normal use.
 - **`cargo publish`** — publishing to crates.io stays with Cargo; this is a
