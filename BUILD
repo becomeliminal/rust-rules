@@ -14,17 +14,10 @@ filegroup(
     visibility = ["PUBLIC"],
 )
 
-# The crate graph for rust-analyzer, covering this repo's own Rust. Build it
-# and put it at the root, which is where rust-analyzer looks and what the
-# paths inside are relative to:
-#
-#   plz build //:rust-project && ln -sf plz-out/gen/rust-project.json .
+# The crate graph for rust-analyzer. Run it - `plz run //:rust-project` - and
+# it finds every Rust crate in the repo and writes rust-project.json at the
+# root. Nothing to keep in step: a crate added anywhere is in the next run.
 rust_project(
     name = "rust-project",
     lock = "//third_party/crates:rust_lock",
-    deps = [
-        "//examples/ide:greeting",
-        "//examples/ide:hello",
-        "//tools/please_rust:please_rust",
-    ],
 )

@@ -63,6 +63,10 @@ struct FirstParty {
     edition: String,
     #[serde(default)]
     features: Vec<String>,
+    /// The crate's Cargo.toml, if it has one, for CARGO_PKG_* - which is what
+    /// `clap::command!()` reads. Repo-relative.
+    #[serde(default)]
+    manifest: Option<String>,
     #[serde(default)]
     is_proc_macro: bool,
     /// Build labels, resolved against the third-party subrepos and against
@@ -156,10 +160,245 @@ const SYSROOT_CRATES: &[(&str, &[&str])] = &[
     ("test", &["core", "std", "proc_macro"]),
 ];
 
+/// The crates the standard library is itself built from.
+///
+/// std does not stand alone. `std::collections::HashMap` wraps hashbrown's,
+/// and with hashbrown undescribed rust-analyzer cannot infer `HashMap::new()`
+/// at all - every `let mut m = HashMap::new()` in the repo reports "type
+/// annotations needed", in ordinary first-party code, with nothing to point
+/// at. cargo learns this graph by resolving the stdlib workspace; `rust-src`
+/// ships the manifests and the vendored sources beside them, so it can be
+/// read instead of run.
+///
+/// Only unconditional `[dependencies]` are followed. Target-gated ones (libc,
+/// on unix) would need the target's cfgs evaluated here, and nothing so far
+/// needs them.
+fn extend_with_sysroot_deps(
+    src: &Path,
+    sys: &mut Vec<CrateEntry>,
+    at: &mut BTreeMap<String, usize>,
+) {
+    // Seeded with the crates already described, whose manifests sit beside
+    // their sources; discovered crates are appended as they are found.
+    // Each entry carries the features it is built with, because that is what
+    // decides which of its own optional dependencies are on. hashbrown is the
+    // case that matters: it reaches core and alloc only through its `core`
+    // and `alloc` features, which `rustc-dep-of-std` turns on.
+    let mut queue: Vec<(String, PathBuf, Vec<String>)> = SYSROOT_CRATES
+        .iter()
+        .map(|(n, _)| (n.to_string(), src.join(n), Vec::new()))
+        .collect();
+    let mut seen: Vec<String> = queue.iter().map(|(n, _, _)| n.clone()).collect();
+    let mut edges: Vec<(String, String, String)> = Vec::new();
+    let mut i = 0;
+    while i < queue.len() {
+        let (name, dir, features) = queue[i].clone();
+        i += 1;
+        let Ok(bytes) = std::fs::read(dir.join("Cargo.toml")) else {
+            continue;
+        };
+        let Ok(manifest) = crate::resolve::parse_manifest(&bytes) else {
+            continue;
+        };
+        for (dep_name, dep) in &manifest.dependencies {
+            if dep.optional() && !optional_dep_enabled(dep_name, &features, &manifest) {
+                continue;
+            }
+            let key = dep_name.replace('-', "_");
+            edges.push((name.clone(), key.clone(), dep_name.clone()));
+            if seen.contains(&key) {
+                continue;
+            }
+            // A renamed dependency's sources are under its real package name;
+            // std's own crates rename core and alloc to workspace shims.
+            let package = dep.package().unwrap_or(dep_name);
+            let Some(dep_dir) = locate_sysroot_dep(src, &dir, package, dep) else {
+                continue;
+            };
+            let Ok(dep_bytes) = std::fs::read(dep_dir.join("Cargo.toml")) else {
+                continue;
+            };
+            let Ok(dep_manifest) = crate::resolve::parse_manifest(&dep_bytes) else {
+                continue;
+            };
+            let root = dep_manifest
+                .lib
+                .as_ref()
+                .and_then(|l| l.path.clone())
+                .unwrap_or_else(|| "src/lib.rs".to_string());
+            let Ok(rel_dir) = dep_dir.strip_prefix(src) else {
+                continue;
+            };
+            // A bare `dep = "1"` has no detail block and takes defaults.
+            let defaults = dep.detail().is_none_or(|d| d.default_features);
+            let dep_features = expand_features(&dep_manifest, dep.req_features(), defaults);
+            seen.push(key.clone());
+            at.insert(key.clone(), sys.len());
+            sys.push(CrateEntry {
+                display_name: key.clone(),
+                root_module: format!("{}/{}", rel_dir.display(), root),
+                edition: dep_manifest
+                    .package
+                    .as_ref()
+                    .map(|p| (p.edition() as u32).to_string())
+                    .unwrap_or_else(|| "2021".to_string()),
+                deps: Vec::new(),
+                cfg: dep_features
+                    .iter()
+                    .map(|f| format!("feature=\"{}\"", f))
+                    .collect(),
+                env: BTreeMap::new(),
+                is_proc_macro: false,
+                proc_macro_dylib_path: None,
+                is_workspace_member: false,
+            });
+            queue.push((key, dep_dir, dep_features));
+        }
+    }
+    for (from, to, declared) in edges {
+        let (Some(f), Some(t)) = (at.get(&from).copied(), at.get(&to).copied()) else {
+            continue;
+        };
+        let name = declared.replace('-', "_");
+        if !sys[f].deps.iter().any(|d| d.name == name) {
+            sys[f].deps.push(DepEntry { krate: t, name });
+        }
+    }
+}
+
+/// Whether an optional dependency is switched on, which is the case when a
+/// feature of that name is enabled or an enabled feature names it with `dep:`.
+fn optional_dep_enabled(
+    dep_name: &str,
+    features: &[String],
+    manifest: &cargo_toml::Manifest,
+) -> bool {
+    if features.iter().any(|f| f == dep_name) {
+        return true;
+    }
+    let marker = format!("dep:{}", dep_name);
+    features.iter().any(|f| {
+        manifest
+            .features
+            .get(f)
+            .is_some_and(|implied| implied.contains(&marker))
+    })
+}
+
+/// Where a stdlib dependency's sources are: beside it for a path dependency,
+/// and under `vendor/` for one that came from crates.io.
+fn locate_sysroot_dep(
+    src: &Path,
+    from: &Path,
+    name: &str,
+    dep: &cargo_toml::Dependency,
+) -> Option<PathBuf> {
+    if let Some(rel) = dep.detail().and_then(|d| d.path.as_ref()) {
+        let joined = from.join(rel);
+        // The path is relative to the depending manifest and usually climbs
+        // out of it, which strip_prefix later cannot handle unnormalised.
+        return normalise(&joined).filter(|p| p.exists());
+    }
+    // The workspace shims (rustc-std-workspace-core and friends) sit at the
+    // top of the source tree rather than under vendor/.
+    let sibling = src.join(name);
+    if sibling.is_dir() {
+        return Some(sibling);
+    }
+    let vendor = src.join("vendor");
+    let mut best: Option<PathBuf> = None;
+    for entry in std::fs::read_dir(&vendor).ok()?.flatten() {
+        let file = entry.file_name();
+        let file = file.to_string_lossy();
+        // `hashbrown-0.17.1`, and not `hashbrown-utils-0.1` - the version is
+        // what follows the final hyphen before a digit.
+        let Some(rest) = file.strip_prefix(name) else {
+            continue;
+        };
+        if !rest.starts_with('-') || !rest[1..].starts_with(|c: char| c.is_ascii_digit()) {
+            continue;
+        }
+        if best.as_ref().is_none_or(|b| {
+            b.file_name().map(|n| n.to_string_lossy().to_string()) < Some(file.to_string())
+        }) {
+            best = Some(entry.path());
+        }
+    }
+    best
+}
+
+/// `..` resolved textually. The sources are laid out by the toolchain, so
+/// there is nothing to canonicalise against and no symlinks to chase.
+fn normalise(p: &Path) -> Option<PathBuf> {
+    let mut out = PathBuf::new();
+    for part in p.components() {
+        match part {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    Some(out)
+}
+
+/// The features a dependency is built with: those the dependent asked for,
+/// plus `default` unless it opted out, closed over the crate's own feature
+/// table. `dep:x` and `x/y` entries enable dependencies rather than cfgs, so
+/// they are followed but not emitted.
+fn expand_features(
+    manifest: &cargo_toml::Manifest,
+    asked: &[String],
+    default: bool,
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut queue: Vec<String> = asked.to_vec();
+    if default && manifest.features.contains_key("default") {
+        queue.push("default".to_string());
+    }
+    while let Some(f) = queue.pop() {
+        if f.contains('/') || f.starts_with("dep:") || out.contains(&f) {
+            continue;
+        }
+        out.push(f.clone());
+        if let Some(implied) = manifest.features.get(&f) {
+            queue.extend(implied.iter().cloned());
+        }
+    }
+    out.sort();
+    out
+}
+
 /// A crate's identity in the lock: its subrepo, and which unit of it. The
 /// host unit of a dual crate is a different crate to rust-analyzer - it is
 /// compiled for a different platform and may have different features.
 type Key = (String, bool);
+
+/// The package env a first-party crate compiles with, read from its manifest
+/// the same way a compile reads it. Without this `clap::command!()` reports
+/// that CARGO_PKG_VERSION is unset - in the editor only, since the compile
+/// sets it.
+fn first_party_env(fp: &FirstParty) -> BTreeMap<String, String> {
+    let mut env = BTreeMap::new();
+    env.insert("CARGO_CRATE_NAME".to_string(), fp.display_name.clone());
+    let Some(path) = &fp.manifest else {
+        return env;
+    };
+    let Ok(content) = std::fs::read(path) else {
+        return env;
+    };
+    let Ok(manifest) = crate::resolve::parse_manifest(&content) else {
+        return env;
+    };
+    if let Some(pkg) = &manifest.package {
+        env.extend(crate::build_script::package_env(pkg));
+    }
+    if let Some(dir) = Path::new(path).parent() {
+        env.insert("CARGO_MANIFEST_DIR".to_string(), dir.display().to_string());
+    }
+    env
+}
 
 pub fn run(args: IdeArgs) -> Result<()> {
     let lock = crate::resolve::LockFile::load(&args.lock)
@@ -171,9 +410,9 @@ pub fn run(args: IdeArgs) -> Result<()> {
     let mut sysroot_project = None;
     if let Some(src) = &args.sysroot_src {
         let mut sys: Vec<CrateEntry> = Vec::new();
-        let mut at: BTreeMap<&str, usize> = BTreeMap::new();
+        let mut at: BTreeMap<String, usize> = BTreeMap::new();
         for (name, _) in SYSROOT_CRATES {
-            at.insert(name, sys.len());
+            at.insert(name.to_string(), sys.len());
             sys.push(CrateEntry {
                 display_name: name.to_string(),
                 // Relative to sysroot_src, which is what rust-analyzer
@@ -189,17 +428,20 @@ pub fn run(args: IdeArgs) -> Result<()> {
             });
         }
         for (name, deps) in SYSROOT_CRATES {
-            let i = at[name];
+            let i = at[*name];
             sys[i].deps = deps
                 .iter()
                 .filter_map(|d| {
-                    at.get(d).map(|j| DepEntry {
+                    at.get(*d).map(|j| DepEntry {
                         krate: *j,
                         name: d.to_string(),
                     })
                 })
                 .collect();
         }
+        // std is not self-contained, and the crates it is built from have to
+        // be described too - see extend_with_sysroot_deps.
+        extend_with_sysroot_deps(src, &mut sys, &mut at);
         sysroot_project = Some(SysrootProject { crates: sys });
     }
     let mut crates: Vec<CrateEntry> = Vec::new();
@@ -247,6 +489,9 @@ pub fn run(args: IdeArgs) -> Result<()> {
     for (i, (_, fp)) in first.iter().enumerate() {
         by_label.insert(fp.display_name.clone(), crates.len() + i);
     }
+    // A dep that resolves to nothing is dropped, and the only symptom is an
+    // import rust-analyzer cannot follow. Say so instead.
+    let mut unresolved: Vec<(String, String)> = Vec::new();
     for (_, fp) in &first {
         let mut deps = Vec::new();
         for d in &fp.deps {
@@ -255,16 +500,16 @@ pub fn run(args: IdeArgs) -> Result<()> {
             // declaration in the lock.
             if let Some(i) = by_label.get(&name) {
                 deps.push(DepEntry { krate: *i, name });
-            } else if let Some(sub) = label_subrepo(&d.label) {
-                if let Some(i) = index.get(&(sub, false)) {
-                    // The crate's own name rather than the label's: a label
-                    // carries the package, and rustls-webpki builds webpki.
-                    let resolved = crates[*i].display_name.clone();
-                    deps.push(DepEntry {
-                        krate: *i,
-                        name: resolved,
-                    });
-                }
+            } else if let Some(i) = label_subrepo(&d.label).and_then(|s| index.get(&(s, false))) {
+                // The crate's own name rather than the label's: a label
+                // carries the package, and rustls-webpki builds webpki.
+                let resolved = crates[*i].display_name.clone();
+                deps.push(DepEntry {
+                    krate: *i,
+                    name: resolved,
+                });
+            } else {
+                unresolved.push((fp.display_name.clone(), d.label.clone()));
             }
         }
         crates.push(CrateEntry {
@@ -276,8 +521,16 @@ pub fn run(args: IdeArgs) -> Result<()> {
                 .features
                 .iter()
                 .map(|f| format!("feature=\"{}\"", f))
+                // `test`, on every crate being worked on, because that is what
+                // rust-analyzer does under cargo: `cargo.unsetTest` defaults to
+                // ["core"], so a workspace member's `#[cfg(test)] mod tests` is
+                // live code and not grey text. It also settles a collision -
+                // a rust_library and the rust_test over the same root are two
+                // crates sharing one file, and rust-analyzer applies whichever
+                // it saw first to both.
+                .chain(std::iter::once("test".to_string()))
                 .collect(),
-            env: BTreeMap::new(),
+            env: first_party_env(fp),
             is_proc_macro: fp.is_proc_macro,
             proc_macro_dylib_path: None,
             // This is the code being worked on, which is what the flag means:
@@ -298,6 +551,13 @@ pub fn run(args: IdeArgs) -> Result<()> {
 
     for s in &skipped {
         eprintln!("ide: could not describe {}", s);
+    }
+    for (krate, label) in &unresolved {
+        eprintln!(
+            "ide: {} depends on {}, which is in no lock passed to --lock - \
+             imports from it will not resolve",
+            krate, label
+        );
     }
     eprintln!(
         "ide: wrote {} crates to {}",
@@ -470,6 +730,89 @@ fn rel(p: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// std reaches hashbrown, and hashbrown reaches core and alloc, only
+    /// through features. Skipping optional deps outright leaves hashbrown
+    /// with no core, and `HashMap::new()` stops inferring in every crate in
+    /// the repo.
+    #[test]
+    fn an_optional_dep_a_feature_turns_on_is_followed() {
+        let manifest = crate::resolve::parse_manifest(
+            br#"
+[package]
+name = "hashbrown"
+version = "0.17.1"
+
+[features]
+rustc-dep-of-std = ["core", "alloc"]
+with-serde = ["dep:serde_core"]
+
+[dependencies]
+core = { version = "1.0", optional = true, package = "rustc-std-workspace-core" }
+alloc = { version = "1.0", optional = true, package = "rustc-std-workspace-alloc" }
+serde_core = { version = "1.0", optional = true }
+rayon = { version = "1.0", optional = true }
+"#,
+        )
+        .unwrap();
+        let on = expand_features(&manifest, &["rustc-dep-of-std".to_string()], false);
+        assert!(optional_dep_enabled("core", &on, &manifest));
+        assert!(optional_dep_enabled("alloc", &on, &manifest));
+        // Named by no enabled feature, so still off.
+        assert!(!optional_dep_enabled("rayon", &on, &manifest));
+        // `dep:` names the dependency without being a cfg of its own.
+        let serde_on = expand_features(&manifest, &["with-serde".to_string()], false);
+        assert!(optional_dep_enabled("serde_core", &serde_on, &manifest));
+        assert!(!serde_on.contains(&"dep:serde_core".to_string()));
+    }
+
+    /// Features are a closure, and `default` is in it unless opted out -
+    /// getting this wrong silently under-describes a crate rather than
+    /// failing, which is why it is asserted rather than eyeballed.
+    #[test]
+    fn features_close_over_the_table() {
+        let manifest = crate::resolve::parse_manifest(
+            br#"
+[package]
+name = "x"
+version = "1.0.0"
+
+[features]
+default = ["a"]
+a = ["b"]
+b = []
+c = ["other/thing"]
+"#,
+        )
+        .unwrap();
+        let mut with = expand_features(&manifest, &[], true);
+        with.sort();
+        assert_eq!(with, vec!["a", "b", "default"]);
+        assert!(expand_features(&manifest, &[], false).is_empty());
+        // A `crate/feature` entry enables something elsewhere, and is not a
+        // cfg here.
+        assert_eq!(
+            expand_features(&manifest, &["c".to_string()], false),
+            vec!["c"]
+        );
+    }
+
+    /// Path dependencies climb out of their own directory, and the result is
+    /// then made relative to sysroot_src - which cannot be done with `..`
+    /// still in it.
+    #[test]
+    fn a_path_dependency_is_normalised_before_it_is_made_relative() {
+        let src = Path::new("/src");
+        assert_eq!(
+            normalise(&Path::new("/src/std").join("../alloc")).unwrap(),
+            Path::new("/src/alloc")
+        );
+        assert!(
+            normalise(&src.join("core/./src/.."))
+                .unwrap()
+                .ends_with("core")
+        );
+    }
 
     #[test]
     fn buildscript_cfgs_are_read_not_recomputed() {

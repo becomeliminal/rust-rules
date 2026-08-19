@@ -503,7 +503,7 @@ def _compile_cmds(crate_name:str, edition:str, crate_type:str, emit:str, feature
     }
 
 
-def _ide_fragment(name:str, crate_name:str, root:str, edition:str, features:list, deps:list, is_proc_macro:bool=False):
+def _ide_fragment(name:str, crate_name:str, root:str, edition:str, features:list, deps:list, is_proc_macro:bool=False, manifest:str=None):
     """Per-crate metadata for `please_rust ide`.
 
     First-party rules exist only in plz's parser - nothing in please_rust ever
@@ -518,9 +518,12 @@ def _ide_fragment(name:str, crate_name:str, root:str, edition:str, features:list
     dep_json = ', '.join(['{"name": "%s", "label": "%s"}' % (
         canonicalise(d).split(':')[-1].replace('-', '_'), canonicalise(d)) for d in deps])
     feature_json = ', '.join(['"%s"' % f for f in (features or [])])
-    body = '{"display_name": "%s", "root_module": "%s", "edition": "%s", "features": [%s], "is_proc_macro": %s, "deps": [%s]}' % (
-        crate_name.replace('-', '_'), root_path, edition, feature_json,
-        'true' if is_proc_macro else 'false', dep_json)
+    # The tool reads the manifest for CARGO_PKG_*, the same as a compile does.
+    # A rule cannot read it here: parsing does not open files.
+    manifest_json = '"%s/%s"' % (pkg, manifest) if manifest and pkg else (
+        '"%s"' % manifest if manifest else 'null')
+    body = '{"display_name": "%s", "root_module": "%s", "edition": "%s", "features": [%s], "manifest": %s, "is_proc_macro": %s, "deps": [%s]}' % (
+        crate_name.replace('-', '_'), root_path, edition, feature_json, manifest_json, 'true' if is_proc_macro else 'false', dep_json)
     return build_rule(
         name = tag(name, 'ide'),
         outs = [name + '.ide.json'],
@@ -532,25 +535,38 @@ def _ide_fragment(name:str, crate_name:str, root:str, edition:str, features:list
     )
 
 
-def rust_project(name:str, deps:list=[], lock:str='', third_party_dir:str='plz-out/gen/third_party/crates',
+def rust_project(name:str, lock:str='', targets:list=['//...'], exclude:list=[],
+                 third_party_dir:str='plz-out/gen/third_party/crates',
                  sysroot:str='plz-out/bin/third_party/rust/rustc',
-                 sysroot_src:str='plz-out/gen/third_party/rust/rust-src', visibility:list=None):
-    """Generates a rust-project.json describing the crate graph for rust-analyzer.
+                 sysroot_src:str='plz-out/gen/third_party/rust/rust-src',
+                 out:str='rust-project.json', visibility:list=None):
+    """Writes a rust-project.json describing every Rust crate in the repo.
 
-    Symlink or copy the result to the repo root, which is where rust-analyzer
-    looks and what the paths inside are relative to:
+    Declare one of these in the repo root BUILD file and run it:
 
-        plz build //:rust-project && ln -sf plz-out/gen/rust-project.json .
+        plz run //:rust-project
 
-    The paths are repo-relative rather than absolute so the output is the same
-    on every machine and can be cached like anything else.
+    That finds every rust_library, rust_binary and rust_test in the repo, joins
+    them to the third-party graph in the lock, and writes the file at the repo
+    root - which is where rust-analyzer looks, and what the paths inside are
+    relative to. There is no list of crates to keep up to date: a crate added
+    anywhere is in the next run.
+
+    It is a run target rather than a build rule because the crate list can only
+    be discovered by querying the build graph, which a rule cannot do while it
+    is being parsed. Nothing else here needs it, so nothing else pays for it.
 
     Args:
         name (str): Name of the rule.
-        deps (list): The first-party crates to describe. Their own deps are
-                     followed into the third-party graph automatically.
         lock (str): The rust_resolve target whose lock describes third-party
                     crates. Without one only first-party crates are emitted.
+        targets (list): Where to look for crates. The default covers the whole
+                        repo, which is what a repo of one project wants. A
+                        monorepo with Rust in one subtree can narrow it to
+                        e.g. ['//services/...'] and skip parsing the rest.
+        exclude (list): Label prefixes to leave out, e.g. ['//third_party/',
+                        '//examples/']. Matched against the start of the
+                        label, so '//test/' drops that whole subtree.
         third_party_dir (str): Where the generated crate subrepos land.
         sysroot (str): A rustup-shaped toolchain root - `bin/rustc` beside
                        `lib/rustlib`. That is the rustc component, and
@@ -560,23 +576,44 @@ def rust_project(name:str, deps:list=[], lock:str='', third_party_dir:str='plz-o
         sysroot_src (str): The standard library's sources, from
                            `<toolchain>_sysroot_src`. Without it there is no
                            go-to-definition into std.
+        out (str): Where to write the file, relative to the repo root.
         visibility (list): Visibility declaration.
     """
-    frags = []
-    for d in deps:
-        label = canonicalise(d)
-        pkg, _, target = label.partition(':')
-        frags += ['%s:_%s#ide' % (pkg, target)]
-    srcs = {'frags': frags}
-    if lock:
-        srcs['lock'] = [lock]
-    lock_arg = '--lock $SRCS_LOCK ' if lock else ''
+    # The config value arrives subrepo-qualified (`///` and an empty name
+    # when the plugin is its own repo); canonicalise gives the label back in
+    # the form a command line takes.
+    tool = canonicalise(CONFIG.RUST.PLEASE_RUST_TOOL)
+    lock = canonicalise(lock) if lock else ''
+    # Backticks rather than $(...): plz rewrites $(...) sequences in a cmd, and
+    # this text has to survive into the script it writes untouched.
+    filters = ''.join([" | grep -v '^%s'" % e for e in exclude])
+    lock_setup = 'LOCK=`plz query outputs %s`' % lock if lock else 'LOCK='
+    lock_arg = '--lock "$LOCK" ' if lock else ''
+    build_labels = ' '.join([tool] + ([lock] if lock else []))
+    script = '\n'.join([
+        '#!/bin/sh',
+        'set -eu',
+        'cd "`plz query reporoot`"',
+        'FRAGS=`plz query alltargets %s --include rust_ide --hidden%s || true`' % (' '.join(targets), filters),
+        'if [ -z "$FRAGS" ]; then',
+        '    echo "%s: no Rust crates found under %s" >&2' % (name, ' '.join(targets)),
+        '    exit 1',
+        'fi',
+        # One build for the tool, the lock and every fragment. The fragments are
+        # a line of JSON each, so this does not compile any Rust.
+        'plz build %s $FRAGS >/dev/null' % build_labels,
+        'TOOL=`plz query outputs %s`' % tool,
+        lock_setup,
+        'FILES=`plz query outputs $FRAGS`',
+        '"$TOOL" ide %s--third-party-dir %s --sysroot %s --sysroot-src %s --first-party $FILES --output %s' % (
+            lock_arg, third_party_dir, sysroot, sysroot_src, out),
+        'echo "%s: wrote %s (`echo $FILES | wc -w` first-party crates)"' % (name, out),
+    ])
     return build_rule(
         name = name,
-        srcs = srcs,
-        outs = ['rust-project.json'],
-        cmd = f'$TOOLS_PLEASE_RUST ide {lock_arg}--third-party-dir {third_party_dir} --sysroot {sysroot} --sysroot-src {sysroot_src} --first-party $SRCS_FRAGS --output $OUT',
-        tools = {'please_rust': [CONFIG.RUST.PLEASE_RUST_TOOL]},
+        outs = [name + '.sh'],
+        binary = True,
+        cmd = "cat > $OUT <<'PLZ_PROJECT_EOF'\n" + script + "\nPLZ_PROJECT_EOF",
         labels = ['rust'],
         visibility = visibility,
     )
@@ -825,7 +862,7 @@ def rust_binary(name:str, main:str, modules:list=None, deps:list=[], cc_deps:lis
         visibility = visibility,
         labels = ['rust'],
     )
-    _ide_fragment(name, name, main, edition, features, deps)
+    _ide_fragment(name, name, main, edition, features, deps, manifest = manifest)
     return bin_rule
 
 
@@ -902,7 +939,7 @@ def rust_test(name:str, root:str, modules:list=None, deps:list=[], cc_deps:list=
         visibility = visibility,
         labels = ['rust'],
     )
-    _ide_fragment(name, crate_name, root, edition, features, deps)
+    _ide_fragment(name, crate_name, root, edition, features, deps, manifest = manifest)
     return test_rule
 
 

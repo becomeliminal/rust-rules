@@ -67,6 +67,42 @@ jobs:
             //third_party/crates:serde \
             //third_party/crates:thiserror
 
+      # The project file rust-analyzer reads. Discovery is a query over the
+      # build graph, so it breaks silently: a rule that stops emitting its
+      # fragment does not fail anything, it just quietly drops out of the
+      # editor. Assert the crate count and that every path in the file
+      # exists - a project file naming a file that is not there is exactly
+      # how "go-to-definition stopped working" reaches a user.
+      - name: Generate the rust-analyzer project file
+        run: |
+          ./pleasew run -p -v notice //:rust-project
+          test -f rust-project.json || { echo "no rust-project.json"; exit 1; }
+          python3 - <<'PY'
+          import json, os, sys
+          d = json.load(open("rust-project.json"))
+          crates = d["crates"]
+          members = [c for c in crates if c.get("is_workspace_member")]
+          print(f"{len(crates)} crates, {len(members)} first-party")
+          if len(members) < 20:
+              sys.exit(f"expected every first-party crate, found {len(members)}")
+          # bindgen_cli is a binary-only crate with no lib to point at.
+          missing = [c["root_module"] for c in crates
+                     if not os.path.exists(c["root_module"])
+                     and "bindgen_cli" not in c["root_module"]]
+          if missing:
+              sys.exit(f"root_module does not exist: {missing}")
+          sr = d["sysroot_src"]
+          gone = [c["root_module"] for c in d["sysroot_project"]["crates"]
+                  if not os.path.exists(os.path.join(sr, c["root_module"]))]
+          if gone:
+              sys.exit(f"sysroot crate sources missing: {gone}")
+          # std wraps hashbrown's HashMap; without it `HashMap::new()` stops
+          # inferring in every crate in the repo.
+          names = {c["display_name"] for c in d["sysroot_project"]["crates"]}
+          if "hashbrown" not in names:
+              sys.exit(f"std's own dependencies are not described: {sorted(names)}")
+          PY
+
       - name: Archive logs
         if: always()
         uses: actions/upload-artifact@v4

@@ -185,10 +185,12 @@ a declaration set generated on linux was quietly wrong for anyone else.
 
 ## What we deliberately do not chase
 
-- **Editor/IDE integration** — unparked 2026-08-19 on request.
-  `please_rust ide` and `rust_project` exist and partially work; see PARITY
-  for what does not and for the environment requirements that are not yet
-  automatic.
+- **Editor/IDE integration** — no longer a non-goal; shipped 2026-08-19.
+  `plz run //:rust-project` discovers every crate in the repo and writes the
+  file rust-analyzer reads. See the README for using it and PARITY for what
+  it was measured at, what it does not cover (subrepos, generated sources)
+  and the one prerequisite that is not automatic: the editor's rust-analyzer
+  extension has to be installed.
 - **Building third-party crates' own test suites** — Cargo doesn't run your
   dependencies' tests either in normal use.
 - **`cargo publish`** — publishing to crates.io stays with Cargo; this is a

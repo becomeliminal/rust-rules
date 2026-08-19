@@ -240,13 +240,9 @@ binary-link time.
       overrides (done via download=), env injection for build scripts
 
 ### Explicit non-goals (decided, revisit only on demand)
-- [x] rust-analyzer / `rust-project.json` — `rust_project` emits one.
-      `examples/ide` is a first-party library with a third-party dependency
-      and a binary depending on the library; rust-analyzer 0.3.3016 reports
-      zero diagnostics across it, run from outside the repo as an editor
-      would. Across this whole repo 35 remain, all of them
-      `type annotations needed` inside serde's derive expansions, which is
-      rust-analyzer's own inference rather than the project file.
+- [x] rust-analyzer / `rust-project.json` — shipped. The account of what it
+      does, the numbers it was measured at and what it does not cover are in
+      the rust-analyzer entry in the later Track 2 log.
 
       The standard library is declared through `sysroot_project`, a nested
       project rust-analyzer resolves relative to `sysroot_src`. The two
@@ -259,6 +255,10 @@ binary-link time.
       * letting it discover them runs `cargo metadata` over the stdlib
         sources with a nightly-only `-Z` flag against whatever cargo is on
         PATH, which is ambient tooling and fails on a stable cargo
+
+      Describing it is necessary but not sufficient: std is not
+      self-contained, and the crates it is built from have to be described
+      with it - see the hashbrown finding in the later entry.
 
       Measured with the version-matched analyzer. An analyzer older than the
       toolchain reports success by failing to load the sysroot at all, which
@@ -411,40 +411,72 @@ binary-link time.
       overrides (done via download=), env injection for build scripts
 
 ### Explicit non-goals (decided, revisit only on demand)
-- [ ] rust-analyzer / `rust-project.json` — unparked 2026-08-19 and
-      **partially working**. `rust_project` emits a file, `examples/ide`
-      exercises both a third-party and a first-party edge, and those resolve.
-      Three standard-library errors remain in that twenty-line example:
-      `no method nth on Split<'_, char>`, `no method trim on ()`, and
-      `the trait bound char: Sized is not satisfied` - core's trait impls do
-      not resolve, most likely because the standard library is built with
-      cfgs that are not being reproduced. Not usable until that is closed.
+- [x] rust-analyzer / `rust-project.json` — **shipped 2026-08-19**, no
+      longer a non-goal. Declare `rust_project` in the repo root BUILD, then
+      `plz run //:rust-project`: it queries the build graph for every crate
+      in the repo, joins them to the lock, and writes the file at the root.
+      There is no crate list to maintain. `targets`/`exclude` narrow it for a
+      monorepo whose Rust lives in one subtree.
 
-      An earlier commit claimed this was clean. It was measured with
-      rust-analyzer 0.3.2264, seven months older than the 1.97.1 toolchain,
-      which reported nothing because it could not load the sysroot at all -
-      it said so, about its proc-macro server, and the warning was read past.
-      The version-matched analyzer ships in the dist tarball at
-      `rustc/libexec/rust-analyzer-proc-macro-srv` and
-      `rust-analyzer-preview/bin`, and is what any check should use.
+      Measured with the version-matched analyzer from the dist tarball
+      (`rust-analyzer-preview/bin`, 1.97.1) over this repo — 23 first-party
+      crates, 219 in total. `analysis-stats` infers 107,105 expressions with
+      60 unknown (0%), 0 panics, 0 type mismatches. `diagnostics` reports 27,
+      and what they are is known:
+      * 26 are `#[derive(Deserialize)]` lines. rust-analyzer cannot infer
+        inside that expansion — `#[derive(Serialize)]` and `#[derive(Clone)]`
+        on the same struct are clean, which is what says it is the analyzer
+        rather than the crate graph. Minimal repro: a two-field struct
+        deriving Deserialize, in a project file with nothing else in it
+      * 1 is `test/bindgen`, whose `mod point_bindings;` names a file
+        rust_bindgen generates at build time. A `mod` declaration cannot
+        resolve to a generated file outside the source tree
 
-      Known environment requirements, none of them yet automatic:
-      * the dist's rust-analyzer needs `LD_LIBRARY_PATH` set to the rustc
-        component's `lib`, for `librustc_driver`
-      * the CLI does not discover the proc-macro server from the project
-        file; it takes `--proc-macro-srv`. An editor uses its own, or
-        `rust-analyzer.procMacro.server`
-      * the generated file has repo-relative paths, so it must sit at the
-        repo root and the repo root is what the editor must open. Fine for a
-        monorepo, wrong for anyone opening a single service directory
-      * `sysroot` wants a rustup-shaped root - `bin/rustc` beside
-        `lib/rustlib` - which is `<toolchain>_rustc`, not `<toolchain>_sysroot`
+      Three bugs the measurement found, all fixed:
+      * every `#[cfg(test)]` module in the repo was grey dead text — 25 of
+        them. First-party crates now carry `cfg = ["test"]`, which is what
+        rust-analyzer does under cargo (`cargo.unsetTest` defaults to
+        `["core"]`). It also settles a collision: a rust_library and the
+        rust_test over the same root are two crates sharing one file, and
+        rust-analyzer applies whichever it saw first to both
+      * `clap::command!()` errored that `CARGO_PKG_VERSION` was unset. The
+        fragment now carries the crate's manifest and the tool reads
+        `CARGO_PKG_*` from it, the same as a compile does
+      * **`HashMap::new()` did not infer anywhere**, in ordinary first-party
+        code — 13 of what were then 41 errors. std is not self-contained:
+        `std::collections::HashMap` wraps hashbrown's, and the sysroot was
+        described as core/alloc/std alone. The stdlib's own dependency graph
+        is now read out of `rust-src` — the manifests, and the vendored
+        sources beside them — rather than hardcoded, including optional deps
+        that a feature turns on, which is the only way hashbrown reaches core
 
-      The standard library is now emitted as explicit crates rather than
-      discovered, which removed a dependency on whatever `cargo` was on PATH:
-      rust-analyzer loads a sysroot by running `cargo metadata` over the
-      stdlib sources, and an older ambient cargo fails outright. That was a
-      real fix and it took the example from six errors to three
+      Environment requirements:
+      * **the editor needs the rust-analyzer extension installed.** Nothing
+        warns you if it is not; the file is simply ignored. This cost a
+        session to find
+      * the file has repo-relative paths, so it belongs at the repo root and
+        the repo root is what the editor must open. Fine for a monorepo,
+        wrong for anyone opening a single service directory
+      * go-to-definition into std needs `rust_toolchain(src_hash = ...)`,
+        which fetches `rust-src`. A repo that never builds
+        `<toolchain>_sysroot_src` never downloads it
+      * `sysroot` wants a rustup-shaped root — `bin/rustc` beside
+        `lib/rustlib` — which is `<toolchain>_rustc`, not
+        `<toolchain>_sysroot`
+      * the CLI does not read the proc-macro server from the project file; it
+        takes `--proc-macro-srv`, and needs `LD_LIBRARY_PATH` set to the
+        rustc component's `lib` for `librustc_driver`. An editor uses its own
+
+      Not covered, in rough order of how much it would be missed:
+      * **subrepos.** The query is `//...`, which is this repo only. Rust in
+        a plz subrepo is invisible, and a consumer whose crates live in one
+        gets an empty project. Covering them means querying each subrepo and
+        rebasing its paths, since the file is relative to a single root
+      * generated sources — the bindgen case above
+      * one lock per project file. A repo with several `rust_resolve` targets
+        can join only one, because each lock has its own `third_party_dir`.
+        A dep resolving to no lock is now reported by name rather than
+        dropped in silence
 - Third-party crates' own test suites
 - `cargo publish`
 - rustc incremental compilation, in any mode (decided 2026-08: crate

@@ -385,26 +385,83 @@ BuildScriptJobs = 8
 ```
 
 ### rust-analyzer
-`rust_project` writes a `rust-project.json` describing the crate graph, which
-is how rust-analyzer works on a project cargo does not drive.
+Editors get code intelligence — go-to-definition, completion, inline errors —
+from rust-analyzer, which normally learns the crate graph by running cargo.
+With no cargo to run it reads a `rust-project.json` instead, and `rust_project`
+writes one.
+
+Put one declaration in the **repo root** `BUILD` file:
 
 ```python
 rust_project(
     name = "rust-project",
     lock = "//third_party/crates:rust_lock",
-    deps = [":my_lib", ":my_bin"],
 )
 ```
 
+and run it:
+
 ```sh
-plz build //:rust-project && ln -sf plz-out/gen/rust-project.json .
+plz run //:rust-project
 ```
 
-The paths inside are repo-relative, which is why it belongs at the repo root
-and why the output is the same on every machine. `examples/ide` is a working
-one. Go-to-definition into the standard library additionally needs
-`rust_toolchain(src_hash = ...)`, which fetches the `rust-src` component; a
-repo that never builds `<toolchain>_sysroot_src` never downloads it.
+That finds every `rust_library`, `rust_binary` and `rust_test` in the repo,
+joins them to the third-party crates in the lock, and writes
+`rust-project.json` at the repo root. **There is no list of crates to keep up
+to date** — a crate added anywhere is picked up by the next run. Re-run it
+after adding or removing a crate, or after changing a crate's dependencies;
+editing code inside a crate needs no re-run.
+
+It is a `plz run` target rather than something `plz build` produces because
+the crate list can only be found by querying the build graph, which a rule
+cannot do while it is itself being parsed.
+
+**Your editor needs the rust-analyzer extension installed** — the file is
+useless without it, and nothing warns you. VS Code and Cursor:
+
+```sh
+code --install-extension rust-lang.rust-analyzer     # or: cursor --install-...
+```
+
+Neovim, Helix and Emacs' `lsp-mode`/`eglot` need the `rust-analyzer` binary on
+`PATH` and pick the file up from the project root with no further setup. In
+every case the file must sit at the repo root, because the paths inside it are
+repo-relative — which is also why the output is identical on every machine and
+can be committed if you want it.
+
+#### One project, or one repo of many
+The default covers the whole repo, which is what a repo that *is* a Rust
+project wants. A monorepo with Rust in one subtree can narrow the search, and
+leave out anything that would only add noise:
+
+```python
+rust_project(
+    name = "rust-project",
+    lock = "//third_party/crates:rust_lock",
+    targets = ["//services/...", "//libs/rust/..."],
+    exclude = ["//services/legacy/"],
+)
+```
+
+`targets` is where to look; `exclude` drops labels by prefix. A monorepo can
+also declare several of these, one per subtree, each with its own `out` — but
+only the file at the repo root is the one an editor opened at the repo root
+will find.
+
+#### When something does not resolve
+- **Imports of a third-party crate don't resolve.** That crate's declaration
+  is in a lock the run wasn't given. `plz run` prints a line naming the crate
+  and the dependency for every one of these, so the output tells you which.
+- **Nothing resolves at all, including `std`.** Go-to-definition into the
+  standard library needs the `rust-src` component, which is only downloaded if
+  the toolchain asks for it: set `rust_toolchain(src_hash = ...)`. Without it
+  a repo never builds `<toolchain>_sysroot_src` and rust-analyzer has no
+  standard library to attach lang items to.
+- **It worked, then stopped.** A build that re-stages `plz-out` reads to the
+  editor's file watcher as a mass delete, and rust-analyzer does not always
+  recover. Run *rust-analyzer: Restart Server* from the command palette.
+
+`examples/ide` is a working example of the whole thing.
 
 ### PipelinedCompilation
 Splits each library crate into a metadata-only compile that dependents'

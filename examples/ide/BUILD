@@ -25,12 +25,15 @@ rust_binary(
     deps = [":greeting"],
 )
 
-# plz build //examples/ide:rust-project && ln -sf plz-out/gen/examples/ide/rust-project.json .
+# The monorepo shape: Rust lives in one subtree, so the project file covers
+# that subtree rather than the whole repo. A repo that is one Rust project
+# wants the root BUILD's version instead, which takes no targets at all and
+# finds everything.
+#
+#   plz run //examples/ide:rust-project
 rust_project(
     name = "rust-project",
     lock = "//third_party/crates:rust_lock",
-    deps = [
-        ":greeting",
-        ":hello",
-    ],
+    out = "examples/ide/rust-project.json",
+    targets = ["//examples/ide/..."],
 )
