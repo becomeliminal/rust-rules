@@ -176,11 +176,11 @@ pub fn run(args: GenerateArgs) -> Result<()> {
                 crate::resolve::LockFile::load(p)
             };
             match loaded {
-            Ok(lock) => Some(lock),
-            Err(e) => {
-                eprintln!("warning: {:#}", e);
-                None
-            }
+                Ok(lock) => Some(lock),
+                Err(e) => {
+                    eprintln!("warning: {:#}", e);
+                    None
+                }
             }
         }
         _ => None,
@@ -217,7 +217,10 @@ pub fn run(args: GenerateArgs) -> Result<()> {
                 subrepo_label(
                     &args.third_party_folder,
                     &d.subrepo,
-                    &format!("_{}_build_script|buildscript", d.crate_name.replace('-', "_")),
+                    &format!(
+                        "_{}_build_script|buildscript",
+                        d.crate_name.replace('-', "_")
+                    ),
                 )
             })
             .collect(),
@@ -250,7 +253,10 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         let mut requested: Vec<String> = if args.features.is_empty() {
             Vec::new()
         } else {
-            args.features.split(',').map(|s| s.trim().to_string()).collect()
+            args.features
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect()
         };
         if manifest.features.contains_key("default") && !requested.iter().any(|f| f == "default") {
             requested.push("default".to_string());
@@ -261,19 +267,31 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         let overrides: std::collections::HashMap<String, String> = args
             .overrides
             .iter()
-            .filter_map(|o| o.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
+            .filter_map(|o| {
+                o.split_once('=')
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+            })
             .collect();
 
-        let deps =
-            resolve_dependencies(&manifest, &args.third_party_folder, &args.target, &requested_features, &overrides);
-        let build_deps = resolve_build_dependencies(&manifest, &args.third_party_folder, &args.target);
+        let deps = resolve_dependencies(
+            &manifest,
+            &args.third_party_folder,
+            &args.target,
+            &requested_features,
+            &overrides,
+        );
+        let build_deps =
+            resolve_build_dependencies(&manifest, &args.third_party_folder, &args.target);
         (requested_features, deps, build_deps)
     };
 
     // The platform being built for. Build scripts are told about it whatever
     // platform they run on, since what they emit describes the artifacts;
     // compiles only need naming when it is not the host's.
-    let build_target = args.compile_target.clone().unwrap_or_else(|| args.target.clone());
+    let build_target = args
+        .compile_target
+        .clone()
+        .unwrap_or_else(|| args.target.clone());
     // A host unit is never cross-compiled: it runs during the build, on the
     // machine doing the building, so naming a target would produce something
     // that cannot execute. The _host twin below passes false for the same
@@ -606,7 +624,8 @@ fn resolve_build_dependencies(
                 let package_name = dep.package().unwrap_or(name);
                 let normalized_pkg = package_name.replace("-", "_");
                 if seen.insert(name.replace("-", "_")) {
-                    let target = subrepo_label(third_party_folder, &normalized_pkg, &normalized_pkg);
+                    let target =
+                        subrepo_label(third_party_folder, &normalized_pkg, &normalized_pkg);
                     deps.push((name.clone(), target));
                 }
             }
@@ -665,8 +684,6 @@ fn generate_build_file(
     // Proc macros are loaded into rustc itself, so they are built for the
     // machine running the build however the rest of the graph is targeted.
 
-
-
     let target_arg = if cross && crate_type != "proc-macro" {
         format!("--target {} ", build_target)
     } else {
@@ -720,8 +737,6 @@ fn generate_build_file(
         "        \"mods\": glob([\"*\", \"**/*\"], exclude=[\"{}\", \"src/lib.rs\", \"src/main.rs\", \"build.rs\", \"Cargo.toml\", \"BUILD\", \"BUILD.plz\", \".plzconfig\", \"lib{}-*\", \"*.externconfig\", \"{}_out\", \"{}_out/**\", {}\"**/*.c\", \"**/*.cc\", \"**/*.cpp\", \"**/*.cxx\", \"**/*.h\", \"**/*.hpp\", \"**/*.hxx\", \"**/*.S\", \"**/*.asm\"], allow_empty=True),\n",
         lib_path, crate_ident, normalized_name, normalized_name, script_dir
     );
-
-
 
     // Bin-only crates (e.g. bindgen-cli) have no library to compile; run()
     // emits an alias to the binary instead.
@@ -818,7 +833,15 @@ fn generate_build_file(
 
     // If this crate has a build script, generate two-stage build
     if let Some(script_path) = build_script_path {
-        content.push_str(&generate_build_script_rule(&normalized_name, features, build_deps, script_path, linked_deps, pipeline, build_target));
+        content.push_str(&generate_build_script_rule(
+            &normalized_name,
+            features,
+            build_deps,
+            script_path,
+            linked_deps,
+            pipeline,
+            build_target,
+        ));
         content.push('\n');
         content.push_str(&generate_compile_rule_with_buildscript(
             &normalized_name,
@@ -879,10 +902,16 @@ fn generate_build_file(
             // uniform name, with the dylib staged via the public dep.
             content.push_str("build_rule(\n");
             content.push_str(&format!("    name = \"_{}#rmeta\",\n", normalized_name));
-            content.push_str(&format!("    srcs = [\":_{}#link|externconfig\"],\n", normalized_name));
+            content.push_str(&format!(
+                "    srcs = [\":_{}#link|externconfig\"],\n",
+                normalized_name
+            ));
             content.push_str("    cmd = \"cp $SRCS $OUTS_EXTERNCONFIG\",\n");
             content.push_str("    outs = {\n");
-            content.push_str(&format!("        \"externconfig\": [\"{}\"],\n", externconfig_name(&out_rlib, ".rmeta")));
+            content.push_str(&format!(
+                "        \"externconfig\": [\"{}\"],\n",
+                externconfig_name(&out_rlib, ".rmeta")
+            ));
             content.push_str("    },\n");
             content.push_str(&format!("    deps = [\":{}\"],\n", normalized_name));
             content.push_str("    visibility = [\"PUBLIC\"],\n");
@@ -984,13 +1013,22 @@ fn generate_rmeta_rule(
     if !deps.is_empty() {
         content.push_str("        \"externconfigs\": [\n");
         for (_name, target) in deps {
-            content.push_str(&format!("            \"{}|externconfig\",\n", rmeta_ref(target)));
+            content.push_str(&format!(
+                "            \"{}|externconfig\",\n",
+                rmeta_ref(target)
+            ));
         }
         content.push_str("        ],\n");
     }
     if has_buildscript {
-        content.push_str(&format!("        \"buildscript\": [\":_{}_build_script|buildscript\"],\n", normalized_name));
-        content.push_str(&format!("        \"buildscript_out\": [\":_{}_build_script|out\"],\n", normalized_name));
+        content.push_str(&format!(
+            "        \"buildscript\": [\":_{}_build_script|buildscript\"],\n",
+            normalized_name
+        ));
+        content.push_str(&format!(
+            "        \"buildscript_out\": [\":_{}_build_script|out\"],\n",
+            normalized_name
+        ));
     }
     content.push_str("    },\n");
     content.push_str("    cmd = {\n");
@@ -1000,7 +1038,10 @@ fn generate_rmeta_rule(
     content.push_str("    },\n");
     content.push_str("    outs = {\n");
     content.push_str(&format!("        \"rmeta\": [\"{}\"],\n", out_rmeta));
-    content.push_str(&format!("        \"externconfig\": [\"{}\"],\n", externconfig_name(out_rmeta, ".rmeta")));
+    content.push_str(&format!(
+        "        \"externconfig\": [\"{}\"],\n",
+        externconfig_name(out_rmeta, ".rmeta")
+    ));
     content.push_str("    },\n");
     if !deps.is_empty() {
         content.push_str("    deps = [\n");
@@ -1065,7 +1106,11 @@ fn generate_bin_rule(
         content.push_str(&format!("            \"{}|externconfig\",\n", lib_ec));
     }
     for (_name, target) in deps {
-        let ec = if pipeline { link_ref(target) } else { target.clone() };
+        let ec = if pipeline {
+            link_ref(target)
+        } else {
+            target.clone()
+        };
         content.push_str(&format!("            \"{}|externconfig\",\n", ec));
     }
     content.push_str("        ],\n");
@@ -1177,16 +1222,26 @@ fn generate_build_script_rule(
     // shaderc-sys vendors enough of shaderc, glslang and SPIRV-Tools to push
     // that past the exec argument limit. A dependency is staged just the
     // same without being enumerated.
-    content.push_str(&format!("# Stage 1: Run build script for {}\n", normalized_name));
+    content.push_str(&format!(
+        "# Stage 1: Run build script for {}\n",
+        normalized_name
+    ));
     content.push_str("build_rule(\n");
-    content.push_str(&format!("    name = \"_{}_build_script\",\n", normalized_name));
+    content.push_str(&format!(
+        "    name = \"_{}_build_script\",\n",
+        normalized_name
+    ));
     content.push_str("    srcs = {\n");
     content.push_str(&format!("        \"script\": [\"{}\"],\n", script_path));
     content.push_str("        \"manifest\": [\"Cargo.toml\"],\n");
     if has_build_deps {
         content.push_str("        \"externconfigs\": [\n");
         for (_name, target) in build_deps {
-            let ec = if pipeline { link_ref(target) } else { target.clone() };
+            let ec = if pipeline {
+                link_ref(target)
+            } else {
+                target.clone()
+            };
             content.push_str(&format!("            \"{}|externconfig\",\n", ec));
         }
         content.push_str("        ],\n");
@@ -1201,7 +1256,10 @@ fn generate_build_script_rule(
     content.push_str("    },\n");
     content.push_str(&format!("    cmd = \"{}\",\n", build_script_cmd));
     content.push_str("    outs = {\n");
-    content.push_str(&format!("        \"buildscript\": [\"{}.buildscript\"],\n", normalized_name));
+    content.push_str(&format!(
+        "        \"buildscript\": [\"{}.buildscript\"],\n",
+        normalized_name
+    ));
     content.push_str(&format!("        \"out\": [\"{}\"],\n", out_dir));
     content.push_str("    },\n");
 
@@ -1312,7 +1370,10 @@ fn generate_compile_rule_with_buildscript(
         aggregate_cmd, compile_base, ec_key, out_rlib
     );
 
-    content.push_str(&format!("# Stage 2: Compile {} with build script output\n", normalized_name));
+    content.push_str(&format!(
+        "# Stage 2: Compile {} with build script output\n",
+        normalized_name
+    ));
     content.push_str("build_rule(\n");
     content.push_str(&format!("    name = \"{}\",\n", rule_name));
     content.push_str("    srcs = {\n");
@@ -1333,8 +1394,14 @@ fn generate_compile_rule_with_buildscript(
         }
         content.push_str("        ],\n");
     }
-    content.push_str(&format!("        \"buildscript\": [\":_{}_build_script|buildscript\"],\n", normalized_name));
-    content.push_str(&format!("        \"buildscript_out\": [\":_{}_build_script|out\"],\n", normalized_name));
+    content.push_str(&format!(
+        "        \"buildscript\": [\":_{}_build_script|buildscript\"],\n",
+        normalized_name
+    ));
+    content.push_str(&format!(
+        "        \"buildscript_out\": [\":_{}_build_script|out\"],\n",
+        normalized_name
+    ));
     content.push_str("    },\n");
     content.push_str("    cmd = {\n");
     content.push_str(&format!("        \"dbg\": \"{}\",\n", cmd_dbg));
@@ -1346,7 +1413,10 @@ fn generate_compile_rule_with_buildscript(
     if crate_type != "proc-macro" && !pipeline {
         content.push_str(&format!("        \"rmeta\": [\"{}\"],\n", out_rmeta));
     }
-    content.push_str(&format!("        \"externconfig\": [\"{}\"],\n", externconfig_name(out_rlib, "")));
+    content.push_str(&format!(
+        "        \"externconfig\": [\"{}\"],\n",
+        externconfig_name(out_rlib, "")
+    ));
     content.push_str("    },\n");
 
     if !deps.is_empty() {
@@ -1444,7 +1514,10 @@ fn generate_compile_rule(
     if crate_type != "proc-macro" && !pipeline {
         content.push_str(&format!("        \"rmeta\": [\"{}\"],\n", out_rmeta));
     }
-    content.push_str(&format!("        \"externconfig\": [\"{}\"],\n", externconfig_name(out_rlib, "")));
+    content.push_str(&format!(
+        "        \"externconfig\": [\"{}\"],\n",
+        externconfig_name(out_rlib, "")
+    ));
     content.push_str("    },\n");
 
     if !deps.is_empty() {
@@ -1480,9 +1553,9 @@ fn generate_plzconfig() -> String {
     // `toolchain_` name prefix that any consumer is free to change.
     r#"[Plugin "rust"]
 Target = @//plugins:rust
-"#.to_string()
+"#
+    .to_string()
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1498,13 +1571,25 @@ mod tests {
     #[test]
     fn crate_type_detection() {
         assert_eq!(determine_crate_type(&manifest(""), true), "lib");
-        assert_eq!(determine_crate_type(&manifest("[lib]\nproc-macro = true\n"), true), "proc-macro");
-        assert_eq!(determine_crate_type(&manifest("[lib]\ncrate-type = [\"proc-macro\"]\n"), true), "proc-macro");
-        assert_eq!(determine_crate_type(&manifest("[[bin]]\nname = \"tool\"\n"), false), "bin");
+        assert_eq!(
+            determine_crate_type(&manifest("[lib]\nproc-macro = true\n"), true),
+            "proc-macro"
+        );
+        assert_eq!(
+            determine_crate_type(&manifest("[lib]\ncrate-type = [\"proc-macro\"]\n"), true),
+            "proc-macro"
+        );
+        assert_eq!(
+            determine_crate_type(&manifest("[[bin]]\nname = \"tool\"\n"), false),
+            "bin"
+        );
         // A crate with binaries and an undeclared src/lib.rs is still a
         // library: alloc-no-stdlib is one, and compiling its lib.rs as a bin
         // fails for want of a main function.
-        assert_eq!(determine_crate_type(&manifest("[[bin]]\nname = \"tool\"\n"), true), "lib");
+        assert_eq!(
+            determine_crate_type(&manifest("[[bin]]\nname = \"tool\"\n"), true),
+            "lib"
+        );
     }
 
     fn gen(
@@ -1551,7 +1636,13 @@ mod tests {
 
     #[test]
     fn plain_lib_rule() {
-        let out = gen("lib", &["std"], &[("dep_a", "///third_party/rust/dep_a//:dep_a")], None, "");
+        let out = gen(
+            "lib",
+            &["std"],
+            &[("dep_a", "///third_party/rust/dep_a//:dep_a")],
+            None,
+            "",
+        );
         assert!(out.contains("name = \"my_crate\""));
         assert!(out.contains("--crate-name my_crate"));
         assert!(out.contains("libmy_crate-1_2_3.rlib"));
@@ -1567,8 +1658,14 @@ mod tests {
     /// real graphs, which is where this shows up.
     #[test]
     fn externconfig_names_are_version_unique() {
-        assert_eq!(externconfig_name("libsyn-2_0_119.rlib", ""), "syn-2_0_119.externconfig");
-        assert_eq!(externconfig_name("libsyn-3_0_3.rlib", ""), "syn-3_0_3.externconfig");
+        assert_eq!(
+            externconfig_name("libsyn-2_0_119.rlib", ""),
+            "syn-2_0_119.externconfig"
+        );
+        assert_eq!(
+            externconfig_name("libsyn-3_0_3.rlib", ""),
+            "syn-3_0_3.externconfig"
+        );
         assert_ne!(
             externconfig_name("libsyn-2_0_119.rlib", ""),
             externconfig_name("libsyn-3_0_3.rlib", "")
@@ -1613,7 +1710,11 @@ mod tests {
         // rustc, the artifact and the extern name all use the crate identity
         assert!(out.contains("--crate-name md5"), "{}", out);
         assert!(out.contains("libmd5-0_11_0.rlib"), "{}", out);
-        assert!(out.contains("echo 'md5@third_party/crates/md_5=libmd5-0_11_0.rlib'"), "{}", out);
+        assert!(
+            out.contains("echo 'md5@third_party/crates/md_5=libmd5-0_11_0.rlib'"),
+            "{}",
+            out
+        );
         // ...while the rule keeps the package name, which is what a label says
         assert!(out.contains("name = \"md_5\""), "{}", out);
     }
@@ -1634,7 +1735,11 @@ mod tests {
     #[test]
     fn host_unit_keeps_the_crate_name() {
         let out = gen("lib", &[], &[], None, "_host");
-        assert!(out.contains("echo 'my_crate@third_party/crates/my_crate_host="), "{}", out);
+        assert!(
+            out.contains("echo 'my_crate@third_party/crates/my_crate_host="),
+            "{}",
+            out
+        );
         assert!(!out.contains("echo 'my_crate_host@"), "{}", out);
     }
 
@@ -1646,11 +1751,18 @@ mod tests {
         let out = gen(
             "lib",
             &[],
-            &[("proc-macro2", "///third_party/crates/proc_macro2//:proc_macro2_host")],
+            &[(
+                "proc-macro2",
+                "///third_party/crates/proc_macro2//:proc_macro2_host",
+            )],
             None,
             "",
         );
-        assert!(!out.contains("--rename proc_macro2=proc_macro2_host"), "{}", out);
+        assert!(
+            !out.contains("--rename proc_macro2=proc_macro2_host"),
+            "{}",
+            out
+        );
     }
 
     /// A build-dependency declared with package = "..." is imported under
@@ -1666,7 +1778,10 @@ mod tests {
             "lib",
             &[],
             &[],
-            &[("rustversion_compat".to_string(), "///third_party/crates/rustversion//:rustversion".to_string())],
+            &[(
+                "rustversion_compat".to_string(),
+                "///third_party/crates/rustversion//:rustversion".to_string(),
+            )],
             Some("build.rs"),
             "src/lib.rs",
             "",
@@ -1678,7 +1793,11 @@ mod tests {
             "third_party/crates/my_crate",
             "my-crate",
         );
-        assert!(out.contains("--rename rustversion_compat=@third_party/crates/rustversion"), "{}", out);
+        assert!(
+            out.contains("--rename rustversion_compat=@third_party/crates/rustversion"),
+            "{}",
+            out
+        );
     }
 
     /// aws-smithy-types depends on http-body twice, as http_body_0_4 and
@@ -1690,8 +1809,14 @@ mod tests {
             "lib",
             &[],
             &[
-                ("http-body-0-4", "///third_party/crates/http_body-0.4.6//:http_body"),
-                ("http-body-1-0", "///third_party/crates/http_body//:http_body"),
+                (
+                    "http-body-0-4",
+                    "///third_party/crates/http_body-0.4.6//:http_body",
+                ),
+                (
+                    "http-body-1-0",
+                    "///third_party/crates/http_body//:http_body",
+                ),
             ],
             None,
             "",
@@ -1725,8 +1850,16 @@ mod tests {
             None,
             "",
         );
-        assert!(out.contains("--dep @third_party/crates/http-0.2.12"), "{}", out);
-        assert!(out.contains("--rename http_1x=@third_party/crates/http"), "{}", out);
+        assert!(
+            out.contains("--dep @third_party/crates/http-0.2.12"),
+            "{}",
+            out
+        );
+        assert!(
+            out.contains("--rename http_1x=@third_party/crates/http"),
+            "{}",
+            out
+        );
         // The alias is not also requested as a plain dep, which would put the
         // wrong version back under the bare name.
         assert!(!out.contains("--dep @third_party/crates/http "), "{}", out);
@@ -1741,11 +1874,18 @@ mod tests {
         let out = gen(
             "lib",
             &[],
-            &[("proc-macro2", "///third_party/crates/proc_macro2//:proc_macro2_host")],
+            &[(
+                "proc-macro2",
+                "///third_party/crates/proc_macro2//:proc_macro2_host",
+            )],
             None,
             "",
         );
-        assert!(out.contains("--dep @third_party/crates/proc_macro2_host"), "{}", out);
+        assert!(
+            out.contains("--dep @third_party/crates/proc_macro2_host"),
+            "{}",
+            out
+        );
     }
 
     /// Excluding artifacts by extension throws away data files a crate
@@ -1846,10 +1986,12 @@ mod tests {
                 .expect("build script command")
                 .to_string()
         };
-        assert!(script_cmd(gen_cross("lib", Some("build.rs"))).contains("--target aarch64-apple-darwin"));
+        assert!(script_cmd(gen_cross("lib", Some("build.rs")))
+            .contains("--target aarch64-apple-darwin"));
         // Not only when cross-compiling: the default would otherwise decide
         // the platform for every native build too.
-        assert!(script_cmd(gen("lib", &[], &[], Some("build.rs"), "")).contains("--target x86_64-unknown-linux-gnu"));
+        assert!(script_cmd(gen("lib", &[], &[], Some("build.rs"), ""))
+            .contains("--target x86_64-unknown-linux-gnu"));
     }
 
     #[test]
@@ -1893,14 +2035,19 @@ mod tests {
         assert!(out.contains("libmy_crate-1_2_3_host.rlib"));
         // The host unit is still the crate `my_crate`; only the qualifier and the
         // artifact say it is the host one.
-        assert!(out.contains("echo 'my_crate@third_party/crates/my_crate_host=libmy_crate-1_2_3_host.rlib'"));
+        assert!(out.contains(
+            "echo 'my_crate@third_party/crates/my_crate_host=libmy_crate-1_2_3_host.rlib'"
+        ));
     }
 
     #[test]
     fn proc_macro_rule_shape() {
         let out = gen("proc-macro", &[], &[], None, "");
         assert!(out.contains("--crate-type proc-macro"));
-        assert!(out.contains(&format!("libmy_crate-1_2_3{}", std::env::consts::DLL_SUFFIX)));
+        assert!(out.contains(&format!(
+            "libmy_crate-1_2_3{}",
+            std::env::consts::DLL_SUFFIX
+        )));
         // A proc macro has no metadata twin: dependents must expand it, which
         // needs the dylib. (Checked precisely - "rmeta" also appears in the
         // list of artifacts excluded from the source glob.)
@@ -1910,13 +2057,26 @@ mod tests {
 
     #[test]
     fn renames_emitted_for_mismatched_deps() {
-        let out = gen("lib", &[], &[("alias_name", "///third_party/rust/real//:real")], None, "");
+        let out = gen(
+            "lib",
+            &[],
+            &[("alias_name", "///third_party/rust/real//:real")],
+            None,
+            "",
+        );
         assert!(out.contains("--rename alias_name=@"), "{}", out);
     }
 
     #[test]
     fn pipelined_lib_shape() {
-        let out = gen_p("lib", &[], &[("dep_a", "///third_party/rust/dep_a//:dep_a")], None, "", true);
+        let out = gen_p(
+            "lib",
+            &[],
+            &[("dep_a", "///third_party/rust/dep_a//:dep_a")],
+            None,
+            "",
+            true,
+        );
         // Three-rule shape: link rule, metadata twin, public filegroup
         assert!(out.contains("name = \"_my_crate#link\""));
         assert!(out.contains("name = \"_my_crate#rmeta\""));
@@ -1938,7 +2098,14 @@ mod tests {
 
     #[test]
     fn pipelined_proc_macro_shape() {
-        let out = gen_p("proc-macro", &[], &[("dep_a", "///third_party/rust/dep_a//:dep_a")], None, "", true);
+        let out = gen_p(
+            "proc-macro",
+            &[],
+            &[("dep_a", "///third_party/rust/dep_a//:dep_a")],
+            None,
+            "",
+            true,
+        );
         // Proc-macros must fully build: twin is a copy-through of the link
         // rule's externconfig, and dep refs use the link rules
         assert!(out.contains("name = \"_my_crate#link\""));
@@ -1967,7 +2134,10 @@ mod tests {
             "1.2.3",
             &cargo_toml::Edition::E2021,
             &[],
-            &[("dep_a".to_string(), "///third_party/rust/dep_a//:dep_a".to_string())],
+            &[(
+                "dep_a".to_string(),
+                "///third_party/rust/dep_a//:dep_a".to_string(),
+            )],
             true,
             false,
         );
@@ -1988,7 +2158,11 @@ mod run_tests {
     use std::collections::BTreeMap;
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("please_rust_gen_run_{}_{}", std::process::id(), name));
+        let dir = std::env::temp_dir().join(format!(
+            "please_rust_gen_run_{}_{}",
+            std::process::id(),
+            name
+        ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -2111,7 +2285,11 @@ mod run_tests {
     #[test]
     fn build_directory_does_not_block_generation() {
         let root = scratch("builddir");
-        let src = crate_dir(&root, "[package]\nname = \"demo\"\nversion = \"1.0.0\"\nedition = \"2021\"\n", &[("src/lib.rs", "")]);
+        let src = crate_dir(
+            &root,
+            "[package]\nname = \"demo\"\nversion = \"1.0.0\"\nedition = \"2021\"\n",
+            &[("src/lib.rs", "")],
+        );
         fs::create_dir(src.join("BUILD")).unwrap();
         run(args(src.clone(), None)).unwrap();
 
@@ -2122,7 +2300,11 @@ mod run_tests {
     #[test]
     fn lock_driven_generation() {
         let root = scratch("lock");
-        let src = crate_dir(&root, "[package]\nname = \"demo\"\nversion = \"1.0.0\"\nedition = \"2021\"\n", &[("src/lib.rs", "")]);
+        let src = crate_dir(
+            &root,
+            "[package]\nname = \"demo\"\nversion = \"1.0.0\"\nedition = \"2021\"\n",
+            &[("src/lib.rs", "")],
+        );
         let lock = write_lock(&root, false);
         run(args(src.clone(), Some(lock))).unwrap();
 
@@ -2282,7 +2464,13 @@ mod heuristic_tests {
         overrides.insert("plain".to_string(), "plain-0.9.0".to_string());
 
         // No features: only the mandatory dep, routed through the override
-        let deps = resolve_dependencies(&m, "third_party/rust", "x86_64-unknown-linux-gnu", &[], &overrides);
+        let deps = resolve_dependencies(
+            &m,
+            "third_party/rust",
+            "x86_64-unknown-linux-gnu",
+            &[],
+            &overrides,
+        );
         assert_eq!(deps.len(), 1);
         assert_eq!(deps[0].1, "///third_party/rust/plain-0.9.0//:plain");
 

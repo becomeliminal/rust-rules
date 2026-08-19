@@ -27,9 +27,9 @@ mod generate;
 mod pubgrub_solver;
 mod resolve;
 mod sync;
-mod workspace;
 mod test;
 mod timing;
+mod workspace;
 
 #[derive(Parser)]
 #[command(name = "please_rust")]
@@ -108,14 +108,29 @@ mod cli_tests {
             Err(e) => e.to_string(),
             Ok(_) => panic!("--help should not parse to a command"),
         };
-        for cmd in ["compile", "build-script", "generate", "resolve", "sync", "lock", "test"] {
+        for cmd in [
+            "compile",
+            "build-script",
+            "generate",
+            "resolve",
+            "sync",
+            "lock",
+            "test",
+        ] {
             assert!(help.contains(cmd), "missing {}", cmd);
         }
         assert!(Cli::try_parse_from(["please_rust", "nonsense"]).is_err());
 
         // A real dispatch through the CLI surface: the test wrapper
         let cli = Cli::try_parse_from([
-            "please_rust", "test", "--suite", "s", "--", "sh", "-c", "printf 'test a ... ok\n'",
+            "please_rust",
+            "test",
+            "--suite",
+            "s",
+            "--",
+            "sh",
+            "-c",
+            "printf 'test a ... ok\n'",
         ])
         .unwrap_or_else(|e| panic!("{}", e));
         std::env::remove_var("RESULTS_FILE");

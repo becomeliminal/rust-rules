@@ -157,7 +157,9 @@ pub fn run(args: BuildScriptArgs) -> Result<()> {
     fs::create_dir_all(&args.out_dir)
         .with_context(|| format!("Failed to create OUT_DIR: {}", args.out_dir.display()))?;
 
-    let out_dir = args.out_dir.canonicalize()
+    let out_dir = args
+        .out_dir
+        .canonicalize()
         .with_context(|| format!("Failed to canonicalize OUT_DIR: {}", args.out_dir.display()))?;
 
     // 3. Build environment variables (cargo sets these at compile time of the
@@ -174,7 +176,11 @@ pub fn run(args: BuildScriptArgs) -> Result<()> {
     let build_script_binary = compile_build_script(&args, &out_dir, edition, &env)?;
 
     // 5. Execute build script from the package root (cargo contract)
-    let manifest_dir = PathBuf::from(env.get("CARGO_MANIFEST_DIR").cloned().unwrap_or_else(|| ".".to_string()));
+    let manifest_dir = PathBuf::from(
+        env.get("CARGO_MANIFEST_DIR")
+            .cloned()
+            .unwrap_or_else(|| ".".to_string()),
+    );
     let directives = execute_build_script(&build_script_binary, &env, &manifest_dir)?;
 
     // 6. Print warnings; error directives fail the build (cargo semantics)
@@ -245,8 +251,9 @@ fn compile_build_script(
     // Add extern crates from externconfig (for build-dependencies)
     if let Some(config_path) = &args.externconfig {
         if config_path.exists() {
-            let content = fs::read_to_string(config_path)
-                .with_context(|| format!("Failed to read externconfig: {}", config_path.display()))?;
+            let content = fs::read_to_string(config_path).with_context(|| {
+                format!("Failed to read externconfig: {}", config_path.display())
+            })?;
 
             for line in content.lines() {
                 let line = line.trim();
@@ -257,7 +264,8 @@ fn compile_build_script(
                     let (name, qualifier) = crate::compile::split_externconfig_key(key);
                     // Search for the file
                     if let Some(path) = find_file_recursive(".", filename.trim()) {
-                        cmd.arg("--extern").arg(format!("{}={}", name, path.display()));
+                        cmd.arg("--extern")
+                            .arg(format!("{}={}", name, path.display()));
                         // A renamed dependency is imported under its alias as
                         // well, which is the only name its source knows. The
                         // right-hand side names the declaration, since a crate
@@ -275,8 +283,11 @@ fn compile_build_script(
                                     _ => true,
                                 };
                                 if name_ok && qual_ok {
-                                    cmd.arg("--extern")
-                                        .arg(format!("{}={}", alias, path.display()));
+                                    cmd.arg("--extern").arg(format!(
+                                        "{}={}",
+                                        alias,
+                                        path.display()
+                                    ));
                                 }
                             }
                         }
@@ -325,15 +336,18 @@ fn build_environment(
     // Get the manifest directory (parent of Cargo.toml)
     // If manifest_path is just "Cargo.toml" (no parent), use current directory
     let manifest_dir = match args.manifest_path.parent() {
-        Some(p) if !p.as_os_str().is_empty() => p.canonicalize()
-            .with_context(|| format!("Failed to canonicalize manifest directory: {}", p.display()))?,
-        _ => std::env::current_dir()
-            .context("Failed to get current directory")?,
+        Some(p) if !p.as_os_str().is_empty() => p.canonicalize().with_context(|| {
+            format!("Failed to canonicalize manifest directory: {}", p.display())
+        })?,
+        _ => std::env::current_dir().context("Failed to get current directory")?,
     };
 
     // Core variables
     env.insert("CARGO".to_string(), "/bin/false".to_string()); // Fake cargo
-    env.insert("CARGO_MANIFEST_DIR".to_string(), manifest_dir.display().to_string());
+    env.insert(
+        "CARGO_MANIFEST_DIR".to_string(),
+        manifest_dir.display().to_string(),
+    );
     env.insert(
         "CARGO_MANIFEST_PATH".to_string(),
         manifest_dir.join("Cargo.toml").display().to_string(),
@@ -365,7 +379,10 @@ fn build_environment(
     // and crates silently configure themselves for no_std.
     if let Some(sysroot) = &args.sysroot {
         let sysroot_abs = sysroot.canonicalize().unwrap_or_else(|_| sysroot.clone());
-        env.insert("RUSTFLAGS".to_string(), format!("--sysroot {}", sysroot_abs.display()));
+        env.insert(
+            "RUSTFLAGS".to_string(),
+            format!("--sysroot {}", sysroot_abs.display()),
+        );
         env.insert(
             "CARGO_ENCODED_RUSTFLAGS".to_string(),
             format!("--sysroot\u{1f}{}", sysroot_abs.display()),
@@ -399,14 +416,25 @@ fn build_environment(
         if let Some(os) = &info.os {
             env.insert("CARGO_CFG_TARGET_OS".to_string(), os.as_str().to_string());
         }
-        env.insert("CARGO_CFG_TARGET_ARCH".to_string(), info.arch.as_str().to_string());
+        env.insert(
+            "CARGO_CFG_TARGET_ARCH".to_string(),
+            info.arch.as_str().to_string(),
+        );
         env.insert(
             "CARGO_CFG_TARGET_VENDOR".to_string(),
-            info.vendor.as_ref().map(|v| v.as_str()).unwrap_or("").to_string(),
+            info.vendor
+                .as_ref()
+                .map(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
         );
         env.insert(
             "CARGO_CFG_TARGET_ENV".to_string(),
-            info.env.as_ref().map(|e| e.as_str()).unwrap_or("").to_string(),
+            info.env
+                .as_ref()
+                .map(|e| e.as_str())
+                .unwrap_or("")
+                .to_string(),
         );
         env.insert(
             "CARGO_CFG_TARGET_POINTER_WIDTH".to_string(),
@@ -426,10 +454,19 @@ fn build_environment(
             }
         }
         if args.target.contains("x86_64") {
-            env.insert("CARGO_CFG_TARGET_FEATURE".to_string(), "fxsr,sse,sse2".to_string());
-            env.insert("CARGO_CFG_TARGET_HAS_ATOMIC".to_string(), "8,16,32,64,ptr".to_string());
+            env.insert(
+                "CARGO_CFG_TARGET_FEATURE".to_string(),
+                "fxsr,sse,sse2".to_string(),
+            );
+            env.insert(
+                "CARGO_CFG_TARGET_HAS_ATOMIC".to_string(),
+                "8,16,32,64,ptr".to_string(),
+            );
         } else if args.target.contains("aarch64") {
-            env.insert("CARGO_CFG_TARGET_HAS_ATOMIC".to_string(), "8,16,32,64,128,ptr".to_string());
+            env.insert(
+                "CARGO_CFG_TARGET_HAS_ATOMIC".to_string(),
+                "8,16,32,64,128,ptr".to_string(),
+            );
         }
     }
 
@@ -452,7 +489,9 @@ pub fn package_env(pkg: &cargo_toml::Package) -> Vec<(String, String)> {
 
     // CARGO_PKG_VERSION and components
     // pkg.version is Inheritable<String>, .get() returns Result<&String, Error>
-    let version_str = pkg.version.get()
+    let version_str = pkg
+        .version
+        .get()
         .cloned()
         .unwrap_or_else(|_| "0.0.0".to_string());
     env.push(("CARGO_PKG_VERSION".to_string(), version_str.clone()));
@@ -464,7 +503,10 @@ pub fn package_env(pkg: &cargo_toml::Package) -> Vec<(String, String)> {
             env.push(("CARGO_PKG_VERSION_MAJOR".to_string(), v.major.to_string()));
             env.push(("CARGO_PKG_VERSION_MINOR".to_string(), v.minor.to_string()));
             env.push(("CARGO_PKG_VERSION_PATCH".to_string(), v.patch.to_string()));
-            env.push(("CARGO_PKG_VERSION_PRE".to_string(), v.pre.as_str().to_string()));
+            env.push((
+                "CARGO_PKG_VERSION_PRE".to_string(),
+                v.pre.as_str().to_string(),
+            ));
         }
         Err(_) => {
             env.push(("CARGO_PKG_VERSION_MAJOR".to_string(), "0".to_string()));
@@ -480,7 +522,11 @@ pub fn package_env(pkg: &cargo_toml::Package) -> Vec<(String, String)> {
 
     // Optional string metadata; cargo sets empty strings when absent
     let opt = |field: &Option<cargo_toml::Inheritable<String>>| -> String {
-        field.as_ref().and_then(|f| f.get().ok()).cloned().unwrap_or_default()
+        field
+            .as_ref()
+            .and_then(|f| f.get().ok())
+            .cloned()
+            .unwrap_or_default()
     };
     env.push(("CARGO_PKG_DESCRIPTION".to_string(), opt(&pkg.description)));
     env.push(("CARGO_PKG_HOMEPAGE".to_string(), opt(&pkg.homepage)));
@@ -488,7 +534,11 @@ pub fn package_env(pkg: &cargo_toml::Package) -> Vec<(String, String)> {
     env.push(("CARGO_PKG_LICENSE".to_string(), opt(&pkg.license)));
     env.push((
         "CARGO_PKG_LICENSE_FILE".to_string(),
-        pkg.license_file.as_ref().and_then(|f| f.get().ok()).map(|p| p.display().to_string()).unwrap_or_default(),
+        pkg.license_file
+            .as_ref()
+            .and_then(|f| f.get().ok())
+            .map(|p| p.display().to_string())
+            .unwrap_or_default(),
     ));
     env.push(("CARGO_PKG_RUST_VERSION".to_string(), opt(&pkg.rust_version)));
 
@@ -564,7 +614,9 @@ fn parse_directive(line: &str, directives: &mut Directives) {
         directives.rustc_cfgs.push(value.to_string());
     } else if let Some(value) = directive.strip_prefix("rustc-env=") {
         if let Some((key, val)) = value.split_once('=') {
-            directives.rustc_envs.push((key.to_string(), val.to_string()));
+            directives
+                .rustc_envs
+                .push((key.to_string(), val.to_string()));
         }
     } else if let Some(value) = directive.strip_prefix("rustc-link-lib=") {
         directives.rustc_link_libs.push(value.to_string());
@@ -585,12 +637,20 @@ fn parse_directive(line: &str, directives: &mut Directives) {
         let mut it = value.split_whitespace().peekable();
         while let Some(tok) = it.next() {
             if let Some(rest) = tok.strip_prefix("-l") {
-                let v = if rest.is_empty() { it.next().unwrap_or("") } else { rest };
+                let v = if rest.is_empty() {
+                    it.next().unwrap_or("")
+                } else {
+                    rest
+                };
                 if !v.is_empty() {
                     directives.rustc_link_libs.push(v.to_string());
                 }
             } else if let Some(rest) = tok.strip_prefix("-L") {
-                let v = if rest.is_empty() { it.next().unwrap_or("") } else { rest };
+                let v = if rest.is_empty() {
+                    it.next().unwrap_or("")
+                } else {
+                    rest
+                };
                 if !v.is_empty() {
                     directives.rustc_link_searches.push(v.to_string());
                 }
@@ -605,7 +665,12 @@ fn parse_directive(line: &str, directives: &mut Directives) {
     }
 }
 
-fn write_directives(output: &Path, directives: &Directives, out_dir: &Path, links: Option<&str>) -> Result<()> {
+fn write_directives(
+    output: &Path,
+    directives: &Directives,
+    out_dir: &Path,
+    links: Option<&str>,
+) -> Result<()> {
     let mut content = String::new();
 
     content.push_str("# Generated by please_rust build-script\n");
@@ -613,7 +678,10 @@ fn write_directives(output: &Path, directives: &Directives, out_dir: &Path, link
 
     // Record OUT_DIR by name only: this sandbox's absolute path is gone by the
     // time the crate compiles, so compile resolves it relative to this file.
-    let out_dir_name = out_dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "out".to_string());
+    let out_dir_name = out_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "out".to_string());
     content.push_str(&format!("out-dir={}\n", out_dir_name));
 
     // Self-describing links key so dependents' build scripts can map this
@@ -689,7 +757,12 @@ pub fn resolve_cc(cc: &Option<PathBuf>) -> Option<(String, String, String, Strin
         // A bare command name (e.g. "cc"): pass through for PATH resolution
         Err(_) => {
             let name = cc.display().to_string();
-            return Some((name, "c++".to_string(), "ar".to_string(), "ranlib".to_string()));
+            return Some((
+                name,
+                "c++".to_string(),
+                "ar".to_string(),
+                "ranlib".to_string(),
+            ));
         }
     };
     if abs.is_dir() {
@@ -703,7 +776,11 @@ pub fn resolve_cc(cc: &Option<PathBuf>) -> Option<(String, String, String, Strin
         let dir = abs.parent()?;
         let sibling = |n: &str, fallback: &str| {
             let p = dir.join(n);
-            if p.exists() { p.display().to_string() } else { fallback.to_string() }
+            if p.exists() {
+                p.display().to_string()
+            } else {
+                fallback.to_string()
+            }
         };
         Some((
             abs.display().to_string(),
@@ -773,10 +850,13 @@ mod tests {
         assert_eq!(d.rustc_link_libs, vec!["z"]);
         assert_eq!(d.rustc_link_searches, vec!["/dir"]);
         assert_eq!(d.rustc_link_args, vec!["-s"]);
-        assert_eq!(d.metadata, vec![
-            ("include".to_string(), "/classic/metadata/form".to_string()),
-            ("root".to_string(), "/x".to_string()),
-        ]);
+        assert_eq!(
+            d.metadata,
+            vec![
+                ("include".to_string(), "/classic/metadata/form".to_string()),
+                ("root".to_string(), "/x".to_string()),
+            ]
+        );
         assert_eq!(d.warnings, vec!["heads up"]);
         assert_eq!(d.errors, vec!["broken"]);
     }
@@ -795,7 +875,9 @@ mod tests {
         )
         .unwrap();
         let env: std::collections::HashMap<String, String> =
-            package_env(manifest.package.as_ref().unwrap()).into_iter().collect();
+            package_env(manifest.package.as_ref().unwrap())
+                .into_iter()
+                .collect();
         assert_eq!(env["CARGO_PKG_NAME"], "demo");
         assert_eq!(env["CARGO_PKG_VERSION"], "1.2.3-beta.1");
         assert_eq!(env["CARGO_PKG_VERSION_MAJOR"], "1");
@@ -865,7 +947,8 @@ mod env_tests {
         )
         .unwrap();
         let a = args(&dir);
-        let manifest = crate::resolve::parse_manifest(&fs::read(&a.manifest_path).unwrap()).unwrap();
+        let manifest =
+            crate::resolve::parse_manifest(&fs::read(&a.manifest_path).unwrap()).unwrap();
         let pkg = manifest.package.as_ref().unwrap();
         let out_dir = a.out_dir.canonicalize().unwrap();
         let env = build_environment(&a, pkg, &out_dir).unwrap();
@@ -890,13 +973,19 @@ mod env_tests {
 
     #[test]
     fn sysroot_sets_rustflags_for_probes() {
-        let dir = std::env::temp_dir().join(format!("please_rust_env_rf_test_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("please_rust_env_rf_test_{}", std::process::id()));
         fs::create_dir_all(dir.join("sysroot")).unwrap();
         fs::create_dir_all(dir.join("out")).unwrap();
-        fs::write(dir.join("Cargo.toml"), "[package]\nname = \"d\"\nversion = \"0.1.0\"\n").unwrap();
+        fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"d\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
         let mut a = args(&dir);
         a.sysroot = Some(dir.join("sysroot"));
-        let manifest = crate::resolve::parse_manifest(&fs::read(&a.manifest_path).unwrap()).unwrap();
+        let manifest =
+            crate::resolve::parse_manifest(&fs::read(&a.manifest_path).unwrap()).unwrap();
         let out_dir = a.out_dir.canonicalize().unwrap();
         let env = build_environment(&a, manifest.package.as_ref().unwrap(), &out_dir).unwrap();
         assert!(env["RUSTFLAGS"].starts_with("--sysroot "));
@@ -945,7 +1034,11 @@ mod run_e2e_tests {
         let dir = std::env::temp_dir().join(format!("please_rust_bs_e2e_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("Cargo.toml"), "[package]\nname = \"demo\"\nversion = \"0.3.0\"\n").unwrap();
+        fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.3.0\"\n",
+        )
+        .unwrap();
         fs::write(dir.join("wanted.txt"), "").unwrap();
         fs::write(
             dir.join("build.rs"),
@@ -999,8 +1092,16 @@ mod run_e2e_tests {
         let dir = std::env::temp_dir().join(format!("please_rust_bs_err_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("Cargo.toml"), "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n").unwrap();
-        fs::write(dir.join("build.rs"), "fn main() { println!(\"cargo::error=nope\"); }").unwrap();
+        fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("build.rs"),
+            "fn main() { println!(\"cargo::error=nope\"); }",
+        )
+        .unwrap();
         let err = run(BuildScriptArgs {
             manifest_path: dir.join("Cargo.toml"),
             build_script: dir.join("build.rs"),
@@ -1054,8 +1155,10 @@ mod dep_metadata_tests {
         fs::create_dir_all(&out_dir).unwrap();
 
         let mut d = Directives::default();
-        d.metadata.push(("include".to_string(), "/some/include".to_string()));
-        d.metadata.push(("lib-kind".to_string(), "static".to_string()));
+        d.metadata
+            .push(("include".to_string(), "/some/include".to_string()));
+        d.metadata
+            .push(("lib-kind".to_string(), "static".to_string()));
         let bs = dir.join("z.buildscript");
         write_directives(&bs, &d, &out_dir, Some("z-lib")).unwrap();
 

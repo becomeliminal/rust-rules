@@ -45,7 +45,10 @@ pub struct Phase {
 /// Start a span. Bind it (`let _p = phase("x");`) to cover a scope.
 pub fn phase(name: &'static str) -> Phase {
     started(); // anchor the process clock at the first span
-    Phase { name, start: Instant::now() }
+    Phase {
+        name,
+        start: Instant::now(),
+    }
 }
 
 impl Drop for Phase {
@@ -100,7 +103,11 @@ pub fn report(command: &str) {
     if let Ok(t) = totals().lock() {
         // Slowest first: the question is always which phase to look at next.
         let mut rows: Vec<_> = t.iter().collect();
-        rows.sort_by(|a, b| b.1 .1.partial_cmp(&a.1 .1).unwrap_or(std::cmp::Ordering::Equal));
+        rows.sort_by(|a, b| {
+            b.1 .1
+                .partial_cmp(&a.1 .1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         for (name, (calls, ms)) in rows {
             if *ms > 0.0 {
                 eprintln!(

@@ -242,7 +242,10 @@ pub fn run(args: ResolveArgs) -> Result<()> {
 fn parse_inline_entry(entry: &str, manifest_dir: &std::path::Path) -> Result<EntryInput> {
     let parts: Vec<&str> = entry.split('|').collect();
     if parts.len() != 6 {
-        bail!("bad --entry (want subrepo|crate|version|features|root|default_features): {}", entry);
+        bail!(
+            "bad --entry (want subrepo|crate|version|features|root|default_features): {}",
+            entry
+        );
     }
     Ok(EntryInput {
         subrepo: parts[0].to_string(),
@@ -365,7 +368,10 @@ pub fn resolve_entries(entries: &[EntryInput], target: &str) -> Result<LockFile>
             }
             let reaches_dual = nodes[i].deps.iter().any(|d| {
                 if d.optional
-                    && !nodes[i].unit(Unit::Host).enabled_optional_deps.contains(&d.name)
+                    && !nodes[i]
+                        .unit(Unit::Host)
+                        .enabled_optional_deps
+                        .contains(&d.name)
                 {
                     return false;
                 }
@@ -391,7 +397,11 @@ pub fn resolve_entries(entries: &[EntryInput], target: &str) -> Result<LockFile>
         if !target_active && !host_active {
             continue;
         }
-        let primary_unit = if target_active { Unit::Target } else { Unit::Host };
+        let primary_unit = if target_active {
+            Unit::Target
+        } else {
+            Unit::Host
+        };
         let mut entry = emit_entry(n, primary_unit, &nodes, &resolver, &dual, &mut missing)?;
         // Nothing else records this: a pure build dependency is emitted under
         // its own name with no _host twin, so without the flag generation has
@@ -435,7 +445,12 @@ impl Resolver {
     /// a `^0.2` dependency onto a declared 0.4 produces a baffling compile
     /// error deep in the crate, where returning None reports it as missing and
     /// lets `lock` declare the version that is actually needed.
-    fn select(&self, package: &str, req: Option<&VersionReq>, nodes: &[CrateNode]) -> Option<usize> {
+    fn select(
+        &self,
+        package: &str,
+        req: Option<&VersionReq>,
+        nodes: &[CrateNode],
+    ) -> Option<usize> {
         let candidates = self.index.get(package)?;
         if let Some(req) = req {
             for &i in candidates {
@@ -581,7 +596,10 @@ fn enable_feature(
                 // Weak: only applies if the dep is otherwise activated
                 let dep_name = dep_name.to_string();
                 let dep_feat = dep_feat.to_string();
-                if nodes[idx].unit(unit).enabled_optional_deps.contains(&dep_name)
+                if nodes[idx]
+                    .unit(unit)
+                    .enabled_optional_deps
+                    .contains(&dep_name)
                     || nodes[idx]
                         .deps
                         .iter()
@@ -589,7 +607,10 @@ fn enable_feature(
                 {
                     forward_feature(nodes, resolver, idx, unit, &dep_name, &dep_feat, work)?;
                 } else {
-                    nodes[idx].unit_mut(unit).deferred.push((dep_name, dep_feat));
+                    nodes[idx]
+                        .unit_mut(unit)
+                        .deferred
+                        .push((dep_name, dep_feat));
                 }
             } else if let Some((dep_name, dep_feat)) = item.split_once('/') {
                 let dep_name = dep_name.to_string();
@@ -643,7 +664,11 @@ fn activate_dep(
     dep_name: &str,
     work: &mut Vec<Work>,
 ) -> Result<()> {
-    if nodes[idx].unit(unit).enabled_optional_deps.contains(dep_name) {
+    if nodes[idx]
+        .unit(unit)
+        .enabled_optional_deps
+        .contains(dep_name)
+    {
         return Ok(());
     }
     let decl = match nodes[idx].deps.iter().find(|d| d.name == dep_name) {
@@ -699,8 +724,7 @@ fn activate_dep(
 
     // Flush weak features now that the dep is active
     let deferred: Vec<(String, String)> = std::mem::take(&mut nodes[idx].unit_mut(unit).deferred);
-    let (matching, rest): (Vec<_>, Vec<_>) =
-        deferred.into_iter().partition(|(d, _)| d == dep_name);
+    let (matching, rest): (Vec<_>, Vec<_>) = deferred.into_iter().partition(|(d, _)| d == dep_name);
     nodes[idx].unit_mut(unit).deferred = rest;
     for (d, f) in matching {
         forward_feature(nodes, resolver, idx, unit, &d, &f, work)?;
@@ -883,7 +907,13 @@ mod tests {
             }
         }
 
-        fn krate(&mut self, subrepo: &str, name: &str, version: &str, manifest_body: &str) -> &mut Self {
+        fn krate(
+            &mut self,
+            subrepo: &str,
+            name: &str,
+            version: &str,
+            manifest_body: &str,
+        ) -> &mut Self {
             let manifest = format!(
                 "[package]\nname = \"{}\"\nversion = \"{}\"\nedition = \"2021\"\n{}",
                 name, version, manifest_body
@@ -944,11 +974,19 @@ mod tests {
     #[test]
     fn a_build_only_dependency_is_a_host_unit() {
         let mut g = Graph::new("build_only_host");
-        g.krate("app", "app", "1.0.0", "[build-dependencies]\nhelper = \"1\"\n")
-            .krate("helper", "helper", "1.0.0", "")
-            .root("app", &[], true);
+        g.krate(
+            "app",
+            "app",
+            "1.0.0",
+            "[build-dependencies]\nhelper = \"1\"\n",
+        )
+        .krate("helper", "helper", "1.0.0", "")
+        .root("app", &[], true);
         let lock = g.resolve();
-        assert!(lock.crates["helper"].host, "a pure build dep is a host unit");
+        assert!(
+            lock.crates["helper"].host,
+            "a pure build dep is a host unit"
+        );
         assert!(!lock.crates["app"].host, "the crate being built is not");
     }
 
@@ -988,7 +1026,13 @@ mod tests {
     }
 
     fn dep_names(lock: &LockFile, subrepo: &str) -> Vec<String> {
-        lock.crates.get(subrepo).unwrap().deps.iter().map(|d| d.name.clone()).collect()
+        lock.crates
+            .get(subrepo)
+            .unwrap()
+            .deps
+            .iter()
+            .map(|d| d.name.clone())
+            .collect()
     }
 
     #[test]
@@ -1038,7 +1082,9 @@ mod tests {
     fn default_features_expand() {
         let mut g = Graph::new("defaults");
         g.krate(
-            "a", "a", "1.0.0",
+            "a",
+            "a",
+            "1.0.0",
             "[features]\ndefault = [\"std\"]\nstd = []\n",
         )
         .root("a", &[], true);
@@ -1052,7 +1098,9 @@ mod tests {
     fn default_features_opt_out() {
         let mut g = Graph::new("no_defaults");
         g.krate(
-            "a", "a", "1.0.0",
+            "a",
+            "a",
+            "1.0.0",
             "[features]\ndefault = [\"std\"]\nstd = []\nextra = []\n",
         )
         .root("a", &["extra"], false);
@@ -1066,7 +1114,12 @@ mod tests {
     fn edge_default_features_flow_to_deps() {
         let mut g = Graph::new("edge_defaults");
         g.krate("a", "a", "1.0.0", "[dependencies]\nb = \"1\"\n")
-            .krate("b", "b", "1.0.0", "[features]\ndefault = [\"fast\"]\nfast = []\n")
+            .krate(
+                "b",
+                "b",
+                "1.0.0",
+                "[features]\ndefault = [\"fast\"]\nfast = []\n",
+            )
             .root("a", &[], true);
         let lock = g.resolve();
         assert!(features(&lock, "b").contains(&"fast".to_string()));
@@ -1076,10 +1129,17 @@ mod tests {
     fn edge_no_default_features() {
         let mut g = Graph::new("edge_no_defaults");
         g.krate(
-            "a", "a", "1.0.0",
+            "a",
+            "a",
+            "1.0.0",
             "[dependencies.b]\nversion = \"1\"\ndefault-features = false\n",
         )
-        .krate("b", "b", "1.0.0", "[features]\ndefault = [\"fast\"]\nfast = []\n")
+        .krate(
+            "b",
+            "b",
+            "1.0.0",
+            "[features]\ndefault = [\"fast\"]\nfast = []\n",
+        )
         .root("a", &[], true);
         let lock = g.resolve();
         assert!(!features(&lock, "b").contains(&"fast".to_string()));
@@ -1089,7 +1149,9 @@ mod tests {
     fn optional_dep_not_activated_without_feature() {
         let mut g = Graph::new("optional_off");
         g.krate(
-            "a", "a", "1.0.0",
+            "a",
+            "a",
+            "1.0.0",
             "[dependencies.b]\nversion = \"1\"\noptional = true\n",
         )
         .krate("b", "b", "1.0.0", "")
@@ -1125,7 +1187,9 @@ mod tests {
     fn an_explicit_feature_named_after_the_dep_still_runs() {
         let mut g = Graph::new("explicit_dep_feature");
         g.krate(
-            "a", "a", "1.0.0",
+            "a",
+            "a",
+            "1.0.0",
             "[dependencies.b]\nversion = \"1\"\noptional = true\n\n\
              [features]\nb = [\"dep:b\"]\nb_blocking = [\"dep:b\", \"b/inner\"]\n",
         )
@@ -1154,7 +1218,11 @@ mod tests {
         .root("a", &["use_b"], true);
         let lock = g.resolve();
         assert!(lock.crates.contains_key("b"));
-        assert!(features(&lock, "a").contains(&"b".to_string()), "{:?}", features(&lock, "a"));
+        assert!(
+            features(&lock, "a").contains(&"b".to_string()),
+            "{:?}",
+            features(&lock, "a")
+        );
         assert!(features(&lock, "b").contains(&"inner".to_string()));
     }
 
@@ -1162,7 +1230,9 @@ mod tests {
     fn implicit_optional_dep_feature() {
         let mut g = Graph::new("implicit");
         g.krate(
-            "a", "a", "1.0.0",
+            "a",
+            "a",
+            "1.0.0",
             "[dependencies.b]\nversion = \"1\"\noptional = true\n",
         )
         .krate("b", "b", "1.0.0", "")
@@ -1177,7 +1247,9 @@ mod tests {
     fn strong_dep_slash_feature() {
         let mut g = Graph::new("strong_slash");
         g.krate(
-            "a", "a", "1.0.0",
+            "a",
+            "a",
+            "1.0.0",
             "[dependencies.b]\nversion = \"1\"\noptional = true\n\n[features]\nf = [\"b/fast\"]\n",
         )
         .krate("b", "b", "1.0.0", "[features]\nfast = []\n")
@@ -1226,7 +1298,9 @@ mod tests {
     fn renamed_dep_keeps_declared_name() {
         let mut g = Graph::new("rename");
         g.krate(
-            "a", "a", "1.0.0",
+            "a",
+            "a",
+            "1.0.0",
             "[dependencies.libc_errno]\nversion = \"1\"\npackage = \"errno\"\n",
         )
         .krate("errno", "errno", "1.0.0", "")
@@ -1241,7 +1315,9 @@ mod tests {
     fn rustc_std_workspace_skipped() {
         let mut g = Graph::new("std_workspace");
         g.krate(
-            "a", "a", "1.0.0",
+            "a",
+            "a",
+            "1.0.0",
             "[dependencies.alloc]\nversion = \"1\"\npackage = \"rustc-std-workspace-alloc\"\n",
         )
         .root("a", &[], true);
@@ -1301,17 +1377,34 @@ mod tests {
         let pm_dep = &lock.crates.get("pm").unwrap().deps[0];
         assert_eq!(pm_dep.target_name, "util_host");
         // a's edge routes to the target build
-        let a_util = lock.crates.get("a").unwrap().deps.iter().find(|d| d.name == "util").unwrap();
+        let a_util = lock
+            .crates
+            .get("a")
+            .unwrap()
+            .deps
+            .iter()
+            .find(|d| d.name == "util")
+            .unwrap();
         assert_eq!(a_util.target_name, "util");
     }
 
     #[test]
     fn identical_units_share_one_artifact() {
         let mut g = Graph::new("shared_units");
-        g.krate("pm", "pm", "1.0.0", "[lib]\nproc-macro = true\n\n[dependencies]\nutil = \"1\"\n")
-            .krate("util", "util", "1.0.0", "")
-            .krate("a", "a", "1.0.0", "[dependencies]\npm = \"1\"\nutil = \"1\"\n")
-            .root("a", &[], true);
+        g.krate(
+            "pm",
+            "pm",
+            "1.0.0",
+            "[lib]\nproc-macro = true\n\n[dependencies]\nutil = \"1\"\n",
+        )
+        .krate("util", "util", "1.0.0", "")
+        .krate(
+            "a",
+            "a",
+            "1.0.0",
+            "[dependencies]\npm = \"1\"\nutil = \"1\"\n",
+        )
+        .root("a", &[], true);
         let lock = g.resolve();
         assert!(lock.host_crates.is_empty());
         let pm_dep = &lock.crates.get("pm").unwrap().deps[0];
@@ -1364,10 +1457,8 @@ mod tests {
 
     #[test]
     fn parse_manifest_accepts_resolver_three() {
-        let m = parse_manifest(
-            b"[package]\nname = \"t\"\nversion = \"1.0.0\"\nresolver = \"3\"\n",
-        )
-        .unwrap();
+        let m = parse_manifest(b"[package]\nname = \"t\"\nversion = \"1.0.0\"\nresolver = \"3\"\n")
+            .unwrap();
         assert_eq!(m.package.as_ref().unwrap().name, "t");
     }
 
@@ -1383,7 +1474,8 @@ mod tests {
 
     #[test]
     fn cfg_applies_evaluates_target() {
-        let info = cfg_expr::targets::get_builtin_target_by_triple("x86_64-unknown-linux-gnu").unwrap();
+        let info =
+            cfg_expr::targets::get_builtin_target_by_triple("x86_64-unknown-linux-gnu").unwrap();
         assert!(cfg_applies("cfg(unix)", info));
         assert!(!cfg_applies("cfg(windows)", info));
         assert!(cfg_applies("cfg(target_os = \"linux\")", info));
@@ -1412,7 +1504,8 @@ mod run_io_tests {
 
     #[test]
     fn run_reads_entries_json_and_writes_lock() {
-        let dir = std::env::temp_dir().join(format!("please_rust_resolve_run_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("please_rust_resolve_run_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let manifest = dir.join("a.toml");
@@ -1441,10 +1534,15 @@ mod run_io_tests {
 
     #[test]
     fn run_accepts_inline_entries() {
-        let dir = std::env::temp_dir().join(format!("please_rust_resolve_inline_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("please_rust_resolve_inline_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("a.manifest.toml"), "[package]\nname = \"a\"\nversion = \"1.0.0\"\n").unwrap();
+        fs::write(
+            dir.join("a.manifest.toml"),
+            "[package]\nname = \"a\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
         let output = dir.join("rust.lock");
         run(ResolveArgs {
             entries: None,
@@ -1459,12 +1557,27 @@ mod run_io_tests {
 
     #[test]
     fn unsatisfiable_requirement_is_reported_not_misrouted() {
-        let dir = std::env::temp_dir().join(format!("please_rust_resolve_conflict_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "please_rust_resolve_conflict_{}",
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("a.toml"), "[package]\nname = \"a\"\nversion = \"1.0.0\"\n\n[dependencies]\nx = \"3\"\n").unwrap();
-        fs::write(dir.join("x1.toml"), "[package]\nname = \"x\"\nversion = \"1.0.0\"\n").unwrap();
-        fs::write(dir.join("x2.toml"), "[package]\nname = \"x\"\nversion = \"2.0.0\"\n").unwrap();
+        fs::write(
+            dir.join("a.toml"),
+            "[package]\nname = \"a\"\nversion = \"1.0.0\"\n\n[dependencies]\nx = \"3\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("x1.toml"),
+            "[package]\nname = \"x\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("x2.toml"),
+            "[package]\nname = \"x\"\nversion = \"2.0.0\"\n",
+        )
+        .unwrap();
         let mk = |sub: &str, name: &str, ver: &str, file: &str, root: bool| EntryInput {
             subrepo: sub.to_string(),
             crate_name: name.to_string(),

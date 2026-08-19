@@ -253,7 +253,9 @@ pub(crate) fn parse_buildscript(path: &Path) -> Result<BuildScriptDirectives> {
             directives.rustc_cfgs.push(value.to_string());
         } else if let Some(value) = line.strip_prefix("rustc-env=") {
             if let Some((key, val)) = value.split_once('=') {
-                directives.rustc_envs.push((key.to_string(), val.to_string()));
+                directives
+                    .rustc_envs
+                    .push((key.to_string(), val.to_string()));
             }
         } else if let Some(value) = line.strip_prefix("rustc-link-lib=") {
             directives.rustc_link_libs.push(value.to_string());
@@ -323,7 +325,10 @@ fn run_rustc(mut cmd: Command, args: &CompileArgs) -> Result<()> {
         return Ok(());
     }
     if !status.success() {
-        anyhow::bail!("rustc failed with exit code: {}", status.code().unwrap_or(-1));
+        anyhow::bail!(
+            "rustc failed with exit code: {}",
+            status.code().unwrap_or(-1)
+        );
     }
     Ok(())
 }
@@ -358,8 +363,9 @@ fn build_command(args: &CompileArgs) -> Result<Command> {
     let mut extern_paths: Vec<(String, Option<String>, PathBuf)> = Vec::new();
     if let Some(config_path) = &args.externconfig {
         if config_path.exists() {
-            let content = fs::read_to_string(config_path)
-                .with_context(|| format!("Failed to read externconfig: {}", config_path.display()))?;
+            let content = fs::read_to_string(config_path).with_context(|| {
+                format!("Failed to read externconfig: {}", config_path.display())
+            })?;
 
             for line in content.lines() {
                 let line = line.trim();
@@ -446,7 +452,11 @@ fn build_command(args: &CompileArgs) -> Result<Command> {
             for line in content.lines() {
                 if let Some(filename) = line.trim().strip_prefix("native=") {
                     if let Some(path) = find_file_recursive(".", filename.trim()) {
-                        if let Some(dir) = path.canonicalize().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+                        if let Some(dir) = path
+                            .canonicalize()
+                            .ok()
+                            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                        {
                             cmd.arg("-L").arg(format!("native={}", dir.display()));
                         }
                     }
@@ -468,9 +478,7 @@ fn build_command(args: &CompileArgs) -> Result<Command> {
             let found = extern_paths.iter().find(|(n, q, _)| {
                 (crate_name.is_empty() || n == crate_name)
                     && match (want_qual, q.as_deref()) {
-                        (Some(w), Some(have)) => {
-                            have == w || have.ends_with(&format!("/{}", w))
-                        }
+                        (Some(w), Some(have)) => have == w || have.ends_with(&format!("/{}", w)),
                         (Some(_), None) => false,
                         _ => true,
                     }
@@ -482,7 +490,10 @@ fn build_command(args: &CompileArgs) -> Result<Command> {
                 cmd.arg("--extern");
                 cmd.arg(format!("{}={}", dep_name.trim(), path.display()));
             } else {
-                eprintln!("Warning: rename {}: crate {} not found in externconfig", dep_name, target);
+                eprintln!(
+                    "Warning: rename {}: crate {} not found in externconfig",
+                    dep_name, target
+                );
             }
         }
     }
@@ -565,8 +576,8 @@ fn build_command(args: &CompileArgs) -> Result<Command> {
     // Package metadata env vars from Cargo.toml
     if let Some(mp) = &args.manifest_path {
         if mp.exists() {
-            let content = fs::read(mp)
-                .with_context(|| format!("Failed to read {}", mp.display()))?;
+            let content =
+                fs::read(mp).with_context(|| format!("Failed to read {}", mp.display()))?;
             if let Ok(manifest) = crate::resolve::parse_manifest(&content) {
                 if let Some(pkg) = &manifest.package {
                     for (key, value) in crate::build_script::package_env(pkg) {
@@ -682,7 +693,8 @@ mod tests {
 
     #[test]
     fn parses_buildscript_directives() {
-        let dir = std::env::temp_dir().join(format!("please_rust_compile_test_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("please_rust_compile_test_{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("x.buildscript");
         fs::write(&path, "# comment\nout-dir=out\nrustc-cfg=has_std\nrustc-env=FOO=bar\nrustc-link-lib=static=z\nrustc-link-search=native=/some/dir\nrustc-link-arg=-Wl,-z,now\nmetadata=include=/inc\n").unwrap();
@@ -722,7 +734,8 @@ mod tests {
 
     #[test]
     fn out_dir_resolves_relative_to_buildscript() {
-        let dir = std::env::temp_dir().join(format!("please_rust_outdir_test_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("please_rust_outdir_test_{}", std::process::id()));
         let out = dir.join("out");
         fs::create_dir_all(&out).unwrap();
         let bs = dir.join("x.buildscript");
@@ -734,7 +747,8 @@ mod tests {
 
     #[test]
     fn find_file_searches_recursively() {
-        let dir = std::env::temp_dir().join(format!("please_rust_find_test_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("please_rust_find_test_{}", std::process::id()));
         let deep = dir.join("a/b");
         fs::create_dir_all(&deep).unwrap();
         fs::write(deep.join("needle.rlib"), "").unwrap();
@@ -783,16 +797,26 @@ mod command_tests {
     }
 
     fn fixture(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("please_rust_cmd_test_{}_{}", std::process::id(), name));
+        let dir = std::env::temp_dir().join(format!(
+            "please_rust_cmd_test_{}_{}",
+            std::process::id(),
+            name
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("liba-1_0_0.rlib"), "").unwrap();
         std::fs::write(dir.join("libb-2_0_0.rlib"), "").unwrap();
-        std::fs::write(dir.join("externconfig"), "a=liba-1_0_0.rlib\nb=libb-2_0_0.rlib\n").unwrap();
+        std::fs::write(
+            dir.join("externconfig"),
+            "a=liba-1_0_0.rlib\nb=libb-2_0_0.rlib\n",
+        )
+        .unwrap();
         dir
     }
 
     fn argv(cmd: &Command) -> Vec<String> {
-        cmd.get_args().map(|a| a.to_string_lossy().to_string()).collect()
+        cmd.get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect()
     }
 
     fn joined(cmd: &Command) -> String {
@@ -801,7 +825,14 @@ mod command_tests {
 
     fn envs(cmd: &Command) -> std::collections::HashMap<String, String> {
         cmd.get_envs()
-            .filter_map(|(k, v)| v.map(|v| (k.to_string_lossy().to_string(), v.to_string_lossy().to_string())))
+            .filter_map(|(k, v)| {
+                v.map(|v| {
+                    (
+                        k.to_string_lossy().to_string(),
+                        v.to_string_lossy().to_string(),
+                    )
+                })
+            })
             .collect()
     }
 
@@ -851,7 +882,8 @@ mod command_tests {
     #[test]
     fn dep_filter_picks_the_named_version() {
         let _guard = CWD_LOCK.lock().unwrap();
-        let dir = std::env::temp_dir().join(format!("please_rust_two_versions_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("please_rust_two_versions_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("libsyn-2_0_119.rlib"), "").unwrap();
         std::fs::write(dir.join("libsyn-3_0_3.rlib"), "").unwrap();
@@ -883,7 +915,8 @@ mod command_tests {
     #[test]
     fn a_rename_may_name_only_the_declaration() {
         let _guard = CWD_LOCK.lock().unwrap();
-        let dir = std::env::temp_dir().join(format!("please_rust_rename_decl_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("please_rust_rename_decl_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("libmd5-0_11_0.rlib"), "").unwrap();
         std::fs::write(

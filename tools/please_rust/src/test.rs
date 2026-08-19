@@ -63,10 +63,7 @@ pub fn run(args: TestArgs) -> Result<()> {
     let cov_dir = std::path::PathBuf::from("coverage-profiles");
     if args.coverage {
         std::fs::create_dir_all(&cov_dir)?;
-        cmd.env(
-            "LLVM_PROFILE_FILE",
-            cov_dir.join("test-%p.profraw"),
-        );
+        cmd.env("LLVM_PROFILE_FILE", cov_dir.join("test-%p.profraw"));
     }
 
     let mut child = cmd
@@ -105,7 +102,11 @@ pub fn run(args: TestArgs) -> Result<()> {
 
 /// Merges raw profiles and writes line coverage in go-cover format (which
 /// plz parses natively) to test.coverage.
-fn write_coverage(llvm_tools: &std::path::Path, cov_dir: &std::path::Path, binary: &str) -> Result<()> {
+fn write_coverage(
+    llvm_tools: &std::path::Path,
+    cov_dir: &std::path::Path,
+    binary: &str,
+) -> Result<()> {
     let profraws: Vec<std::path::PathBuf> = std::fs::read_dir(cov_dir)?
         .flatten()
         .map(|e| e.path())
@@ -146,8 +147,7 @@ fn write_coverage(llvm_tools: &std::path::Path, cov_dir: &std::path::Path, binar
     }
 
     let go_cover = lcov_to_go_cover(&String::from_utf8_lossy(&out.stdout));
-    let cover_path =
-        std::env::var("COVERAGE_FILE").unwrap_or_else(|_| "test.coverage".to_string());
+    let cover_path = std::env::var("COVERAGE_FILE").unwrap_or_else(|_| "test.coverage".to_string());
     std::fs::write(&cover_path, go_cover)
         .with_context(|| format!("Failed to write {cover_path}"))?;
     Ok(())
@@ -157,8 +157,10 @@ fn write_coverage(llvm_tools: &std::path::Path, cov_dir: &std::path::Path, binar
 /// out-of-repo sources (stdlib, registry crates staged in the sandbox).
 fn lcov_to_go_cover(lcov: &str) -> String {
     let cwd = std::env::current_dir().unwrap_or_default();
-    let mut out = String::from("mode: count
-");
+    let mut out = String::from(
+        "mode: count
+",
+    );
     let mut current: Option<String> = None;
     for line in lcov.lines() {
         if let Some(path) = line.strip_prefix("SF:") {
@@ -172,8 +174,14 @@ fn lcov_to_go_cover(lcov: &str) -> String {
         } else if let Some(da) = line.strip_prefix("DA:") {
             if let Some(file) = &current {
                 if let Some((ln, count)) = da.split_once(',') {
-                    out.push_str(&format!("{}:{}.1,{}.999 1 {}
-", file, ln, ln, count.trim()));
+                    out.push_str(&format!(
+                        "{}:{}.1,{}.999 1 {}
+",
+                        file,
+                        ln,
+                        ln,
+                        count.trim()
+                    ));
                 }
             }
         } else if line == "end_of_record" {
@@ -348,7 +356,8 @@ mod tests {
 
     #[test]
     fn collect_externs_finds_libs() {
-        let dir = std::env::temp_dir().join(format!("please_rust_externs_test_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("please_rust_externs_test_{}", std::process::id()));
         let sub = dir.join("nested");
         std::fs::create_dir_all(&sub).unwrap();
         std::fs::write(sub.join("libx-1_0_0.rlib"), "").unwrap();
@@ -382,7 +391,8 @@ mod run_wrapper_tests {
             command: vec![
                 "sh".to_string(),
                 "-c".to_string(),
-                "printf 'running 1 test\\ntest it_works ... ok\\n\\ntest result: ok. 1 passed\\n'".to_string(),
+                "printf 'running 1 test\\ntest it_works ... ok\\n\\ntest result: ok. 1 passed\\n'"
+                    .to_string(),
             ],
         })
         .unwrap();

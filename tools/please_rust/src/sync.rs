@@ -51,7 +51,10 @@ pub struct SyncArgs {
     /// are shared by everyone building the repo, so they have to name every
     /// crate any of those platforms needs; resolution itself still happens
     /// per-host, in the build graph.
-    #[arg(long, default_value = "x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu,aarch64-apple-darwin,x86_64-apple-darwin")]
+    #[arg(
+        long,
+        default_value = "x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu,aarch64-apple-darwin,x86_64-apple-darwin"
+    )]
     pub targets: String,
 
     /// Where to write the resolved lock (defaults to rust.lock next to the BUILD file)
@@ -290,9 +293,10 @@ pub fn run_reporting(args: SyncArgs) -> Result<Vec<crate::resolve::MissingDep>> 
     // it is written into a file everyone shares.
     let mut oses: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut covered_oses: BTreeSet<String> = BTreeSet::new();
-    let note = |triple: &str, lock: &crate::resolve::LockFile,
-                    oses: &mut BTreeMap<String, BTreeSet<String>>,
-                    covered: &mut BTreeSet<String>| {
+    let note = |triple: &str,
+                lock: &crate::resolve::LockFile,
+                oses: &mut BTreeMap<String, BTreeSet<String>>,
+                covered: &mut BTreeSet<String>| {
         let os = target_os_of(triple);
         covered.insert(os.clone());
         for name in lock.crates.keys().chain(lock.host_crates.keys()) {
@@ -315,7 +319,10 @@ pub fn run_reporting(args: SyncArgs) -> Result<Vec<crate::resolve::MissingDep>> 
                 // rustix needs errno on macOS and linux-raw-sys on linux; a
                 // linux-only view of the graph declares one and not the other.
                 for m in other.missing {
-                    if !missing_deps.iter().any(|d| d.package == m.package && d.requirer == m.requirer) {
+                    if !missing_deps
+                        .iter()
+                        .any(|d| d.package == m.package && d.requirer == m.requirer)
+                    {
                         eprintln!(
                             "sync: {} needs {} on {}, which is not declared",
                             m.requirer, m.package, triple
@@ -380,7 +387,11 @@ pub fn run_reporting(args: SyncArgs) -> Result<Vec<crate::resolve::MissingDep>> 
     // rule (same //third_party/rust:rust_lock label) instead of committing a
     // derived lock file. In-process resolution above exists only to validate
     // the graph and drive pruning.
-    let new_build = write_resolve_block(&rewrite_build(&lines, &decls, &deleted_spans), &decls, &args.target);
+    let new_build = write_resolve_block(
+        &rewrite_build(&lines, &decls, &deleted_spans),
+        &decls,
+        &args.target,
+    );
 
     if args.dry_run {
         eprintln!(
@@ -394,10 +405,17 @@ pub fn run_reporting(args: SyncArgs) -> Result<Vec<crate::resolve::MissingDep>> 
     fs::write(&args.build_file, new_build)
         .with_context(|| format!("Failed to write {}", args.build_file.display()))?;
     // A stale committed lock file from older revisions is superseded
-    let old_lock = args.build_file.parent().unwrap_or(Path::new(".")).join("rust.lock");
+    let old_lock = args
+        .build_file
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("rust.lock");
     if old_lock.exists() {
         let _ = fs::remove_file(&old_lock);
-        eprintln!("sync: removed stale {} (resolution now happens in the build graph)", old_lock.display());
+        eprintln!(
+            "sync: removed stale {} (resolution now happens in the build graph)",
+            old_lock.display()
+        );
     }
     // Declarations nothing reaches are built standalone with default
     // features, which is rarely what was meant: name them rather than
@@ -429,7 +447,9 @@ pub fn run_reporting(args: SyncArgs) -> Result<Vec<crate::resolve::MissingDep>> 
 /// Rewrite (or append) the rust_resolve block encoding the declared graph.
 fn write_resolve_block(build: &str, decls: &[Decl], target: &str) -> String {
     let mut block = String::new();
-    block.push_str("# Machine-maintained by please_rust sync; resolution runs in the build graph.\n");
+    block.push_str(
+        "# Machine-maintained by please_rust sync; resolution runs in the build graph.\n",
+    );
     block.push_str("rust_resolve(\n    name = \"rust_lock\",\n");
     // No target: the rule derives the host's, so the same declarations
     // resolve correctly for linux and mac developers alike. sync --target
@@ -437,7 +457,11 @@ fn write_resolve_block(build: &str, decls: &[Decl], target: &str) -> String {
     let _ = target;
     block.push_str("    entries = [\n");
     for d in decls {
-        let features = if d.root { d.features.join(",") } else { String::new() };
+        let features = if d.root {
+            d.features.join(",")
+        } else {
+            String::new()
+        };
         block.push_str(&format!(
             "        \"{}|{}|{}|{}|{}|{}\",\n",
             d.subrepo(),
@@ -457,7 +481,10 @@ fn write_resolve_block(build: &str, decls: &[Decl], target: &str) -> String {
     let mut replaced = false;
     while i < lines.len() {
         let t = lines[i].trim_start();
-        if !replaced && (t.starts_with("rust_resolve(") || (t.starts_with('#') && t.contains("Machine-maintained by please_rust sync"))) {
+        if !replaced
+            && (t.starts_with("rust_resolve(")
+                || (t.starts_with('#') && t.contains("Machine-maintained by please_rust sync")))
+        {
             // Skip the marker comment plus the block
             let mut j = i;
             while j < lines.len() && lines[j].trim_start().starts_with('#') {
@@ -506,7 +533,19 @@ fn repo_root(build_file: &Path) -> PathBuf {
 
 // Attributes sync writes itself. Anything else in a declaration is a user
 // edit and is preserved verbatim; these would otherwise be written twice.
-const MANAGED_KEYS: &[&str] = &["name", "crate", "version", "features", "hashes", "dep_overrides", "indirect", "default_features", "git_repo", "git_revision", "platforms"];
+const MANAGED_KEYS: &[&str] = &[
+    "name",
+    "crate",
+    "version",
+    "features",
+    "hashes",
+    "dep_overrides",
+    "indirect",
+    "default_features",
+    "git_repo",
+    "git_revision",
+    "platforms",
+];
 
 fn parse_build(lines: &[String]) -> Result<Vec<Decl>> {
     let mut decls = Vec::new();
@@ -587,9 +626,7 @@ fn parse_build(lines: &[String]) -> Result<Vec<Decl>> {
             }
             if let Some(eq) = t.find('=') {
                 let key = t[..eq].trim();
-                if key
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '_')
+                if key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
                     && !key.is_empty()
                     && !MANAGED_KEYS.contains(&key)
                 {
@@ -629,8 +666,8 @@ fn parse_build(lines: &[String]) -> Result<Vec<Decl>> {
 }
 
 fn import_cargo_lock(path: &Path, decls: &mut Vec<Decl>) -> Result<()> {
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("Failed to read {}", path.display()))?;
+    let content =
+        fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
     let doc: toml::Value = content
         .parse()
         .with_context(|| format!("Failed to parse {}", path.display()))?;
@@ -670,7 +707,10 @@ fn import_cargo_lock(path: &Path, decls: &mut Vec<Decl>) -> Result<()> {
                 continue;
             }
             if git_revision.is_empty() {
-                eprintln!("warning: {} git source has no pinned revision, skipping", name);
+                eprintln!(
+                    "warning: {} git source has no pinned revision, skipping",
+                    name
+                );
                 continue;
             }
         } else if name.is_empty() || !source.contains("registry") {
@@ -711,7 +751,11 @@ fn import_cargo_lock(path: &Path, decls: &mut Vec<Decl>) -> Result<()> {
         });
         added += 1;
     }
-    eprintln!("sync: imported {} new crates from {}", added, path.display());
+    eprintln!(
+        "sync: imported {} new crates from {}",
+        added,
+        path.display()
+    );
 
     // The lockfile has no feature information; the workspace manifest next to
     // it declares the direct deps and their feature requests (cargo
@@ -978,7 +1022,10 @@ pub struct LockCmdArgs {
     /// are shared by everyone building the repo, so they have to name every
     /// crate any of those platforms needs; resolution itself still happens
     /// per-host, in the build graph.
-    #[arg(long, default_value = "x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu,aarch64-apple-darwin,x86_64-apple-darwin")]
+    #[arg(
+        long,
+        default_value = "x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu,aarch64-apple-darwin,x86_64-apple-darwin"
+    )]
     pub targets: String,
 
     /// curl binary for index fetches
@@ -1107,7 +1154,9 @@ impl Index {
                 Err(e) => eprintln!("warning: bad index line for {}: {}", name, e),
             }
         }
-        self.cache.borrow_mut().insert(name.to_string(), versions.clone());
+        self.cache
+            .borrow_mut()
+            .insert(name.to_string(), versions.clone());
         Ok(versions)
     }
 }
@@ -1127,10 +1176,7 @@ impl crate::pubgrub_solver::ReleaseSource for IndexSource<'_> {
                     version,
                     cksum: iv.cksum.clone(),
                     yanked: iv.yanked,
-                    rust_version: iv
-                        .rust_version
-                        .as_deref()
-                        .and_then(parse_rust_version),
+                    rust_version: iv.rust_version.as_deref().and_then(parse_rust_version),
                     deps: iv
                         .deps
                         .iter()
@@ -1177,9 +1223,10 @@ pub fn lock(args: LockCmdArgs) -> Result<()> {
     let lines: Vec<String> = build_text.lines().map(|s| s.to_string()).collect();
     let mut decls = parse_build(&lines)?;
 
-    let cache_dir = args.cache_dir.clone().unwrap_or_else(|| {
-        dirs_cache().join("please_rust").join("index")
-    });
+    let cache_dir = args
+        .cache_dir
+        .clone()
+        .unwrap_or_else(|| dirs_cache().join("please_rust").join("index"));
     let index = Index {
         url: args.index_url.trim_end_matches('/').to_string(),
         cache_dir,
@@ -1194,7 +1241,9 @@ pub fn lock(args: LockCmdArgs) -> Result<()> {
         let v = Version::parse(&d.version)
             .with_context(|| format!("Bad version {} for {}", d.version, d.crate_name))?;
         // Highest pinned version of each crate is the preferred pick
-        let e = chosen.entry(d.crate_name.clone()).or_insert_with(|| v.clone());
+        let e = chosen
+            .entry(d.crate_name.clone())
+            .or_insert_with(|| v.clone());
         if v > *e {
             *e = v;
         }
@@ -1220,8 +1269,12 @@ pub fn lock(args: LockCmdArgs) -> Result<()> {
         if !visited.insert((package.clone(), req_str.clone())) {
             continue;
         }
-        let req = semver::VersionReq::parse(&req_str)
-            .with_context(|| format!("Bad requirement {} on {} (from {})", req_str, package, requirer))?;
+        let req = semver::VersionReq::parse(&req_str).with_context(|| {
+            format!(
+                "Bad requirement {} on {} (from {})",
+                req_str, package, requirer
+            )
+        })?;
 
         // Prefer an already-chosen version
         if let Some(v) = chosen.get(&package) {
@@ -1259,15 +1312,16 @@ pub fn lock(args: LockCmdArgs) -> Result<()> {
         })?;
         let version = Version::parse(&best.vers).unwrap();
 
-        let is_new = !chosen
-            .get(&package)
-            .map(|v| *v == version)
-            .unwrap_or(false)
+        let is_new = !chosen.get(&package).map(|v| *v == version).unwrap_or(false)
             && !newly.contains_key(&package);
         if requirer == "--add" {
             added_roots.push((package.clone(), version.clone()));
         }
-        if chosen.get(&package).map(|v| req.matches(v)).unwrap_or(false) {
+        if chosen
+            .get(&package)
+            .map(|v| req.matches(v))
+            .unwrap_or(false)
+        {
             continue;
         }
         newly.insert(package.clone(), (version.clone(), best.cksum.clone()));
@@ -1309,7 +1363,12 @@ pub fn lock(args: LockCmdArgs) -> Result<()> {
 
     for (package, (version, cksum)) in &newly {
         let root = added_roots.iter().any(|(p, _)| p == package);
-        eprintln!("lock: + {}@{}{}", package, version, if root { " (root)" } else { "" });
+        eprintln!(
+            "lock: + {}@{}{}",
+            package,
+            version,
+            if root { " (root)" } else { "" }
+        );
         decls.push(Decl {
             name: None,
             crate_name: package.clone(),
@@ -1333,7 +1392,10 @@ pub fn lock(args: LockCmdArgs) -> Result<()> {
 
 /// Hand over to sync for naming, downloads, feature resolution and writing.
 /// Shared by the greedy and PubGrub paths.
-fn finish_lock(args: &LockCmdArgs, mut decls: Vec<Decl>) -> Result<Vec<crate::resolve::MissingDep>> {
+fn finish_lock(
+    args: &LockCmdArgs,
+    mut decls: Vec<Decl>,
+) -> Result<Vec<crate::resolve::MissingDep>> {
     let build_text = fs::read_to_string(&args.build_file)
         .with_context(|| format!("Failed to read {}", args.build_file.display()))?;
     let lines: Vec<String> = build_text.lines().map(|s| s.to_string()).collect();
@@ -1442,7 +1504,9 @@ fn lock_round(
             };
             decls.iter().any(|d| {
                 d.crate_name == name
-                    && Version::parse(&d.version).map(|v| req.matches(&v)).unwrap_or(false)
+                    && Version::parse(&d.version)
+                        .map(|v| req.matches(&v))
+                        .unwrap_or(false)
             })
         });
     if all_satisfied && args.features.is_none() {
@@ -1462,35 +1526,38 @@ fn lock_round(
     let triples = target_list(&args.targets, &args.target);
     let mut solution: BTreeMap<String, (Version, String)> = BTreeMap::new();
     for triple in &triples {
-        let source = IndexSource { index, target: triple };
+        let source = IndexSource {
+            index,
+            target: triple,
+        };
         let mut solver = crate::pubgrub_solver::Solver::new(&source);
 
-    // Declared versions are preferences, not requirements: the solve is
-    // driven by the additions, so `lock --add` never needs index entries for
-    // unrelated crates (which would also break --offline).
-    for d in &decls {
-        let v = Version::parse(&d.version)
-            .with_context(|| format!("Bad version {} for {}", d.version, d.crate_name))?;
-        solver.pin(&d.crate_name, v);
-    }
-    for add in &args.add {
-        let (name, req_str) = add
-            .split_once('@')
-            .with_context(|| format!("--add takes crate@req, got {}", add))?;
-        let req = semver::VersionReq::parse(req_str)
-            .with_context(|| format!("Bad requirement {} in --add", req_str))?;
-        solver.require(name, req);
-    }
-
-    let toolchain = if args.ignore_msrv {
-        None
-    } else {
-        let tc = crate::pubgrub_solver::toolchain_version(build_text);
-        if tc.is_none() {
-            eprintln!("lock: no rust_toolchain version found; MSRV filtering is off");
+        // Declared versions are preferences, not requirements: the solve is
+        // driven by the additions, so `lock --add` never needs index entries for
+        // unrelated crates (which would also break --offline).
+        for d in &decls {
+            let v = Version::parse(&d.version)
+                .with_context(|| format!("Bad version {} for {}", d.version, d.crate_name))?;
+            solver.pin(&d.crate_name, v);
         }
-        tc
-    };
+        for add in &args.add {
+            let (name, req_str) = add
+                .split_once('@')
+                .with_context(|| format!("--add takes crate@req, got {}", add))?;
+            let req = semver::VersionReq::parse(req_str)
+                .with_context(|| format!("Bad requirement {} in --add", req_str))?;
+            solver.require(name, req);
+        }
+
+        let toolchain = if args.ignore_msrv {
+            None
+        } else {
+            let tc = crate::pubgrub_solver::toolchain_version(build_text);
+            if tc.is_none() {
+                eprintln!("lock: no rust_toolchain version found; MSRV filtering is off");
+            }
+            tc
+        };
         solver.msrv(toolchain);
 
         // Later platforms only add what earlier ones could not see; a crate
@@ -1545,7 +1612,12 @@ fn lock_round(
         .collect();
     for (name, version, cksum) in &newly {
         let root = added_names.contains(name);
-        eprintln!("lock: + {}@{}{}", name, version, if root { " (root)" } else { "" });
+        eprintln!(
+            "lock: + {}@{}{}",
+            name,
+            version,
+            if root { " (root)" } else { "" }
+        );
         decls.push(Decl {
             name: None,
             crate_name: name.clone(),
@@ -1866,14 +1938,19 @@ rust_repo(
         let renames = normalize_names(&mut decls).unwrap();
         assert_eq!(renames.get("serde_old").unwrap(), "serde-1.0.100");
         // The newest keeps the plain name
-        assert!(decls.iter().any(|d| d.version == "1.0.228" && d.subrepo() == "serde"));
+        assert!(decls
+            .iter()
+            .any(|d| d.version == "1.0.228" && d.subrepo() == "serde"));
     }
 
     #[test]
     fn import_lockfile_sources() {
-        let dir = std::env::temp_dir().join(format!("please_rust_sync_test_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("please_rust_sync_test_{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("Cargo.lock"), r#"
+        fs::write(
+            dir.join("Cargo.lock"),
+            r#"
 [[package]]
 name = "serde"
 version = "1.0.228"
@@ -1899,15 +1976,21 @@ source = "git+https://gitlab.example.com/x/y#deadbeef"
 [[package]]
 name = "local_thing"
 version = "0.0.1"
-"#).unwrap();
-        fs::write(dir.join("Cargo.toml"), r#"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("Cargo.toml"),
+            r#"
 [package]
 name = "ws"
 version = "0.0.0"
 
 [dependencies]
 fresh = { version = "2", features = ["extra"] }
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
         let mut decls = parse(BUILD);
         // serde already declared but without this hash
@@ -1915,7 +1998,14 @@ fresh = { version = "2", features = ["extra"] }
         import_cargo_lock(&dir.join("Cargo.lock"), &mut decls).unwrap();
 
         // Existing entry got the hash attached
-        assert_eq!(decls.iter().find(|d| d.crate_name == "serde").unwrap().hashes, vec!["feedface"]);
+        assert_eq!(
+            decls
+                .iter()
+                .find(|d| d.crate_name == "serde")
+                .unwrap()
+                .hashes,
+            vec!["feedface"]
+        );
         // New registry crate imported with hash, marked root via workspace manifest
         let fresh = decls.iter().find(|d| d.crate_name == "fresh").unwrap();
         assert_eq!(fresh.hashes, vec!["cafebabe"]);
@@ -1933,12 +2023,16 @@ fresh = { version = "2", features = ["extra"] }
 
     #[test]
     fn repo_root_walks_to_plzconfig() {
-        let dir = std::env::temp_dir().join(format!("please_rust_root_test_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("please_rust_root_test_{}", std::process::id()));
         let nested = dir.join("third_party/rust");
         fs::create_dir_all(&nested).unwrap();
         fs::write(dir.join(".plzconfig"), "").unwrap();
         fs::write(nested.join("BUILD"), "").unwrap();
-        assert_eq!(repo_root(&nested.join("BUILD")), dir.canonicalize().unwrap());
+        assert_eq!(
+            repo_root(&nested.join("BUILD")),
+            dir.canonicalize().unwrap()
+        );
     }
 }
 
@@ -1957,9 +2051,21 @@ mod run_tests {
         fs::write(dir.join(".plzconfig"), "").unwrap();
 
         for (name, version, manifest) in [
-            ("app", "1.0.0", "[package]\nname = \"app\"\nversion = \"1.0.0\"\n\n[dependencies]\nutil = \"1\"\n"),
-            ("util", "1.5.0", "[package]\nname = \"util\"\nversion = \"1.5.0\"\n"),
-            ("unused", "0.1.0", "[package]\nname = \"unused\"\nversion = \"0.1.0\"\n"),
+            (
+                "app",
+                "1.0.0",
+                "[package]\nname = \"app\"\nversion = \"1.0.0\"\n\n[dependencies]\nutil = \"1\"\n",
+            ),
+            (
+                "util",
+                "1.5.0",
+                "[package]\nname = \"util\"\nversion = \"1.5.0\"\n",
+            ),
+            (
+                "unused",
+                "0.1.0",
+                "[package]\nname = \"unused\"\nversion = \"0.1.0\"\n",
+            ),
         ] {
             let cdir = store.join(format!("{}-{}", name, version));
             fs::create_dir_all(&cdir).unwrap();
@@ -1967,7 +2073,9 @@ mod run_tests {
         }
 
         let build_file = dir.join("BUILD");
-        fs::write(&build_file, r#"rust_repo(
+        fs::write(
+            &build_file,
+            r#"rust_repo(
     name = "app",
     crate = "app",
     version = "1.0.0",
@@ -1986,7 +2094,9 @@ rust_repo(
     version = "0.1.0",
     indirect = True,
 )
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
         let args = || SyncArgs {
             build_file: build_file.clone(),
@@ -2025,7 +2135,8 @@ rust_repo(
 
     #[test]
     fn missing_manifest_without_plz_errors() {
-        let dir = std::env::temp_dir().join(format!("please_rust_sync_missing_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("please_rust_sync_missing_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let store = dir.join("store");
         fs::create_dir_all(&store).unwrap();
@@ -2064,12 +2175,19 @@ rust_repo(
             deps: vec![],
             cksum: "x".to_string(),
             features: [
-                ("default".to_string(), vec!["std".to_string(), "dep:mandatory_opt".to_string()]),
+                (
+                    "default".to_string(),
+                    vec!["std".to_string(), "dep:mandatory_opt".to_string()],
+                ),
                 ("std".to_string(), vec!["helper/fast".to_string()]),
             ]
             .into_iter()
             .collect(),
-            features2: Some([("weakling".to_string(), vec!["other?/x".to_string()])].into_iter().collect()),
+            features2: Some(
+                [("weakling".to_string(), vec!["other?/x".to_string()])]
+                    .into_iter()
+                    .collect(),
+            ),
             yanked: false,
             rust_version: None,
         };
@@ -2083,7 +2201,10 @@ rust_repo(
     fn target_cfg_matching() {
         assert!(target_applies("cfg(unix)", "x86_64-unknown-linux-gnu"));
         assert!(!target_applies("cfg(windows)", "x86_64-unknown-linux-gnu"));
-        assert!(target_applies("x86_64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"));
+        assert!(target_applies(
+            "x86_64-unknown-linux-gnu",
+            "x86_64-unknown-linux-gnu"
+        ));
         assert!(!target_applies("cfg(broken", "x86_64-unknown-linux-gnu"));
     }
 }
@@ -2111,8 +2232,14 @@ mod lock_cmd_tests {
             r#"{"name":"hexlib","vers":"0.4.4","deps":[],"cksum":"bbb222","features":{},"yanked":true}"#, "\n",
         )).unwrap();
         fs::create_dir_all(cache.join("ti/ny")).unwrap();
-        fs::write(cache.join("ti/ny/tinydep"),
-            concat!(r#"{"name":"tinydep","vers":"1.2.0","deps":[],"cksum":"ccc333","features":{}}"#, "\n")).unwrap();
+        fs::write(
+            cache.join("ti/ny/tinydep"),
+            concat!(
+                r#"{"name":"tinydep","vers":"1.2.0","deps":[],"cksum":"ccc333","features":{}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
 
         // Crate store so the post-lock sync can resolve manifests
         let store = dir.join("plz-out/gen/third_party/rust");
@@ -2160,7 +2287,8 @@ mod lock_cmd_tests {
 
     #[test]
     fn lock_offline_without_cache_errors() {
-        let dir = std::env::temp_dir().join(format!("please_rust_lock_offline_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("please_rust_lock_offline_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let build_file = dir.join("BUILD");
@@ -2197,17 +2325,29 @@ mod lock_cmd_tests {
     fn platforms_is_written_only_when_a_crate_is_gated() {
         let mut everywhere = decl("serde", "1.0.0", true);
         everywhere.platforms = None;
-        assert!(!emit_decl(&everywhere).contains("platforms"), "{}", emit_decl(&everywhere));
+        assert!(
+            !emit_decl(&everywhere).contains("platforms"),
+            "{}",
+            emit_decl(&everywhere)
+        );
 
         let mut apple = decl("objc2", "0.6.4", false);
         apple.platforms = Some(["macos".to_string()].into_iter().collect());
-        assert!(emit_decl(&apple).contains("platforms = [\"macos\"]"), "{}", emit_decl(&apple));
+        assert!(
+            emit_decl(&apple).contains("platforms = [\"macos\"]"),
+            "{}",
+            emit_decl(&apple)
+        );
 
         // Reachable on no platform this repo covers, which is different from
         // reachable on all of them.
         let mut nowhere = decl("windows-sys", "0.61.2", false);
         nowhere.platforms = Some(BTreeSet::new());
-        assert!(emit_decl(&nowhere).contains("platforms = []"), "{}", emit_decl(&nowhere));
+        assert!(
+            emit_decl(&nowhere).contains("platforms = []"),
+            "{}",
+            emit_decl(&nowhere)
+        );
     }
 
     fn decl(crate_name: &str, version: &str, root: bool) -> Decl {
@@ -2259,7 +2399,8 @@ mod lock_cmd_tests {
 
     #[test]
     fn lock_nothing_to_do_when_satisfied() {
-        let dir = std::env::temp_dir().join(format!("please_rust_lock_noop_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("please_rust_lock_noop_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let build_file = dir.join("BUILD");

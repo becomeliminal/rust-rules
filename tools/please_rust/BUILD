@@ -92,11 +92,9 @@ rust_test(
     deps = _DEPS,
 )
 
-# The tool's own source was never linted - rust_clippy existed but was
-# applied only to examples/package, so the 7k lines everything else depends
-# on went unchecked. It passes at deny=warnings. A matching rust_fmt_test is
-# not here yet because the source has never been rustfmt'd and doing so is a
-# 1,368-line mechanical diff across all ten files.
+# The tool's own source was never linted or format-checked - both rules
+# existed but were applied only to examples/package, so the 7k lines
+# everything else depends on went unchecked.
 rust_clippy(
     name = "lint",
     root = "src/main.rs",
@@ -106,6 +104,12 @@ rust_clippy(
     edition = "2021",
     manifest = "Cargo.toml",
     deps = _DEPS,
+)
+
+rust_fmt_test(
+    name = "fmt_test",
+    srcs = ["src/main.rs"] + _MODULES,
+    edition = "2021",
 )
 
 # Bootstrap target that builds please_rust using cargo directly.

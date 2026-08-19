@@ -67,7 +67,10 @@ pub fn import_workspace(ws: &Path, third_party_folder: &str) -> Result<Workspace
     } else if ws_manifest.package.is_some() {
         member_dirs.push(ws_root.clone());
     } else {
-        anyhow::bail!("{} has neither [workspace] nor [package]", ws_manifest_path.display());
+        anyhow::bail!(
+            "{} has neither [workspace] nor [package]",
+            ws_manifest_path.display()
+        );
     }
     member_dirs.sort();
     member_dirs.dedup();
@@ -77,8 +80,8 @@ pub fn import_workspace(ws: &Path, third_party_folder: &str) -> Result<Workspace
     let mut members: Vec<Member> = Vec::new();
     for dir in &member_dirs {
         let mpath = dir.join("Cargo.toml");
-        let mbytes = fs::read(&mpath)
-            .with_context(|| format!("Failed to read {}", mpath.display()))?;
+        let mbytes =
+            fs::read(&mpath).with_context(|| format!("Failed to read {}", mpath.display()))?;
         let manifest = crate::resolve::parse_manifest(&mbytes)
             .with_context(|| format!("Failed to parse {}", mpath.display()))?;
         let name = match &manifest.package {
@@ -90,7 +93,12 @@ pub fn import_workspace(ws: &Path, third_party_folder: &str) -> Result<Workspace
             .strip_prefix(&cwd)
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|_| dir.clone());
-        members.push(Member { dir: dir.clone(), rel, manifest, name });
+        members.push(Member {
+            dir: dir.clone(),
+            rel,
+            manifest,
+            name,
+        });
     }
 
     // canonical member dir -> label
@@ -130,7 +138,10 @@ pub fn import_workspace(ws: &Path, third_party_folder: &str) -> Result<Workspace
 fn glob_dirs(pattern: &str) -> Result<Vec<PathBuf>> {
     let p = Path::new(pattern);
     let parent = p.parent().unwrap_or(Path::new("."));
-    let leaf = p.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let leaf = p
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
     let mut out = Vec::new();
     if !leaf.contains('*') {
         out.push(p.to_path_buf());
@@ -444,7 +455,11 @@ fn emit_member_build(
         test_files.sort();
         for f in test_files {
             let stem = f.trim_end_matches(".rs").replace('-', "_");
-            let rule_name = if stem == "test" { format!("{}_it", stem) } else { stem.clone() };
+            let rule_name = if stem == "test" {
+                format!("{}_it", stem)
+            } else {
+                stem.clone()
+            };
             let mut test_deps = deps.clone();
             if has_lib {
                 test_deps.push(own_label.clone());
@@ -472,8 +487,11 @@ mod tests {
     use super::*;
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir()
-            .join(format!("please_rust_ws_test_{}_{}", name, std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "please_rust_ws_test_{}_{}",
+            name,
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -498,7 +516,11 @@ mod tests {
             "crates/core/Cargo.toml",
             "[package]\nname = \"core-lib\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nserde = \"1\"\n",
         );
-        write(&ws, "crates/core/src/lib.rs", "pub mod util;\n#[cfg(test)]\nmod t { #[test] fn ok() {} }\n");
+        write(
+            &ws,
+            "crates/core/src/lib.rs",
+            "pub mod util;\n#[cfg(test)]\nmod t { #[test] fn ok() {} }\n",
+        );
         write(&ws, "crates/core/src/util.rs", "pub fn f() {}\n");
         write(
             &ws,
@@ -541,7 +563,10 @@ mod tests {
         let result = import_workspace(&ws, "third_party/rust").unwrap();
         assert_eq!(result.members, 1);
         assert_eq!(result.written, 0);
-        assert_eq!(fs::read_to_string(ws.join("BUILD")).unwrap(), "# hands off\n");
+        assert_eq!(
+            fs::read_to_string(ws.join("BUILD")).unwrap(),
+            "# hands off\n"
+        );
     }
 
     #[test]

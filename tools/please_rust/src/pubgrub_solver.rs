@@ -59,11 +59,23 @@ pub struct Bucket {
 impl Bucket {
     pub fn of(v: &Version) -> Self {
         if v.major > 0 {
-            Bucket { major: v.major, minor: 0, patch: 0 }
+            Bucket {
+                major: v.major,
+                minor: 0,
+                patch: 0,
+            }
         } else if v.minor > 0 {
-            Bucket { major: 0, minor: v.minor, patch: 0 }
+            Bucket {
+                major: 0,
+                minor: v.minor,
+                patch: 0,
+            }
         } else {
-            Bucket { major: 0, minor: 0, patch: v.patch }
+            Bucket {
+                major: 0,
+                minor: 0,
+                patch: v.patch,
+            }
         }
     }
 
@@ -164,7 +176,10 @@ impl<'a, S: ReleaseSource> Solver<'a, S> {
     }
 
     pub fn pin(&mut self, name: &str, version: Version) -> &mut Self {
-        self.pinned.entry(name.to_string()).or_default().push(version);
+        self.pinned
+            .entry(name.to_string())
+            .or_default()
+            .push(version);
         self
     }
 
@@ -197,17 +212,19 @@ impl<'a, S: ReleaseSource> Solver<'a, S> {
             .releases(name)?
             .into_iter()
             .filter(|r| bucket.contains(&r.version))
-            .filter(|r| {
-                !r.yanked
-                    || pinned.is_some_and(|ps| ps.contains(&r.version))
-            })
+            .filter(|r| !r.yanked || pinned.is_some_and(|ps| ps.contains(&r.version)))
             .collect();
         in_bucket.sort_by(|a, b| b.version.cmp(&a.version));
 
         if let Some(toolchain) = &self.msrv {
             let ok: Vec<Release> = in_bucket
                 .iter()
-                .filter(|r| r.rust_version.as_ref().map(|rv| rv <= toolchain).unwrap_or(true))
+                .filter(|r| {
+                    r.rust_version
+                        .as_ref()
+                        .map(|rv| rv <= toolchain)
+                        .unwrap_or(true)
+                })
                 .cloned()
                 .collect();
             if ok.is_empty() && !in_bucket.is_empty() {
@@ -263,14 +280,20 @@ impl<'a, S: ReleaseSource> Solver<'a, S> {
                 return Ok(None);
             }
             return Ok(Some((
-                Pkg::Crate { name: package.to_string(), bucket: buckets[0] },
+                Pkg::Crate {
+                    name: package.to_string(),
+                    bucket: buckets[0],
+                },
                 range,
             )));
         }
         // Several buckets satisfy the requirement: hand PubGrub the choice.
         let n = buckets.len() as u64;
         Ok(Some((
-            Pkg::Proxy { name: package.to_string(), req: req.to_string() },
+            Pkg::Proxy {
+                name: package.to_string(),
+                req: req.to_string(),
+            },
             Ranges::between(Version::new(0, 0, 0), Version::new(n, 0, 0)),
         )))
     }
@@ -309,14 +332,15 @@ impl<'a, S: ReleaseSource> Solver<'a, S> {
             match e {
                 pubgrub::PubGrubError::NoSolution(mut derivation) => {
                     derivation.collapse_no_versions();
-                    let report =
-                        <pubgrub::DefaultStringReporter as Reporter<Pkg, Ranges<Version>, String>>::report(
-                            &derivation,
-                        )
-                        // The virtual root has a synthetic version; saying so
-                        // in a user-facing error is just noise.
-                        .replace("the requested dependencies at version 0.0.0", "the request")
-                        .replace("the requested dependencies 0.0.0", "the request");
+                    let report = <pubgrub::DefaultStringReporter as Reporter<
+                        Pkg,
+                        Ranges<Version>,
+                        String,
+                    >>::report(&derivation)
+                    // The virtual root has a synthetic version; saying so
+                    // in a user-facing error is just noise.
+                    .replace("the requested dependencies at version 0.0.0", "the request")
+                    .replace("the requested dependencies 0.0.0", "the request");
                     anyhow::anyhow!("version conflict:\n{}", report)
                 }
                 pubgrub::PubGrubError::ErrorRetrievingDependencies {
@@ -396,9 +420,10 @@ impl<'a, S: ReleaseSource> DependencyProvider for Solver<'a, S> {
                 // A bucket that already holds a declared version wins, so
                 // adding one crate does not shuffle unrelated majors.
                 if let Some(pins) = self.pinned.get(name) {
-                    if let Some(i) = buckets.iter().position(|b| {
-                        pins.iter().any(|p| b.contains(p))
-                    }) {
+                    if let Some(i) = buckets
+                        .iter()
+                        .position(|b| pins.iter().any(|p| b.contains(p)))
+                    {
                         let v = Version::new(i as u64, 0, 0);
                         if range.contains(&v) {
                             return Ok(Some(v));
@@ -470,9 +495,15 @@ impl<'a, S: ReleaseSource> DependencyProvider for Solver<'a, S> {
                 )));
             }
             return Ok(Dependencies::Available(
-                [(Pkg::Crate { name: name.clone(), bucket }, range)]
-                    .into_iter()
-                    .collect::<DependencyConstraints<_, _>>(),
+                [(
+                    Pkg::Crate {
+                        name: name.clone(),
+                        bucket,
+                    },
+                    range,
+                )]
+                .into_iter()
+                .collect::<DependencyConstraints<_, _>>(),
             ));
         }
 
@@ -484,7 +515,9 @@ impl<'a, S: ReleaseSource> DependencyProvider for Solver<'a, S> {
                 .collect(),
             Pkg::Proxy { .. } => unreachable!("handled above"),
             Pkg::Crate { name, .. } => {
-                let releases = self.releases(name).map_err(|e| SolverError(e.to_string()))?;
+                let releases = self
+                    .releases(name)
+                    .map_err(|e| SolverError(e.to_string()))?;
                 let release = match releases.iter().find(|r| r.version == *version) {
                     Some(r) => r.clone(),
                     None => {
@@ -586,7 +619,10 @@ mod tests {
     }
 
     fn idx() -> Builder {
-        Builder { crates: BTreeMap::new(), applies: BTreeSet::new() }
+        Builder {
+            crates: BTreeMap::new(),
+            applies: BTreeSet::new(),
+        }
     }
 
     impl Builder {
@@ -619,7 +655,10 @@ mod tests {
                     })
                     .collect(),
             };
-            self.crates.entry(name.to_string()).or_default().push(f(release));
+            self.crates
+                .entry(name.to_string())
+                .or_default()
+                .push(f(release));
             self
         }
 
@@ -650,7 +689,10 @@ mod tests {
         }
 
         fn build(&self) -> Fixture {
-            Fixture { crates: self.crates.clone(), applies: self.applies.clone() }
+            Fixture {
+                crates: self.crates.clone(),
+                applies: self.applies.clone(),
+            }
         }
     }
 
@@ -692,7 +734,11 @@ mod tests {
 
     #[test]
     fn picks_newest_satisfying_version() {
-        let f = idx().add("a", "1.0.0", &[]).add("a", "1.2.0", &[]).add("a", "2.0.0", &[]).build();
+        let f = idx()
+            .add("a", "1.0.0", &[])
+            .add("a", "1.2.0", &[])
+            .add("a", "2.0.0", &[])
+            .build();
         let got = solve(&f, &[("a", "^1")]).unwrap();
         assert_eq!(got["a"], Version::parse("1.2.0").unwrap());
     }
@@ -886,7 +932,14 @@ mod tests {
     #[test]
     fn dev_dependencies_are_ignored() {
         let mut b = idx();
-        b.dep_release("d", "1.0.0", ReleaseDep { kind: "dev".to_string(), ..dep("missing", "^1") });
+        b.dep_release(
+            "d",
+            "1.0.0",
+            ReleaseDep {
+                kind: "dev".to_string(),
+                ..dep("missing", "^1")
+            },
+        );
         let f = b.build();
         // "missing" is not in the index at all; ignoring dev deps keeps this solvable
         let got = solve(&f, &[("d", "^1")]).unwrap();
@@ -896,7 +949,14 @@ mod tests {
     #[test]
     fn build_dependencies_are_resolved() {
         let mut b = idx();
-        b.dep_release("bd", "1.0.0", ReleaseDep { kind: "build".to_string(), ..dep("helper", "^1") });
+        b.dep_release(
+            "bd",
+            "1.0.0",
+            ReleaseDep {
+                kind: "build".to_string(),
+                ..dep("helper", "^1")
+            },
+        );
         b.add("helper", "1.2.0", &[]);
         let f = b.build();
         let got = solve(&f, &[("bd", "^1")]).unwrap();
@@ -909,7 +969,11 @@ mod tests {
         b.dep_release(
             "o",
             "1.0.0",
-            ReleaseDep { optional: true, default_activated: false, ..dep("extra", "^1") },
+            ReleaseDep {
+                optional: true,
+                default_activated: false,
+                ..dep("extra", "^1")
+            },
         );
         let f = b.build();
         let got = solve(&f, &[("o", "^1")]).unwrap();
@@ -922,7 +986,11 @@ mod tests {
         b.dep_release(
             "o",
             "1.0.0",
-            ReleaseDep { optional: true, default_activated: true, ..dep("extra", "^1") },
+            ReleaseDep {
+                optional: true,
+                default_activated: true,
+                ..dep("extra", "^1")
+            },
         );
         b.add("extra", "1.1.0", &[]);
         let f = b.build();
@@ -936,7 +1004,10 @@ mod tests {
         b.dep_release(
             "p",
             "1.0.0",
-            ReleaseDep { target: Some("cfg(windows)".to_string()), ..dep("winapi", "^1") },
+            ReleaseDep {
+                target: Some("cfg(windows)".to_string()),
+                ..dep("winapi", "^1")
+            },
         );
         b.add("winapi", "1.0.0", &[]);
         let f = b.build(); // no gates apply
@@ -947,7 +1018,10 @@ mod tests {
         b2.dep_release(
             "p",
             "1.0.0",
-            ReleaseDep { target: Some("cfg(unix)".to_string()), ..dep("nix", "^1") },
+            ReleaseDep {
+                target: Some("cfg(unix)".to_string()),
+                ..dep("nix", "^1")
+            },
         );
         b2.add("nix", "1.0.0", &[]);
         b2.applies("cfg(unix)");
@@ -1007,7 +1081,10 @@ mod tests {
     #[test]
     fn prerelease_versions_are_not_chosen_for_plain_requirements() {
         // semver's matches() already excludes prereleases from ^1
-        let f = idx().add("pre", "1.0.0", &[]).add("pre", "2.0.0-alpha.1", &[]).build();
+        let f = idx()
+            .add("pre", "1.0.0", &[])
+            .add("pre", "2.0.0-alpha.1", &[])
+            .build();
         let got = solve(&f, &[("pre", "^1")]).unwrap();
         assert_eq!(got["pre"], Version::parse("1.0.0").unwrap());
     }
@@ -1015,7 +1092,10 @@ mod tests {
     #[test]
     fn toolchain_version_is_read_from_the_build_file() {
         let build = "subinclude(\"//build_defs:rust\")\n\nrust_toolchain(\n    name = \"toolchain\",\n    hashes = [\"abc\"],\n    version = \"1.97.1\",\n    visibility = [\"PUBLIC\"],\n)\n";
-        assert_eq!(toolchain_version(build), Some(Version::parse("1.97.1").unwrap()));
+        assert_eq!(
+            toolchain_version(build),
+            Some(Version::parse("1.97.1").unwrap())
+        );
         assert_eq!(toolchain_version("nothing here"), None);
     }
 }
