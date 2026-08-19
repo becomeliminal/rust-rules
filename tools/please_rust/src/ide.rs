@@ -608,7 +608,29 @@ pub fn run(args: IdeArgs) -> Result<()> {
     std::fs::write(&args.output, json + "\n")
         .with_context(|| format!("writing {}", args.output.display()))?;
 
-    for s in &skipped {
+    // One line per crate is unreadable when the whole lock is stale, and that
+    // is exactly when it happens: a lock built by a please_rust older than the
+    // fields it records leaves every crate without a root module, and the real
+    // message drowns in a thousand copies of itself.
+    let stale = skipped
+        .iter()
+        .filter(|s| s.contains("no root module recorded"))
+        .count();
+    if stale > 0 {
+        eprintln!(
+            "ide: {} of {} crates have no root module. The lock was written by an \
+             older please_rust than this one - rebuild it, and check the tool the \
+             lock rule uses rather than the one this ran as. Note that `plz -o` does \
+             not reach a nested plz: set PLEASE_RUST_TOOL in .plzconfig, or pass \
+             PLZ_OVERRIDES in the environment.",
+            stale,
+            project.crates.len()
+        );
+    }
+    for s in skipped
+        .iter()
+        .filter(|s| !s.contains("no root module recorded"))
+    {
         eprintln!("ide: could not describe {}", s);
     }
     for (krate, label) in &unresolved {

@@ -482,6 +482,13 @@ will find.
 - **`unrecognized subcommand 'ide'`.** The `please_rust` in use predates this
   rule. Either pin a release that has it, or point `PleaseRustTool` at
   `///rust//tools/please_rust:bootstrap`.
+- **Third-party crates appear but go nowhere**, and the run reports crates
+  with no root module. The lock was written by an older `please_rust` than the
+  one generating the project file, so it does not carry the fields this needs.
+  Rebuild it — and set the tool in `.plzconfig` rather than passing `plz -o`:
+  **discovery shells out to `plz`, and a nested invocation does not inherit
+  command-line overrides**, so the lock gets rebuilt by the old tool
+  underneath you. `PLZ_OVERRIDES` in the environment does carry through.
 - **Nothing resolves at all, including `std`.** Go-to-definition into the
   standard library needs the `rust-src` component, which is only downloaded if
   the toolchain asks for it: set `rust_toolchain(src_hash = ...)`. Without it

@@ -178,4 +178,30 @@ done < "$WORK/skipped"
 # shellcheck disable=SC2086
 "$TOOL" ide $LOCK_ARG --third-party-dir $THIRD_PARTY_DIR --sysroot $SYSROOT \
     --sysroot-src $SYSROOT_SRC --first-party $FILES $SUBARGS --output $OUT_FILE
+
+# A proc macro is a dylib rust-analyzer dlopens, and naming one is not the
+# same as it existing: nothing here has built the crates themselves, so the
+# derives silently do not expand and the editor reports errors in code that
+# compiles. The lock's declarations live in the package that declares it, and
+# a crate's target there is named for its subrepo, which is the directory the
+# dylib sits in.
+if [ -n "$LOCK_LABEL" ]; then
+    LOCK_PKG=${LOCK_LABEL%:*}
+    sed -n 's/.*"proc_macro_dylib_path": "\([^"]*\)".*/\1/p' "$OUT_FILE" \
+        | sort -u > "$WORK/dylibs"
+    : > "$WORK/pm_targets"
+    while IFS= read -r dylib; do
+        if [ -z "$dylib" ] || [ -f "$dylib" ]; then continue; fi
+        pm_dir=`dirname "$dylib"`
+        echo "$LOCK_PKG:`basename "$pm_dir"`" >> "$WORK/pm_targets"
+    done < "$WORK/dylibs"
+    if [ -s "$WORK/pm_targets" ]; then
+        pm_count=`wc -l < "$WORK/pm_targets"`
+        echo "$NAME: building $pm_count proc macros the project file names"
+        # One that will not build is not fatal: the rest still expand.
+        # shellcheck disable=SC2046
+        plz build $(tr '\n' ' ' < "$WORK/pm_targets") >/dev/null 2>&1 || \
+            echo "$NAME: some proc macros did not build, so their derives will not expand" >&2
+    fi
+fi
 echo "$NAME: wrote $OUT_FILE (`echo $FILES | wc -w` first-party crates, `echo $SUBN` from subrepos)"
