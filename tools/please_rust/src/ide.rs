@@ -67,6 +67,12 @@ pub struct IdeArgs {
 #[derive(serde::Deserialize)]
 struct FirstParty {
     display_name: String,
+    /// This crate's own build label. Deps name labels, and two crates can
+    /// share a display name - a corpus with a probe crate per third-party
+    /// crate has hundreds - so matching them by name makes a crate its own
+    /// dependency and rust-analyzer reports a cycle.
+    #[serde(default)]
+    label: String,
     /// Repo-relative; made absolute against `--repo-root`.
     root_module: String,
     edition: String,
@@ -510,37 +516,47 @@ pub fn run(args: IdeArgs) -> Result<()> {
 
     // First-party crates go after the third-party ones so the indices
     // assigned above stay valid.
-    let mut first: Vec<(String, FirstParty, bool)> = Vec::new();
+    // The third element is the subrepo a crate came from, empty for this one.
+    // It scopes label lookups and decides workspace membership in one.
+    let mut first: Vec<(String, FirstParty, String)> = Vec::new();
     for path in &args.first_party {
-        first.push((path.display().to_string(), read_fragment(path)?, true));
+        first.push((
+            path.display().to_string(),
+            read_fragment(path)?,
+            String::new(),
+        ));
     }
     for spec in &args.subrepo_crate {
-        let (root, path) = spec.split_once('=').with_context(|| {
-            format!("--subrepo-crate wants <root module>=<fragment>, got {spec}")
-        })?;
+        let (checkout, path) = spec
+            .split_once('=')
+            .with_context(|| format!("--subrepo-crate wants <checkout>=<fragment>, got {spec}"))?;
         let path = Path::new(path);
         let mut fp = read_fragment(path)?;
-        rebase(&mut fp, root);
+        rebase(&mut fp, checkout);
         // Never a workspace member, however much of it you own. rust-analyzer
         // typechecks members on save, and a subrepo is checked in its own
         // repo - having its errors appear in this one's problems panel is
         // noise about code this checkout cannot fix.
-        first.push((path.display().to_string(), fp, false));
+        first.push((path.display().to_string(), fp, checkout.to_string()));
     }
-    let mut by_label: BTreeMap<String, usize> = BTreeMap::new();
-    for (i, (_, fp, _)) in first.iter().enumerate() {
-        by_label.insert(fp.display_name.clone(), crates.len() + i);
+    // Keyed by label, and scoped: a subrepo's labels are relative to itself,
+    // so `//foo:bar` there and `//foo:bar` here are different crates.
+    let mut by_label: BTreeMap<(String, String), usize> = BTreeMap::new();
+    for (i, (_, fp, scope)) in first.iter().enumerate() {
+        if !fp.label.is_empty() {
+            by_label.insert((scope.clone(), fp.label.clone()), crates.len() + i);
+        }
     }
     // A dep that resolves to nothing is dropped, and the only symptom is an
     // import rust-analyzer cannot follow. Say so instead.
     let mut unresolved: Vec<(String, String)> = Vec::new();
-    for (_, fp, workspace) in &first {
+    for (_, fp, scope) in &first {
         let mut deps = Vec::new();
         for d in &fp.deps {
             let name = d.name.replace('-', "_");
-            // A first-party dep names another fragment; anything else is a
-            // declaration in the lock.
-            if let Some(i) = by_label.get(&name) {
+            // A first-party dep names another fragment in the same repo;
+            // anything else is a declaration in the lock.
+            if let Some(i) = by_label.get(&(scope.clone(), d.label.clone())) {
                 deps.push(DepEntry { krate: *i, name });
             } else if let Some(i) = label_subrepo(&d.label).and_then(|s| index.get(&(s, false))) {
                 // The crate's own name rather than the label's: a label
@@ -577,7 +593,8 @@ pub fn run(args: IdeArgs) -> Result<()> {
             proc_macro_dylib_path: None,
             // This is the code being worked on, which is what the flag means:
             // rust-analyzer checks these on save and only indexes the rest.
-            is_workspace_member: *workspace,
+            // A subrepo is checked in its own repo, so it never qualifies.
+            is_workspace_member: scope.is_empty(),
         });
     }
 
@@ -862,6 +879,7 @@ c = ["other/thing"]
     fn a_subrepo_fragment_is_rebased_onto_the_host_repo() {
         let mut fp = FirstParty {
             display_name: "greeter".to_string(),
+            label: "//greeter:greeter".to_string(),
             root_module: "greeter/src/lib.rs".to_string(),
             edition: "2021".to_string(),
             features: Vec::new(),
@@ -887,6 +905,7 @@ c = ["other/thing"]
     fn rebasing_a_host_repo_fragment_changes_nothing() {
         let mut fp = FirstParty {
             display_name: "greeter".to_string(),
+            label: "//greeter:greeter".to_string(),
             root_module: "greeter/src/lib.rs".to_string(),
             edition: "2021".to_string(),
             features: Vec::new(),
@@ -897,6 +916,36 @@ c = ["other/thing"]
         rebase(&mut fp, "");
         assert_eq!(fp.root_module, "greeter/src/lib.rs");
         assert_eq!(fp.manifest.as_deref(), Some("greeter/Cargo.toml"));
+    }
+
+    /// A first-party crate and a third-party crate can share a name - a corpus
+    /// with a probe crate per crate it exercises has hundreds of collisions -
+    /// and the probe depends on the crate it is named after. Matching deps by
+    /// name makes it depend on itself, which rust-analyzer reports as a cycle
+    /// and which drops the real dependency.
+    #[test]
+    fn a_crate_sharing_a_name_with_its_dependency_does_not_depend_on_itself() {
+        let fp = FirstParty {
+            display_name: "actix_http".to_string(),
+            label: "//probes/actix_http:actix_http".to_string(),
+            root_module: "probes/actix_http/lib.rs".to_string(),
+            edition: "2021".to_string(),
+            features: Vec::new(),
+            manifest: None,
+            is_proc_macro: false,
+            deps: vec![FirstPartyDep {
+                name: "actix_http".to_string(),
+                label: "//third_party/crates:actix_http".to_string(),
+            }],
+        };
+        // What run() keys on: the label, scoped by subrepo - not the name.
+        let mut by_label: BTreeMap<(String, String), usize> = BTreeMap::new();
+        by_label.insert((String::new(), fp.label.clone()), 7);
+        assert!(by_label
+            .get(&(String::new(), fp.deps[0].label.clone()))
+            .is_none());
+        // And the name alone would have matched, which is the bug.
+        assert_eq!(fp.display_name, fp.deps[0].name);
     }
 
     #[test]

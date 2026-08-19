@@ -95,6 +95,17 @@ if [ -z "$FRAGS" ]; then
 fi
 plz build $TOOL_LABEL $LOCK_LABEL $FRAGS >/dev/null
 TOOL=`plz query outputs $TOOL_LABEL`
+# The toolchain is wherever whoever declared it put it, so ask rather than
+# assume. An explicit sysroot in the rule wins and skips this.
+if [ -z "$SYSROOT" ] && [ -n "$SYSROOT_TARGET" ]; then
+    SYSROOT=`plz query outputs "$SYSROOT_TARGET" 2>/dev/null | head -1` || SYSROOT=""
+fi
+if [ -z "$SYSROOT_SRC" ] && [ -n "$SYSROOT_SRC_TARGET" ]; then
+    SYSROOT_SRC=`plz query outputs "$SYSROOT_SRC_TARGET" 2>/dev/null | head -1` || SYSROOT_SRC=""
+fi
+if [ -z "$SYSROOT" ]; then
+    echo "$NAME: could not locate the toolchain, so rust-analyzer will have no std" >&2
+fi
 LOCK_ARG=""
 if [ -n "$LOCK_LABEL" ]; then
     LOCK_ARG="--lock `plz query outputs $LOCK_LABEL`"

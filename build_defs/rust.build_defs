@@ -522,8 +522,11 @@ def _ide_fragment(name:str, crate_name:str, root:str, edition:str, features:list
     # A rule cannot read it here: parsing does not open files.
     manifest_json = '"%s/%s"' % (pkg, manifest) if manifest and pkg else (
         '"%s"' % manifest if manifest else 'null')
-    body = '{"display_name": "%s", "root_module": "%s", "edition": "%s", "features": [%s], "manifest": %s, "is_proc_macro": %s, "deps": [%s]}' % (
-        crate_name.replace('-', '_'), root_path, edition, feature_json, manifest_json, 'true' if is_proc_macro else 'false', dep_json)
+    # Its own label, because a dep names a label and two crates can share a
+    # name: a corpus with a probe crate per third-party crate has hundreds of
+    # collisions, and matching those by name makes a crate its own dependency.
+    body = '{"display_name": "%s", "label": "%s", "root_module": "%s", "edition": "%s", "features": [%s], "manifest": %s, "is_proc_macro": %s, "deps": [%s]}' % (
+        crate_name.replace('-', '_'), canonicalise(':' + name), root_path, edition, feature_json, manifest_json, 'true' if is_proc_macro else 'false', dep_json)
     return build_rule(
         name = tag(name, 'ide'),
         # The root module is a src so that `plz query input` reports where it
@@ -547,8 +550,7 @@ def _sq(value:str):
 
 def rust_project(name:str, lock:str='', targets:list=['//...'], exclude:list=[], subrepos:list=[],
                  third_party_dir:str='plz-out/gen/third_party/crates',
-                 sysroot:str='plz-out/bin/third_party/rust/rustc',
-                 sysroot_src:str='plz-out/gen/third_party/rust/rust-src',
+                 sysroot:str='', sysroot_src:str='',
                  out:str='rust-project.json', visibility:list=None):
     """Writes a rust-project.json describing every Rust crate in the repo.
 
@@ -588,9 +590,13 @@ def rust_project(name:str, lock:str='', targets:list=['//...'], exclude:list=[],
                        `lib/rustlib`. That is the rustc component, and
                        deliberately not what `Sysroot` names: rust-analyzer
                        runs `<sysroot>/bin/rustc --print cfg`, and the
-                       rust-std component has no bin/.
+                       rust-std component has no bin/. Derived from the
+                       toolchain if unset, which is what a consumer wants -
+                       a hardcoded path is this repo's layout, and in anyone
+                       else's it names a directory that is not there.
         sysroot_src (str): The standard library's sources, from
-                           `<toolchain>_sysroot_src`. Without it there is no
+                           `<toolchain>_sysroot_src`. Derived alongside the
+                           sysroot if unset. Without it there is no
                            go-to-definition into std.
         out (str): Where to write the file, relative to the repo root.
         visibility (list): Visibility declaration.
@@ -600,6 +606,16 @@ def rust_project(name:str, lock:str='', targets:list=['//...'], exclude:list=[],
     # form a command line takes.
     tool = canonicalise(CONFIG.RUST.PLEASE_RUST_TOOL)
     lock = canonicalise(lock) if lock else ''
+    # Where the toolchain lands is the toolchain's business, and it moves with
+    # whoever declares it: in a consumer it is under the plugin's subrepo, not
+    # this repo's third_party. Ask plz at run time rather than write a path
+    # down. `Rustc` is an entry point, and the target it names is the rustc
+    # component; the sysroot_src target is its sibling, derived the same way
+    # toolchain_entry() derives the others.
+    # Split the entry point off before canonicalising; a label with one is
+    # not a label plz will parse.
+    rustc_target = canonicalise(CONFIG.RUST.RUSTC.split('|')[0])
+    src_target = rustc_target[:-len('_rustc')] + '_sysroot_src' if rustc_target.endswith('_rustc') else ''
     # The script is a file, and everything that varies reaches it as a shell
     # variable rather than being substituted into its text - a label or a path
     # spliced into shell is a path that can be read as syntax.
@@ -614,6 +630,8 @@ def rust_project(name:str, lock:str='', targets:list=['//...'], exclude:list=[],
         'THIRD_PARTY_DIR=%s' % _sq(third_party_dir),
         'SYSROOT=%s' % _sq(sysroot),
         'SYSROOT_SRC=%s' % _sq(sysroot_src),
+        'SYSROOT_TARGET=%s' % _sq('' if sysroot else rustc_target),
+        'SYSROOT_SRC_TARGET=%s' % _sq('' if sysroot_src else src_target),
         'OUT_FILE=%s' % _sq(out),
     ]
     return build_rule(
