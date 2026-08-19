@@ -48,6 +48,16 @@ pub struct IdeArgs {
     #[arg(long = "first-party", num_args = 0..)]
     pub first_party: Vec<PathBuf>,
 
+    /// Fragments from crates in a subrepo, as `<root module>=<fragment>`.
+    ///
+    /// A fragment describes its root relative to the repo it was declared in,
+    /// which for a subrepo is not the repo the project file sits at the root
+    /// of. plz already reports a subrepo target's inputs relative to the host
+    /// repo, so the caller pairs each fragment with what `plz query input`
+    /// said, and the difference between the two rebases everything else.
+    #[arg(long = "subrepo-crate")]
+    pub subrepo_crate: Vec<String>,
+
     /// Where to write the project file
     #[arg(long, default_value = "rust-project.json")]
     pub output: PathBuf,
@@ -375,6 +385,30 @@ fn expand_features(
 /// compiled for a different platform and may have different features.
 type Key = (String, bool);
 
+fn read_fragment(path: &Path) -> Result<FirstParty> {
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+}
+
+/// Move a fragment's paths from the repo it was declared in to the one the
+/// project file sits at the root of.
+///
+/// `root` is where the crate's root module really is, as plz reports it. The
+/// fragment says where it is within its own repo, so what is in front of that
+/// is the subrepo's checkout, and every other path in the fragment needs it
+/// too.
+fn rebase(fp: &mut FirstParty, root: &str) {
+    let prefix = root
+        .strip_suffix(&fp.root_module)
+        .map(|p| p.to_string())
+        .unwrap_or_default();
+    fp.root_module = root.to_string();
+    if let Some(manifest) = &fp.manifest {
+        fp.manifest = Some(format!("{}{}", prefix, manifest));
+    }
+}
+
 /// The package env a first-party crate compiles with, read from its manifest
 /// the same way a compile reads it. Without this `clap::command!()` reports
 /// that CARGO_PKG_VERSION is unset - in the editor only, since the compile
@@ -477,22 +511,31 @@ pub fn run(args: IdeArgs) -> Result<()> {
 
     // First-party crates go after the third-party ones so the indices
     // assigned above stay valid.
-    let mut first: Vec<(String, FirstParty)> = Vec::new();
+    let mut first: Vec<(String, FirstParty, bool)> = Vec::new();
     for path in &args.first_party {
-        let text =
-            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        let fp: FirstParty =
-            serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
-        first.push((path.display().to_string(), fp));
+        first.push((path.display().to_string(), read_fragment(path)?, true));
+    }
+    for spec in &args.subrepo_crate {
+        let (root, path) = spec.split_once('=').with_context(|| {
+            format!("--subrepo-crate wants <root module>=<fragment>, got {spec}")
+        })?;
+        let path = Path::new(path);
+        let mut fp = read_fragment(path)?;
+        rebase(&mut fp, root);
+        // Never a workspace member, however much of it you own. rust-analyzer
+        // typechecks members on save, and a subrepo is checked in its own
+        // repo - having its errors appear in this one's problems panel is
+        // noise about code this checkout cannot fix.
+        first.push((path.display().to_string(), fp, false));
     }
     let mut by_label: BTreeMap<String, usize> = BTreeMap::new();
-    for (i, (_, fp)) in first.iter().enumerate() {
+    for (i, (_, fp, _)) in first.iter().enumerate() {
         by_label.insert(fp.display_name.clone(), crates.len() + i);
     }
     // A dep that resolves to nothing is dropped, and the only symptom is an
     // import rust-analyzer cannot follow. Say so instead.
     let mut unresolved: Vec<(String, String)> = Vec::new();
-    for (_, fp) in &first {
+    for (_, fp, workspace) in &first {
         let mut deps = Vec::new();
         for d in &fp.deps {
             let name = d.name.replace('-', "_");
@@ -535,7 +578,7 @@ pub fn run(args: IdeArgs) -> Result<()> {
             proc_macro_dylib_path: None,
             // This is the code being worked on, which is what the flag means:
             // rust-analyzer checks these on save and only indexes the rest.
-            is_workspace_member: true,
+            is_workspace_member: *workspace,
         });
     }
 
@@ -807,11 +850,54 @@ c = ["other/thing"]
             normalise(&Path::new("/src/std").join("../alloc")).unwrap(),
             Path::new("/src/alloc")
         );
-        assert!(
-            normalise(&src.join("core/./src/.."))
-                .unwrap()
-                .ends_with("core")
+        assert!(normalise(&src.join("core/./src/.."))
+            .unwrap()
+            .ends_with("core"));
+    }
+
+    /// A fragment from a subrepo describes its root relative to the repo it
+    /// was declared in. Everything in the project file is relative to the
+    /// repo it sits at the root of, so the two have to be reconciled or the
+    /// crate points at a path that does not exist and fails silently.
+    #[test]
+    fn a_subrepo_fragment_is_rebased_onto_the_host_repo() {
+        let mut fp = FirstParty {
+            display_name: "greeter".to_string(),
+            root_module: "greeter/src/lib.rs".to_string(),
+            edition: "2021".to_string(),
+            features: Vec::new(),
+            manifest: Some("greeter/Cargo.toml".to_string()),
+            is_proc_macro: false,
+            deps: Vec::new(),
+        };
+        rebase(&mut fp, "plz-out/subrepos/plugins/rust/greeter/src/lib.rs");
+        assert_eq!(
+            fp.root_module,
+            "plz-out/subrepos/plugins/rust/greeter/src/lib.rs"
         );
+        // The manifest is a path too, and CARGO_PKG_* comes from it.
+        assert_eq!(
+            fp.manifest.as_deref(),
+            Some("plz-out/subrepos/plugins/rust/greeter/Cargo.toml")
+        );
+    }
+
+    /// A crate in the host repo is its own rebase, so the same path in means
+    /// the same path out and no prefix is invented.
+    #[test]
+    fn rebasing_a_host_repo_fragment_changes_nothing() {
+        let mut fp = FirstParty {
+            display_name: "greeter".to_string(),
+            root_module: "greeter/src/lib.rs".to_string(),
+            edition: "2021".to_string(),
+            features: Vec::new(),
+            manifest: Some("greeter/Cargo.toml".to_string()),
+            is_proc_macro: false,
+            deps: Vec::new(),
+        };
+        rebase(&mut fp, "greeter/src/lib.rs");
+        assert_eq!(fp.root_module, "greeter/src/lib.rs");
+        assert_eq!(fp.manifest.as_deref(), Some("greeter/Cargo.toml"));
     }
 
     #[test]

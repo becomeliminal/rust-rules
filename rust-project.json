@@ -2991,7 +2991,8 @@
       "edition": "2021",
       "deps": [],
       "cfg": [
-        "feature=\"std\""
+        "feature=\"std\"",
+        "has_total_cmp"
       ],
       "env": {
         "CARGO_PKG_NAME": "num-traits",

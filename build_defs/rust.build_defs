@@ -526,6 +526,11 @@ def _ide_fragment(name:str, crate_name:str, root:str, edition:str, features:list
         crate_name.replace('-', '_'), root_path, edition, feature_json, manifest_json, 'true' if is_proc_macro else 'false', dep_json)
     return build_rule(
         name = tag(name, 'ide'),
+        # The root module is a src so that `plz query input` reports where it
+        # actually is. That is the whole trick for subrepos: a fragment there
+        # describes its root relative to its own repo, and plz reports inputs
+        # relative to the host repo, so asking plz is the rebasing.
+        srcs = [root],
         outs = [name + '.ide.json'],
         # A heredoc rather than echo: the payload is JSON and quoting it
         # through a shell twice is how you get a file nothing can parse.
@@ -535,7 +540,7 @@ def _ide_fragment(name:str, crate_name:str, root:str, edition:str, features:list
     )
 
 
-def rust_project(name:str, lock:str='', targets:list=['//...'], exclude:list=[],
+def rust_project(name:str, lock:str='', targets:list=['//...'], exclude:list=[], subrepos:list=[],
                  third_party_dir:str='plz-out/gen/third_party/crates',
                  sysroot:str='plz-out/bin/third_party/rust/rustc',
                  sysroot_src:str='plz-out/gen/third_party/rust/rust-src',
@@ -567,6 +572,12 @@ def rust_project(name:str, lock:str='', targets:list=['//...'], exclude:list=[],
         exclude (list): Label prefixes to leave out, e.g. ['//third_party/',
                         '//examples/']. Matched against the start of the
                         label, so '//test/' drops that whole subtree.
+        subrepos (list): Extra subrepos to look in, by name. Plugin subrepos
+                         are found without being named - plz already lists
+                         them - so this is for one brought in some other way,
+                         e.g. a shared crate from a github_repo. Crates found
+                         in a subrepo are described but never checked on
+                         save: a subrepo is checked in its own repo.
         third_party_dir (str): Where the generated crate subrepos land.
         sysroot (str): A rustup-shaped toolchain root - `bin/rustc` beside
                        `lib/rustlib`. That is the rustc component, and
@@ -605,9 +616,37 @@ def rust_project(name:str, lock:str='', targets:list=['//...'], exclude:list=[],
         'TOOL=`plz query outputs %s`' % tool,
         lock_setup,
         'FILES=`plz query outputs $FRAGS`',
-        '"$TOOL" ide %s--third-party-dir %s --sysroot %s --sysroot-src %s --first-party $FILES --output %s' % (
+        # Subrepos. Plugin ones plz already knows about; anything else was
+        # named. Third-party crates arrive through the lock and emit no
+        # fragments of their own, so sweeping every subrepo cannot describe
+        # one twice.
+        'SUBS="%s`plz query config | sed -n \'s/^\\[plugin \"\\(.*\\)\"\\]$/\\1/p\'`"' % (
+            ''.join(['%s ' % s for s in subrepos])),
+        'SUBARGS=""',
+        'SUBN=0',
+        'for sub in $SUBS; do',
+        '    subfrags=`plz query alltargets "///$sub//..." --include rust_ide --hidden 2>/dev/null%s || true`' % filters,
+        '    [ -n "$subfrags" ] || continue',
+        '    plz build $subfrags >/dev/null',
+        '    for frag in $subfrags; do',
+        # A subrepo that resolves back to this repo - which is what a plugin
+        # repo declaring itself for its own tests does - returns host labels,
+        # and describing those crates a second time is 23 duplicate entries
+        # with nothing to say they are duplicates.
+        '        case "$frag" in ///*) ;; *) continue ;; esac',
+        # plz reports a subrepo target's inputs relative to *this* repo, which
+        # is the rebasing; the fragment's own idea of its root is relative to
+        # the subrepo. Pairing the two is all the tool needs.
+        '        root=`plz query input "$frag" | head -1`',
+        '        json=`plz query outputs "$frag"`',
+        '        [ -n "$root" ] && [ -n "$json" ] || continue',
+        '        SUBARGS="$SUBARGS --subrepo-crate $root=$json"',
+        '        SUBN=`expr $SUBN + 1`',
+        '    done',
+        'done',
+        '"$TOOL" ide %s--third-party-dir %s --sysroot %s --sysroot-src %s --first-party $FILES $SUBARGS --output %s' % (
             lock_arg, third_party_dir, sysroot, sysroot_src, out),
-        'echo "%s: wrote %s (`echo $FILES | wc -w` first-party crates)"' % (name, out),
+        'echo "%s: wrote %s (`echo $FILES | wc -w` first-party crates, $SUBN from subrepos)"' % (name, out),
     ])
     return build_rule(
         name = name,
