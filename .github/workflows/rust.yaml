@@ -20,6 +20,23 @@ jobs:
           ar x "$rlib" "$obj" && file "$obj"
           file "$obj" | grep -q 'Mach-O 64-bit arm64' || {
             echo "cross-compiled object is not arm64 Mach-O"; exit 1; }
+      # Third-party crates are where cross-compilation actually breaks, and
+      # until 38ecd95 it did: a build script runs on the host, so its own
+      # dependencies must be host-built, and nothing said so. Natively that is
+      # invisible because the two triples are the same. These four are chosen
+      # for the mechanism they exercise rather than for coverage - two reach a
+      # crate only as a build dependency, two only through a proc macro.
+      #
+      # Not //third_party/crates:all: three binaries and blake3's NEON C
+      # cannot cross without a macOS SDK and a cross C toolchain, which is the
+      # CCTool gap rather than this one.
+      - name: Cross-compile third-party crates
+        run: |
+          ./pleasew build -p -v notice --arch darwin_arm64 \
+            //third_party/crates:generic_array \
+            //third_party/crates:clang_sys \
+            //third_party/crates:serde \
+            //third_party/crates:thiserror
 
       - name: Archive logs
         if: always()
@@ -51,13 +68,31 @@ jobs:
         run: |
           ./pleasew test -p -v notice \
             -o plugin.rust.pleaserusttool://tools/please_rust:please_rust_release \
-            //test/firstparty/... //examples/... \
+            //test/... //examples/... \
             --log_file plz-out/log/pinned.log
       - name: Archive logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: pinned-tool-logs
+          path: plz-out/log
+
+  # plz cover ran in no workflow at all, so the llvm-cov and llvm-profdata
+  # paths, the LlvmTools config and the profraw pipeline were guarded by
+  # nothing - while being exactly what the toolchain restructuring in 0.6.3
+  # put at risk. go-rules has a test_coverage job for the same reason.
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Run tests with coverage
+        run: ./pleasew cover -p -v notice --log_file plz-out/log/cover.log
+      - name: Archive logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-logs
           path: plz-out/log
 
   # macOS is where the platform assumptions show up: five bugs that made a
@@ -74,6 +109,14 @@ jobs:
         run: ./pleasew build -p -v notice //... --log_file plz-out/log/build.log
       - name: Run tests
         run: ./pleasew test -p -v notice --log_file plz-out/log/test.log
+      # Nothing had ever run the darwin_arm64 binary this repo publishes and
+      # pins, so its hash was taken on trust.
+      - name: Test against the pinned release tool
+        run: |
+          ./pleasew test -p -v notice \
+            -o plugin.rust.pleaserusttool://tools/please_rust:please_rust_release \
+            //test/... //examples/... \
+            --log_file plz-out/log/pinned.log
       - name: Archive logs
         if: always()
         uses: actions/upload-artifact@v4
