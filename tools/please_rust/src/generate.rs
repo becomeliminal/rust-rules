@@ -9,6 +9,12 @@ use clap::Args;
 use std::fs;
 use std::path::PathBuf;
 
+/// A dependency as generation carries it: the name source imports it by -
+/// which is the rename when there is one - and the build label it resolves
+/// to. Named because it appears in a dozen signatures and `(String, String)`
+/// says nothing about which half is which.
+pub type Dep = (String, String);
+
 #[derive(Args)]
 pub struct GenerateArgs {
     /// Crate name
@@ -147,7 +153,7 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         .unwrap_or_else(|| crate_name.to_string());
 
     // Binaries: explicit [[bin]] entries plus cargo's auto-discovered src/main.rs
-    let mut bins: Vec<(String, String)> = Vec::new();
+    let mut bins: Vec<Dep> = Vec::new();
     for b in &manifest.bin {
         let bname = b.name.clone().unwrap_or_else(|| crate_name.clone());
         let bpath = b.path.clone().unwrap_or_else(|| "src/main.rs".to_string());
@@ -302,25 +308,26 @@ pub fn run(args: GenerateArgs) -> Result<()> {
     let qualifier = args.subrepo.clone();
 
     // Generate BUILD file content
-    let mut build_content = generate_build_file(
+    let krate = Crate {
         crate_name,
-        &args.version,
+        lib_name: &lib_name,
+        version: &args.version,
         edition,
-        &crate_type,
-        &requested_features,
-        &deps,
-        &build_deps,
-        build_script_path.as_deref(),
-        &lib_path,
-        "",
-        &linked_deps,
-        args.pipeline,
+        crate_type: &crate_type,
+        features: &requested_features,
+        deps: &deps,
+        build_deps: &build_deps,
+        build_script_path: build_script_path.as_deref(),
+        lib_path: &lib_path,
+        suffix: "",
+        linked_deps: &linked_deps,
+        pipeline: args.pipeline,
         has_lib,
-        &build_target,
+        build_target: &build_target,
         cross,
-        &qualifier,
-        &lib_name,
-    );
+        qualifier: &qualifier,
+    };
+    let mut build_content = generate_build_file(&krate);
 
     // Bin-only crates: the crate-named target aliases the (first) binary so
     // `:crate` still resolves, and under pipelining a `_crate#rmeta` stub
@@ -350,15 +357,12 @@ pub fn run(args: GenerateArgs) -> Result<()> {
         for (bin_name, bin_path) in &bins {
             build_content.push('\n');
             build_content.push_str(&generate_bin_rule(
-                &crate_ident,
-                bin_name,
-                bin_path,
-                &args.version,
-                edition,
-                &requested_features,
-                &deps,
-                has_lib,
-                args.pipeline,
+                &krate,
+                &Bin {
+                    crate_ident: &crate_ident,
+                    name: bin_name,
+                    path: bin_path,
+                },
             ));
         }
     }
@@ -366,28 +370,28 @@ pub fn run(args: GenerateArgs) -> Result<()> {
     // Host-unit variant for dual crates (proc-macro/build-script consumers
     // with a different unified feature set than the target unit)
     if let Some(host) = &host_entry {
-        let host_deps: Vec<(String, String)> = host.deps.iter().map(mk).collect();
-        let host_build_deps: Vec<(String, String)> = host.build_deps.iter().map(mk).collect();
+        let host_deps: Vec<Dep> = host.deps.iter().map(mk).collect();
+        let host_build_deps: Vec<Dep> = host.build_deps.iter().map(mk).collect();
         build_content.push('\n');
-        build_content.push_str(&generate_build_file(
+        build_content.push_str(&generate_build_file(&Crate {
             crate_name,
-            &args.version,
+            lib_name: &lib_name,
+            version: &args.version,
             edition,
-            &crate_type,
-            &host.features,
-            &host_deps,
-            &host_build_deps,
-            build_script_path.as_deref(),
-            &lib_path,
-            "_host",
-            &linked_deps,
-            args.pipeline,
+            crate_type: &crate_type,
+            features: &host.features,
+            deps: &host_deps,
+            build_deps: &host_build_deps,
+            build_script_path: build_script_path.as_deref(),
+            lib_path: &lib_path,
+            suffix: "_host",
+            linked_deps: &linked_deps,
+            pipeline: args.pipeline,
             has_lib,
-            &build_target,
-            false,
-            &qualifier,
-            &lib_name,
-        ));
+            build_target: &build_target,
+            cross: false,
+            qualifier: &qualifier,
+        }));
     }
 
     // Tool labels are configurable (CONFIG.RUST.*); the emitters use the
@@ -504,7 +508,7 @@ fn resolve_dependencies(
     target_triple: &str,
     enabled_features: &[String],
     overrides: &std::collections::HashMap<String, String>,
-) -> Vec<(String, String)> {
+) -> Vec<Dep> {
     let mut deps = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
@@ -592,7 +596,7 @@ fn resolve_build_dependencies(
     manifest: &Manifest,
     third_party_folder: &str,
     target_triple: &str,
-) -> Vec<(String, String)> {
+) -> Vec<Dep> {
     let mut deps = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
@@ -655,25 +659,59 @@ fn link_ref(target: &str) -> String {
     }
 }
 
-fn generate_build_file(
-    crate_name: &str,
-    version: &str,
-    edition: &cargo_toml::Edition,
-    crate_type: &str,
-    features: &[String],
-    deps: &[(String, String)],
-    build_deps: &[(String, String)],
-    build_script_path: Option<&str>,
-    lib_path: &str,
-    suffix: &str,
-    linked_deps: &[String],
+/// Everything generation knows about one crate, in one place.
+///
+/// This used to be seventeen positional arguments threaded through
+/// `generate_build_file` and its emitters, which is why the crate carried a
+/// `too_many_arguments` allow. It is also the shape `please_rust ide` needs
+/// to serialise a rust-project.json entry, so the hoist was owed twice.
+#[derive(Clone, Copy)]
+struct Crate<'a> {
+    /// The package name, which is what a label says.
+    crate_name: &'a str,
+    /// The crate name, which is what source says. They differ whenever a
+    /// manifest sets `[lib] name`: rustls-webpki builds webpki.
+    lib_name: &'a str,
+    version: &'a str,
+    edition: &'a cargo_toml::Edition,
+    crate_type: &'a str,
+    features: &'a [String],
+    deps: &'a [Dep],
+    build_deps: &'a [Dep],
+    build_script_path: Option<&'a str>,
+    lib_path: &'a str,
+    /// `_host` for the host unit of a dual crate, empty otherwise.
+    suffix: &'a str,
+    linked_deps: &'a [String],
     pipeline: bool,
     has_lib: bool,
-    build_target: &str,
+    build_target: &'a str,
     cross: bool,
-    qualifier: &str,
-    lib_name: &str,
-) -> String {
+    qualifier: &'a str,
+}
+
+fn generate_build_file(c: &Crate) -> String {
+    // Destructured rather than referenced through `c` so the emitters below
+    // read as they did before the hoist.
+    let Crate {
+        crate_name,
+        lib_name,
+        version,
+        edition,
+        crate_type,
+        features,
+        deps,
+        build_deps,
+        build_script_path,
+        lib_path,
+        suffix,
+        linked_deps,
+        pipeline,
+        has_lib,
+        build_target,
+        cross,
+        qualifier,
+    } = *c;
     let mut content = String::new();
     // Proc macros are loaded into rustc itself, so they are built for the
     // machine running the build however the rest of the graph is targeted.
@@ -826,6 +864,23 @@ fn generate_build_file(
     ));
 
     // If this crate has a build script, generate two-stage build
+    let e = Emit {
+        normalized_name: &normalized_name,
+        crate_ident: &crate_ident,
+        crate_type,
+        edition_str,
+        out_rlib: &out_rlib,
+        out_rmeta: &out_rmeta,
+        emit,
+        feature_str: &feature_str,
+        deps,
+        lib_path,
+        pipeline,
+        target_arg,
+        ec_key: &ec_key,
+        mods_glob: &mods_glob,
+    };
+
     if let Some(script_path) = build_script_path {
         content.push_str(&generate_build_script_rule(
             &normalized_name,
@@ -837,39 +892,9 @@ fn generate_build_file(
             build_target,
         ));
         content.push('\n');
-        content.push_str(&generate_compile_rule_with_buildscript(
-            &normalized_name,
-            &crate_ident,
-            edition_str,
-            crate_type,
-            &out_rlib,
-            &out_rmeta,
-            emit,
-            &feature_str,
-            deps,
-            lib_path,
-            pipeline,
-            target_arg,
-            &ec_key,
-            &mods_glob,
-        ));
+        content.push_str(&generate_compile_rule_with_buildscript(&e));
     } else {
-        content.push_str(&generate_compile_rule(
-            &normalized_name,
-            &crate_ident,
-            edition_str,
-            crate_type,
-            &out_rlib,
-            &out_rmeta,
-            emit,
-            &feature_str,
-            deps,
-            lib_path,
-            pipeline,
-            target_arg,
-            &ec_key,
-            &mods_glob,
-        ));
+        content.push_str(&generate_compile_rule(&e));
     }
 
     if pipeline {
@@ -911,19 +936,7 @@ fn generate_build_file(
             content.push_str("    visibility = [\"PUBLIC\"],\n");
             content.push_str(")\n");
         } else {
-            content.push_str(&generate_rmeta_rule(
-                &normalized_name,
-                &crate_ident,
-                edition_str,
-                &out_rmeta,
-                &feature_str,
-                deps,
-                lib_path,
-                build_script_path.is_some(),
-                target_arg,
-                &ec_key,
-                &mods_glob,
-            ));
+            content.push_str(&generate_rmeta_rule(&e, build_script_path.is_some()));
         }
     }
 
@@ -954,19 +967,41 @@ fn externconfig_name(artifact: &str, infix: &str) -> String {
     format!("{}{}.externconfig", stem, infix)
 }
 
-fn generate_rmeta_rule(
-    normalized_name: &str,
-    crate_ident: &str,
-    edition_str: &str,
-    out_rmeta: &str,
-    feature_str: &str,
-    deps: &[(String, String)],
-    lib_path: &str,
-    has_buildscript: bool,
-    target_arg: &str,
-    ec_key: &str,
-    mods_glob: &str,
-) -> String {
+/// The names, flags and globs a rule emitter needs, derived once from a
+/// `Crate`. The three emitters below took eleven and fourteen positional
+/// arguments each, and the two compile emitters took the same fourteen.
+#[derive(Clone, Copy)]
+struct Emit<'a> {
+    normalized_name: &'a str,
+    crate_ident: &'a str,
+    crate_type: &'a str,
+    edition_str: &'a str,
+    out_rlib: &'a str,
+    out_rmeta: &'a str,
+    emit: &'a str,
+    feature_str: &'a str,
+    deps: &'a [Dep],
+    lib_path: &'a str,
+    pipeline: bool,
+    target_arg: &'a str,
+    ec_key: &'a str,
+    mods_glob: &'a str,
+}
+
+fn generate_rmeta_rule(e: &Emit, has_buildscript: bool) -> String {
+    let Emit {
+        normalized_name,
+        crate_ident,
+        edition_str,
+        out_rmeta,
+        feature_str,
+        deps,
+        lib_path,
+        target_arg,
+        ec_key,
+        mods_glob,
+        ..
+    } = *e;
     let mut content = String::new();
 
     let aggregate_cmd = if deps.is_empty() {
@@ -1057,17 +1092,30 @@ fn generate_rmeta_rule(
 }
 
 /// Generate a binary target for a crate's [[bin]] (or src/main.rs).
-fn generate_bin_rule(
-    crate_ident: &str,
-    bin_name: &str,
-    bin_path: &str,
-    version: &str,
-    edition: &cargo_toml::Edition,
-    features: &[String],
-    deps: &[(String, String)],
-    has_lib: bool,
-    pipeline: bool,
-) -> String {
+/// One `[[bin]]` of a crate. `Bin` carries what distinguishes it; everything
+/// else - version, edition, features, deps - is the crate's and comes from
+/// there.
+struct Bin<'a> {
+    crate_ident: &'a str,
+    name: &'a str,
+    path: &'a str,
+}
+
+fn generate_bin_rule(c: &Crate, b: &Bin) -> String {
+    let Crate {
+        version,
+        edition,
+        features,
+        deps,
+        has_lib,
+        pipeline,
+        ..
+    } = *c;
+    let Bin {
+        crate_ident,
+        name: bin_name,
+        path: bin_path,
+    } = *b;
     let edition_str = match edition {
         cargo_toml::Edition::E2015 => "2015",
         cargo_toml::Edition::E2018 => "2018",
@@ -1142,7 +1190,7 @@ fn generate_bin_rule(
 fn generate_build_script_rule(
     normalized_name: &str,
     features: &[String],
-    build_deps: &[(String, String)],
+    build_deps: &[Dep],
     script_path: &str,
     linked_deps: &[String],
     pipeline: bool,
@@ -1293,11 +1341,12 @@ fn generate_build_script_rule(
 /// Pipelined-shape naming for a crate's compile rule: the rule name plus how
 /// dependents' labels and externconfig refs are written. rlib-ish crates hang
 /// off deps' metadata twins; proc-macros link, so they need full dep builds.
-fn pipeline_shape(
-    normalized_name: &str,
-    crate_type: &str,
-    pipeline: bool,
-) -> (String, fn(&str) -> String, fn(&str) -> String) {
+/// How a crate's rules are named under pipelining: the compile rule's own
+/// name, and the two functions a dependent uses to name its artifact and its
+/// externconfig. Aliased because the triple is spelled out at every use.
+type Shape = (String, fn(&str) -> String, fn(&str) -> String);
+
+fn pipeline_shape(normalized_name: &str, crate_type: &str, pipeline: bool) -> Shape {
     if !pipeline {
         return (
             normalized_name.to_string(),
@@ -1321,24 +1370,26 @@ fn pipeline_shape(
     }
 }
 
-fn generate_compile_rule_with_buildscript(
-    normalized_name: &str,
-    crate_ident: &str,
-    edition_str: &str,
-    crate_type: &str,
-    out_rlib: &str,
-    out_rmeta: &str,
-    emit: &str,
-    feature_str: &str,
-    deps: &[(String, String)],
-    lib_path: &str,
-    pipeline: bool,
-    target_arg: &str,
-    ec_key: &str,
-    mods_glob: &str,
-) -> String {
+fn generate_compile_rule_with_buildscript(e: &Emit) -> String {
+    let Emit {
+        normalized_name,
+        crate_ident,
+        crate_type,
+        edition_str,
+        out_rlib,
+        out_rmeta,
+        emit,
+        feature_str,
+        deps,
+        lib_path,
+        pipeline,
+        target_arg,
+        ec_key,
+        mods_glob,
+    } = *e;
+
     let mut content = String::new();
-    let (rule_name, dep_label, dep_ec): (String, fn(&str) -> String, fn(&str) -> String) =
+    let (rule_name, dep_label, dep_ec): Shape =
         pipeline_shape(normalized_name, crate_type, pipeline);
 
     // Direct deps' externconfigs only: transitive configs can contain
@@ -1435,24 +1486,26 @@ fn generate_compile_rule_with_buildscript(
 }
 
 /// Generate the main compile rule (no build script)
-fn generate_compile_rule(
-    normalized_name: &str,
-    crate_ident: &str,
-    edition_str: &str,
-    crate_type: &str,
-    out_rlib: &str,
-    out_rmeta: &str,
-    emit: &str,
-    feature_str: &str,
-    deps: &[(String, String)],
-    lib_path: &str,
-    pipeline: bool,
-    target_arg: &str,
-    ec_key: &str,
-    mods_glob: &str,
-) -> String {
+fn generate_compile_rule(e: &Emit) -> String {
+    let Emit {
+        normalized_name,
+        crate_ident,
+        crate_type,
+        edition_str,
+        out_rlib,
+        out_rmeta,
+        emit,
+        feature_str,
+        deps,
+        lib_path,
+        pipeline,
+        target_arg,
+        ec_key,
+        mods_glob,
+    } = *e;
+
     let mut content = String::new();
-    let (rule_name, dep_label, dep_ec): (String, fn(&str) -> String, fn(&str) -> String) =
+    let (rule_name, dep_label, dep_ec): Shape =
         pipeline_shape(normalized_name, crate_type, pipeline);
 
     // Direct deps' externconfigs only: transitive configs can contain
@@ -1604,28 +1657,30 @@ mod tests {
         suffix: &str,
         pipeline: bool,
     ) -> String {
-        generate_build_file(
-            "my-crate",
-            "1.2.3",
-            &cargo_toml::Edition::E2021,
+        let features: Vec<String> = features.iter().map(|s| s.to_string()).collect();
+        let deps: Vec<Dep> = deps
+            .iter()
+            .map(|(n, t)| (n.to_string(), t.to_string()))
+            .collect();
+        generate_build_file(&Crate {
+            crate_name: "my-crate",
+            lib_name: "my-crate",
+            version: "1.2.3",
+            edition: &cargo_toml::Edition::E2021,
             crate_type,
-            &features.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-            &deps
-                .iter()
-                .map(|(n, t)| (n.to_string(), t.to_string()))
-                .collect::<Vec<_>>(),
-            &[],
-            build_script,
-            "src/lib.rs",
+            features: &features,
+            deps: &deps,
+            build_deps: &[],
+            build_script_path: build_script,
+            lib_path: "src/lib.rs",
             suffix,
-            &[],
+            linked_deps: &[],
             pipeline,
-            true,
-            "x86_64-unknown-linux-gnu",
-            false,
-            "third_party/crates/my_crate",
-            "my-crate",
-        )
+            has_lib: true,
+            build_target: "x86_64-unknown-linux-gnu",
+            cross: false,
+            qualifier: "third_party/crates/my_crate",
+        })
     }
 
     #[test]
@@ -1682,25 +1737,25 @@ mod tests {
     /// while everything still looks correctly wired.
     #[test]
     fn lib_name_overrides_the_package_name() {
-        let out = generate_build_file(
-            "md-5",
-            "0.11.0",
-            &cargo_toml::Edition::E2021,
-            "lib",
-            &[],
-            &[],
-            &[],
-            None,
-            "src/lib.rs",
-            "",
-            &[],
-            false,
-            true,
-            "x86_64-unknown-linux-gnu",
-            false,
-            "third_party/crates/md_5",
-            "md5",
-        );
+        let out = generate_build_file(&Crate {
+            crate_name: "md-5",
+            lib_name: "md5",
+            version: "0.11.0",
+            edition: &cargo_toml::Edition::E2021,
+            crate_type: "lib",
+            features: &[],
+            deps: &[],
+            build_deps: &[],
+            build_script_path: None,
+            lib_path: "src/lib.rs",
+            suffix: "",
+            linked_deps: &[],
+            pipeline: false,
+            has_lib: true,
+            build_target: "x86_64-unknown-linux-gnu",
+            cross: false,
+            qualifier: "third_party/crates/md_5",
+        });
         // rustc, the artifact and the extern name all use the crate identity
         assert!(out.contains("--crate-name md5"), "{}", out);
         assert!(out.contains("libmd5-0_11_0.rlib"), "{}", out);
@@ -1765,28 +1820,28 @@ mod tests {
     /// does not compile.
     #[test]
     fn renamed_build_dependencies_are_paired() {
-        let out = generate_build_file(
-            "my-crate",
-            "1.2.3",
-            &cargo_toml::Edition::E2021,
-            "lib",
-            &[],
-            &[],
-            &[(
+        let out = generate_build_file(&Crate {
+            crate_name: "my-crate",
+            lib_name: "my-crate",
+            version: "1.2.3",
+            edition: &cargo_toml::Edition::E2021,
+            crate_type: "lib",
+            features: &[],
+            deps: &[],
+            build_deps: &[(
                 "rustversion_compat".to_string(),
                 "///third_party/crates/rustversion//:rustversion".to_string(),
             )],
-            Some("build.rs"),
-            "src/lib.rs",
-            "",
-            &[],
-            false,
-            true,
-            "x86_64-unknown-linux-gnu",
-            false,
-            "third_party/crates/my_crate",
-            "my-crate",
-        );
+            build_script_path: Some("build.rs"),
+            lib_path: "src/lib.rs",
+            suffix: "",
+            linked_deps: &[],
+            pipeline: false,
+            has_lib: true,
+            build_target: "x86_64-unknown-linux-gnu",
+            cross: false,
+            qualifier: "third_party/crates/my_crate",
+        });
         assert!(
             out.contains("--rename rustversion_compat=@third_party/crates/rustversion"),
             "{}",
@@ -1935,25 +1990,25 @@ mod tests {
     /// (build scripts, proc macros) never do, or rustc would produce code the
     /// machine running the build cannot execute.
     fn gen_cross(crate_type: &str, build_script: Option<&str>) -> String {
-        generate_build_file(
-            "my-crate",
-            "1.2.3",
-            &cargo_toml::Edition::E2021,
-            crate_type,
-            &[],
-            &[],
-            &[],
-            build_script,
-            "src/lib.rs",
-            "",
-            &[],
-            false,
-            true,
-            "aarch64-apple-darwin",
-            true,
-            "third_party/crates/my_crate",
-            "my-crate",
-        )
+        generate_build_file(&Crate {
+            crate_name: "my-crate",
+            lib_name: "my-crate",
+            version: "1.2.3",
+            edition: &cargo_toml::Edition::E2021,
+            crate_type: crate_type,
+            features: &[],
+            deps: &[],
+            build_deps: &[],
+            build_script_path: build_script,
+            lib_path: "src/lib.rs",
+            suffix: "",
+            linked_deps: &[],
+            pipeline: false,
+            has_lib: true,
+            build_target: "aarch64-apple-darwin",
+            cross: true,
+            qualifier: "third_party/crates/my_crate",
+        })
     }
 
     #[test]
@@ -1996,25 +2051,27 @@ mod tests {
 
     #[test]
     fn linked_deps_feed_build_script() {
-        let out = generate_build_file(
-            "my-crate",
-            "1.2.3",
-            &cargo_toml::Edition::E2021,
-            "lib",
-            &[],
-            &[],
-            &[],
-            Some("build.rs"),
-            "src/lib.rs",
-            "",
-            &["///third_party/rust/libz_sys//:_libz_sys_build_script|buildscript".to_string()],
-            false,
-            true,
-            "x86_64-unknown-linux-gnu",
-            false,
-            "third_party/crates/my_crate",
-            "my-crate",
-        );
+        let out = generate_build_file(&Crate {
+            crate_name: "my-crate",
+            lib_name: "my-crate",
+            version: "1.2.3",
+            edition: &cargo_toml::Edition::E2021,
+            crate_type: "lib",
+            features: &[],
+            deps: &[],
+            build_deps: &[],
+            build_script_path: Some("build.rs"),
+            lib_path: "src/lib.rs",
+            suffix: "",
+            linked_deps: &[
+                "///third_party/rust/libz_sys//:_libz_sys_build_script|buildscript".to_string(),
+            ],
+            pipeline: false,
+            has_lib: true,
+            build_target: "x86_64-unknown-linux-gnu",
+            cross: false,
+            qualifier: "third_party/crates/my_crate",
+        });
         assert!(out.contains("\"dep_metadata\": ["));
         assert!(out.contains("///third_party/rust/libz_sys//:_libz_sys_build_script|buildscript"));
         assert!(out.contains("--dep-metadata $SRCS_DEP_METADATA"));
@@ -2121,19 +2178,35 @@ mod tests {
 
     #[test]
     fn bin_rule_shape() {
+        let deps: Vec<Dep> = vec![(
+            "dep_a".to_string(),
+            "///third_party/rust/dep_a//:dep_a".to_string(),
+        )];
         let out = generate_bin_rule(
-            "my_crate",
-            "my-tool",
-            "src/main.rs",
-            "1.2.3",
-            &cargo_toml::Edition::E2021,
-            &[],
-            &[(
-                "dep_a".to_string(),
-                "///third_party/rust/dep_a//:dep_a".to_string(),
-            )],
-            true,
-            false,
+            &Crate {
+                crate_name: "my-crate",
+                lib_name: "my-crate",
+                version: "1.2.3",
+                edition: &cargo_toml::Edition::E2021,
+                crate_type: "lib",
+                features: &[],
+                deps: &deps,
+                build_deps: &[],
+                build_script_path: None,
+                lib_path: "src/lib.rs",
+                suffix: "",
+                linked_deps: &[],
+                pipeline: false,
+                has_lib: true,
+                build_target: "x86_64-unknown-linux-gnu",
+                cross: false,
+                qualifier: "third_party/crates/my_crate",
+            },
+            &Bin {
+                crate_ident: "my_crate",
+                name: "my-tool",
+                path: "src/main.rs",
+            },
         );
         assert!(out.contains("name = \"my_tool_bin\""));
         assert!(out.contains("--crate-name my_tool"));

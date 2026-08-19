@@ -164,6 +164,12 @@ enum Unit {
     Host = 1,
 }
 
+/// A dependency as the worklist carries it: package, whether it is optional,
+/// the features it asks for, its version requirement and its kind. Cloned out
+/// of the node before activation because activation borrows the graph
+/// mutably; aliased because the tuple is spelled out at three call sites.
+type PendingDep = (String, bool, Vec<String>, Option<VersionReq>, DepKind);
+
 /// A dependency declaration extracted from a manifest, pre-filtered by target cfg.
 struct DepDecl {
     name: String,    // declared name (may be a rename)
@@ -509,21 +515,20 @@ fn process(
                 nodes[idx].unit_mut(unit).activated = true;
                 if newly {
                     // Mandatory deps always flow
-                    let mandatory: Vec<(String, bool, Vec<String>, Option<VersionReq>, DepKind)> =
-                        nodes[idx]
-                            .deps
-                            .iter()
-                            .filter(|d| !d.optional)
-                            .map(|d| {
-                                (
-                                    d.package.clone(),
-                                    d.default_features,
-                                    d.features.clone(),
-                                    d.req.clone(),
-                                    d.kind,
-                                )
-                            })
-                            .collect();
+                    let mandatory: Vec<PendingDep> = nodes[idx]
+                        .deps
+                        .iter()
+                        .filter(|d| !d.optional)
+                        .map(|d| {
+                            (
+                                d.package.clone(),
+                                d.default_features,
+                                d.features.clone(),
+                                d.req.clone(),
+                                d.kind,
+                            )
+                        })
+                        .collect();
                     for (package, df, feats, req, kind) in mandatory {
                         if let Some(child) = resolver.select(&package, req.as_ref(), nodes) {
                             work.push(Work::ActivateCrate {

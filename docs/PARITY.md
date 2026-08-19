@@ -51,13 +51,28 @@ binary-link time.
       darwin_amd64 is not built: its macos-13 runners were dropped in
       December 2025 and the label now never starts. macos-15-intel would
       work until August 2027, when GitHub-hosted x86_64 macOS ends
-- [x] Cross-compilation: `plz build --arch darwin_arm64 //...`.
+- [x] Cross-compilation of libraries: `plz build --arch darwin_arm64`.
       `rust_toolchain` installs the `rust-std` for whatever `--arch` names
       (plus anything in `architectures`), and the triple threads through
       resolve → generate → compile. Verified from linux: first-party and
-      third-party rlibs come out as Mach-O arm64 objects. Linking a binary
-      for another platform additionally needs a cross linker, which comes
-      from `CCTool` like every other C toolchain here
+      third-party rlibs come out as Mach-O arm64 objects, and CI builds four
+      third-party crates chosen for the mechanism - two reached only as a
+      build dependency, two only through a proc macro.
+
+      Third-party cross-compilation did not actually work until 2026-08-19,
+      despite being recorded here as done. A build script runs on the host,
+      so its own dependencies must be host-built, and nothing said which
+      crates those were; rustc reported `E0461: couldn't find crate
+      version_check with expected target triple x86_64-unknown-linux-gnu` on
+      the first one it reached. Both bugs were invisible natively, because
+      the host triple is the target triple and any artifact serves either
+      unit. That is the argument for the CI step rather than the claim
+- [ ] Cross-compiling anything that links or compiles C. `plz build --arch
+      darwin_arm64 //...` still fails on four targets here and all four are
+      this: three are binaries, which need a macOS SDK and a cross linker to
+      link, and blake3's build script compiles NEON C for arm64 with the
+      host `cc`. Both come from `CCTool`, like every other C toolchain here,
+      and neither is the Rust-level split above. Libraries are unaffected
 - [x] True exec/target artifact split: build scripts, proc macros and
       installed binaries compile for the host, libraries for the target,
       the same split cargo makes in its unit graph
