@@ -481,6 +481,15 @@ binary-link time.
       are one global namespace - would otherwise lose the whole subrepo.
       Subrepo crates are never workspace members.
 
+      One characteristic worth knowing rather than fixing: build-script cfgs
+      are read from what the build has produced, so a crate whose build script
+      has not run contributes none. Measured in rust-corpus across two runs of
+      the same graph, 32 of 1390 crates differed, every difference additive -
+      `folded_multiply` for ahash, `blake3_avx2_ffi`, `rustc_1_60` for
+      bigdecimal. It corrects itself as the build fills in. Building every
+      build script up front would close it and is not obviously worth
+      compiling the graph for.
+
       Not covered, in rough order of how much it would be missed:
       * generated sources — the bindgen case above
       * one lock per project file. A repo with several `rust_resolve` targets

@@ -491,6 +491,11 @@ will find.
   subrepo with its own `rust_resolve` has another. `plz run` prints a line
   naming the crate and the dependency for every one of these, so the output
   tells you which.
+- **A crate's `#[cfg(...)]` items look inactive.** Build-script cfgs are read
+  from what the build has already produced, so a crate whose build script has
+  not run yet contributes none of them — `libc` and the `-sys` crates gate a
+  lot of their API this way. It corrects itself as you build; nothing here
+  compiles the whole graph just to open an editor.
 - **`unrecognized subcommand 'ide'`.** The `please_rust` in use predates this
   rule. Either pin a release that has it, or point `PleaseRustTool` at
   `///rust//tools/please_rust:bootstrap`.
