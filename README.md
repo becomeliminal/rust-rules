@@ -429,6 +429,31 @@ every case the file must sit at the repo root, because the paths inside it are
 repo-relative — which is also why the output is identical on every machine and
 can be committed if you want it.
 
+#### Crates in subrepos
+Crates in a subrepo are described too — a repo you pulled in with `github_repo`
+or a plugin whose own Rust you want to read. Plugin subrepos need no naming;
+plz already lists them. Anything brought in another way is named:
+
+```python
+rust_project(
+    name = "rust-project",
+    lock = "//third_party/crates:rust_lock",
+    subrepos = ["shared_rust"],
+)
+```
+
+They are **described but never checked on save** — a subrepo is checked in its
+own repo, and having its errors in this repo's problems panel is noise about
+code this checkout cannot fix.
+
+Sweeping a subrepo can hit packages that will not parse from here: one that
+references a plugin this repo does not have, or one that declares a plugin
+this repo also declares, since plugin names are a single global namespace.
+Neither loses the rest of the subrepo — the sweep descends and skips only the
+packages that fail, naming each. Third-party crates never go through this at
+all; they come from the lock, which already records where their sources
+landed.
+
 #### One project, or one repo of many
 The default covers the whole repo, which is what a repo that *is* a Rust
 project wants. A monorepo with Rust in one subtree can narrow the search, and
@@ -450,8 +475,13 @@ will find.
 
 #### When something does not resolve
 - **Imports of a third-party crate don't resolve.** That crate's declaration
-  is in a lock the run wasn't given. `plz run` prints a line naming the crate
-  and the dependency for every one of these, so the output tells you which.
+  is in a lock the run wasn't given — a project file joins one lock, and a
+  subrepo with its own `rust_resolve` has another. `plz run` prints a line
+  naming the crate and the dependency for every one of these, so the output
+  tells you which.
+- **`unrecognized subcommand 'ide'`.** The `please_rust` in use predates this
+  rule. Either pin a release that has it, or point `PleaseRustTool` at
+  `///rust//tools/please_rust:bootstrap`.
 - **Nothing resolves at all, including `std`.** Go-to-definition into the
   standard library needs the `rust-src` component, which is only downloaded if
   the toolchain asks for it: set `rust_toolchain(src_hash = ...)`. Without it

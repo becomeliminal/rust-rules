@@ -467,17 +467,21 @@ binary-link time.
         takes `--proc-macro-srv`, and needs `LD_LIBRARY_PATH` set to the
         rustc component's `lib` for `librustc_driver`. An editor uses its own
 
+      **Subrepos are covered**, and were the last gap closed. Measured in
+      rust-corpus, which pulls rust-rules in as a plugin: 1390 crates, 248
+      first-party, 19 from the subrepo, every path on disk. Three things
+      made it work. Third-party crates never needed it - they come from the
+      lock, which already records where sources landed, so only first-party
+      crates go through the query. `plz query outputs` on a plugin's target
+      gives its checkout, and every path a fragment carries hangs off that
+      one prefix; `plz query input` does *not* work for this, because plz
+      reports only the host repo's files as a target's inputs. And a sweep
+      that fails descends rather than giving up: a package referencing a
+      plugin this repo lacks, or declaring a plugin it also declares - names
+      are one global namespace - would otherwise lose the whole subrepo.
+      Subrepo crates are never workspace members.
+
       Not covered, in rough order of how much it would be missed:
-      * **first-party crates declared inside a subrepo.** Third-party ones
-        are covered already, and by a different route: `rust_repo` crates
-        reach the file through the lock, which names every crate resolution
-        produced and where its sources landed, so all 196 of them are
-        described without querying anything. The query is only how
-        first-party crates are found, and `//...` is the host repo. A
-        consumer building crates out of a `github_repo` subrepo gets those
-        crates missing while their third-party deps still resolve, and
-        nothing says so. Covering them means querying each subrepo and
-        rebasing its paths, since the file is relative to a single root
       * generated sources — the bindgen case above
       * one lock per project file. A repo with several `rust_resolve` targets
         can join only one, because each lock has its own `third_party_dir`.
