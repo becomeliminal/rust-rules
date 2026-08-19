@@ -238,6 +238,17 @@ pub fn run_reporting(args: SyncArgs) -> Result<Vec<crate::resolve::MissingDep>> 
 
     let mut decls = parse_build(&lines)?;
     eprintln!("sync: {} rust_repo declarations parsed", decls.len());
+    // A feature recorded only in the entries list is still a feature that was
+    // asked for. Adopted here so a rewrite reconciles the two spellings rather
+    // than dropping one of them.
+    let entry_features = parse_resolve_features(&build_text);
+    for d in decls.iter_mut() {
+        if d.features.is_empty() {
+            if let Some(f) = entry_features.get(&d.subrepo()) {
+                d.features = f.clone();
+            }
+        }
+    }
 
     // Import a cargo lockfile: add anything not yet declared, and attach
     // hashes to existing entries that lack them.
@@ -337,9 +348,32 @@ pub fn run_reporting(args: SyncArgs) -> Result<Vec<crate::resolve::MissingDep>> 
 
     // A crate every covered platform reaches needs no attribute at all: the
     // absent case means "anywhere", which is what almost every crate is.
-    for d in decls.iter_mut() {
-        let on = oses.get(&d.subrepo()).cloned().unwrap_or_default();
-        d.platforms = if on == covered_oses { None } else { Some(on) };
+    //
+    // Only from a run that covered at least the platforms the file already
+    // talks about. `platforms` is a statement about all of them, and a run
+    // resolving one triple has nothing to say about the others - recomputing
+    // from it turns `platforms = ["macos"]` into nothing at all, which is how
+    // rust-corpus lost every one of them to an unrelated `lock --add`.
+    let file_oses: BTreeSet<String> = decls
+        .iter()
+        .filter_map(|d| d.platforms.clone())
+        .flatten()
+        .collect();
+    if may_refresh_platforms(&file_oses, &covered_oses) {
+        for d in decls.iter_mut() {
+            let on = oses.get(&d.subrepo()).cloned().unwrap_or_default();
+            d.platforms = if on == covered_oses { None } else { Some(on) };
+        }
+    } else {
+        let unseen: Vec<&str> = file_oses
+            .difference(&covered_oses)
+            .map(|s| s.as_str())
+            .collect();
+        eprintln!(
+            "sync: keeping the platforms already recorded - this run did not resolve for {}. \
+             Pass --targets to refresh them.",
+            unseen.join(", ")
+        );
     }
 
     let before = decls.len();
@@ -442,6 +476,55 @@ pub fn run_reporting(args: SyncArgs) -> Result<Vec<crate::resolve::MissingDep>> 
         lock.crates.len(),
     );
     Ok(missing_deps)
+}
+
+/// Whether this run is entitled to rewrite the recorded platforms.
+///
+/// `platforms` says which of the covered platforms reach a crate, so it can
+/// only be restated by a run that resolved for all of the platforms already
+/// named. A run covering fewer has nothing to say about the rest, and
+/// recomputing from it silently deletes them.
+fn may_refresh_platforms(file_oses: &BTreeSet<String>, covered: &BTreeSet<String>) -> bool {
+    file_oses.is_subset(covered)
+}
+
+/// The features each entry in an existing rust_resolve block asks for.
+///
+/// Features live in the rust_repo block as far as sync is concerned, but they
+/// are visible - and editable - in the entries list too, and an entry edited
+/// there is the natural thing to do. Read back so that a rewrite reconciles
+/// the two rather than silently discarding one: rust-corpus lost `bundled`
+/// from libsqlite3-sys this way, which is the entire reason that crate is in
+/// the corpus.
+fn parse_resolve_features(build: &str) -> BTreeMap<String, Vec<String>> {
+    let mut out = BTreeMap::new();
+    let mut inside = false;
+    for line in build.lines() {
+        let t = line.trim();
+        if t.starts_with("entries = [") {
+            inside = true;
+            continue;
+        }
+        if inside && t.starts_with(']') {
+            break;
+        }
+        if !inside {
+            continue;
+        }
+        let Some(entry) = t.trim_end_matches(',').strip_prefix('"') else {
+            continue;
+        };
+        let entry = entry.trim_end_matches('"');
+        let fields: Vec<&str> = entry.split('|').collect();
+        if fields.len() < 4 || fields[3].is_empty() {
+            continue;
+        }
+        out.insert(
+            fields[0].to_string(),
+            fields[3].split(',').map(|f| f.to_string()).collect(),
+        );
+    }
+    out
 }
 
 /// Rewrite (or append) the rust_resolve block encoding the declared graph.
@@ -1220,6 +1303,18 @@ pub fn lock(args: LockCmdArgs) -> Result<()> {
         .with_context(|| format!("Failed to read {}", args.build_file.display()))?;
     let lines: Vec<String> = build_text.lines().map(|s| s.to_string()).collect();
     let mut decls = parse_build(&lines)?;
+
+    // A feature recorded only in the entries list is still a feature that was
+    // asked for. Adopted here so a rewrite reconciles the two spellings rather
+    // than dropping one of them.
+    let entry_features = parse_resolve_features(&build_text);
+    for d in decls.iter_mut() {
+        if d.features.is_empty() {
+            if let Some(f) = entry_features.get(&d.subrepo()) {
+                d.features = f.clone();
+            }
+        }
+    }
 
     let cache_dir = args
         .cache_dir
@@ -2319,6 +2414,54 @@ mod lock_cmd_tests {
     /// What is written is a property of the crate, not of the machine that
     /// ran sync, which is what lets one checked-in file serve a Mac and a
     /// linux box at once.
+    /// A feature can be written in the entries list as easily as in the
+    /// rust_repo block - the entries list is where it is visible - and sync
+    /// read only the block. rust-corpus lost `bundled` from libsqlite3-sys to
+    /// an unrelated `lock --add`, which is the whole reason that crate is in
+    /// the corpus: without the feature it vendors no C and tests nothing.
+    #[test]
+    fn entries_list_features_survive() {
+        let build = r#"
+rust_resolve(
+    name = "rust_lock",
+    entries = [
+        "libsqlite3_sys|libsqlite3-sys|0.38.2|bundled|true|true",
+        "plain|plain|1.0.0||false|true",
+    ],
+)
+"#;
+        let found = parse_resolve_features(build);
+        assert_eq!(
+            found.get("libsqlite3_sys"),
+            Some(&vec!["bundled".to_string()])
+        );
+        // No features is no entry, rather than an empty one to adopt.
+        assert!(!found.contains_key("plain"));
+    }
+
+    /// `platforms` is a statement about every platform resolution covers, so a
+    /// run that resolved one triple cannot narrow it. Recomputing anyway turned
+    /// every `platforms = ["macos"]` in rust-corpus into nothing, from a
+    /// command that was adding an unrelated crate.
+    #[test]
+    fn a_single_platform_run_does_not_narrow_recorded_platforms() {
+        let mut file_oses = BTreeSet::new();
+        file_oses.insert("macos".to_string());
+        let mut covered = BTreeSet::new();
+        covered.insert("linux".to_string());
+        assert!(
+            !may_refresh_platforms(&file_oses, &covered),
+            "a linux-only run must not restate what the file says about macos"
+        );
+        covered.insert("macos".to_string());
+        assert!(
+            may_refresh_platforms(&file_oses, &covered),
+            "a run covering both may restate them"
+        );
+        // A file that names no platforms constrains nothing.
+        assert!(may_refresh_platforms(&BTreeSet::new(), &BTreeSet::new()));
+    }
+
     #[test]
     fn platforms_is_written_only_when_a_crate_is_gated() {
         let mut everywhere = decl("serde", "1.0.0", true);
