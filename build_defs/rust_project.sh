@@ -7,7 +7,40 @@
 # Values are never substituted into the shell text, so no path or label can be
 # read as syntax.
 set -eu
+
+# Two ways in. Run by hand it writes a file; run by rust-analyzer through
+# `workspace.discoverConfig` it speaks the discover protocol on stdout - JSON
+# objects, one per line - so the editor asks for the project itself and nobody
+# has to remember to regenerate anything. Same shape as go-rules' package
+# driver for gopls.
+DISCOVER=0
+if [ "${1:-}" = "--discover" ]; then
+    DISCOVER=1
+    shift
+fi
+
 cd "`plz query reporoot`"
+
+# Progress, in whichever form the caller understands. Messages are kept free of
+# quotes and backslashes so that this needs no JSON escaping.
+say() {
+    if [ "$DISCOVER" = 1 ]; then
+        printf '{"kind":"progress","message":"%s"}\n' "$1"
+    else
+        echo "$NAME: $1"
+    fi
+}
+
+# A failure has to reach rust-analyzer as protocol too: exiting non-zero with
+# nothing on stdout tells it only that something went wrong.
+die() {
+    if [ "$DISCOVER" = 1 ]; then
+        printf '{"kind":"error","error":"%s","source":null}\n' "$1"
+        exit 0
+    fi
+    echo "$NAME: $1" >&2
+    exit 1
+}
 
 WORK=`mktemp -d`
 trap 'rm -rf "$WORK"' EXIT
@@ -90,9 +123,9 @@ sweep() {
 FRAGS=`plz query alltargets $TARGETS --include rust_ide --hidden || true`
 FRAGS=`drop_excluded "$FRAGS"`
 if [ -z "$FRAGS" ]; then
-    echo "$NAME: no Rust crates found under $TARGETS" >&2
-    exit 1
+    die "no Rust crates found under $TARGETS"
 fi
+say "describing `echo $FRAGS | wc -w` crates"
 # The toolchain too: resolving where it lands is not the same as it being
 # there, and a sysroot_src that was never built is a std with no sources.
 plz build $TOOL_LABEL $LOCK_LABEL $SYSROOT_TARGET $SYSROOT_SRC_TARGET $FRAGS >/dev/null
@@ -175,33 +208,38 @@ while read -r s; do
     echo "$NAME: could not parse $s, so any crates in it are not described" >&2
 done < "$WORK/skipped"
 
-# shellcheck disable=SC2086
-"$TOOL" ide $LOCK_ARG --third-party-dir $THIRD_PARTY_DIR --sysroot $SYSROOT \
-    --sysroot-src $SYSROOT_SRC --first-party $FILES $SUBARGS --output $OUT_FILE
-
-# A proc macro is a dylib rust-analyzer dlopens, and naming one is not the
-# same as it existing: nothing here has built the crates themselves, so the
-# derives silently do not expand and the editor reports errors in code that
-# compiles. The lock's declarations live in the package that declares it, and
-# a crate's target there is named for its subrepo, which is the directory the
-# dylib sits in.
+# A proc macro is a dylib rust-analyzer dlopens, and naming one is not the same
+# as it existing: nothing so far has built the crates themselves. Built before
+# the project is described rather than after, because the answer comes from the
+# lock and not from the file we are about to write. A crate's target lives in
+# the package that declares the lock, named for its subrepo.
 if [ -n "$LOCK_LABEL" ]; then
     LOCK_PKG=${LOCK_LABEL%:*}
-    sed -n 's/.*"proc_macro_dylib_path": "\([^"]*\)".*/\1/p' "$OUT_FILE" \
-        | sort -u > "$WORK/dylibs"
     : > "$WORK/pm_targets"
-    while IFS= read -r dylib; do
-        if [ -z "$dylib" ] || [ -f "$dylib" ]; then continue; fi
-        pm_dir=`dirname "$dylib"`
-        echo "$LOCK_PKG:`basename "$pm_dir"`" >> "$WORK/pm_targets"
-    done < "$WORK/dylibs"
+    # shellcheck disable=SC2086
+    "$TOOL" ide $LOCK_ARG --list-proc-macros --third-party-dir $THIRD_PARTY_DIR \
+        > "$WORK/pm" 2>/dev/null || : > "$WORK/pm"
+    while IFS= read -r pm; do
+        if [ -n "$pm" ]; then echo "$LOCK_PKG:$pm" >> "$WORK/pm_targets"; fi
+    done < "$WORK/pm"
     if [ -s "$WORK/pm_targets" ]; then
-        pm_count=`wc -l < "$WORK/pm_targets"`
-        echo "$NAME: building $pm_count proc macros the project file names"
+        say "building `wc -l < "$WORK/pm_targets"` proc macros"
         # One that will not build is not fatal: the rest still expand.
         # shellcheck disable=SC2046
         plz build $(tr '\n' ' ' < "$WORK/pm_targets") >/dev/null 2>&1 || \
             echo "$NAME: some proc macros did not build, so their derives will not expand" >&2
     fi
 fi
-echo "$NAME: wrote $OUT_FILE (`echo $FILES | wc -w` first-party crates, `echo $SUBN` from subrepos)"
+
+if [ "$DISCOVER" = 1 ]; then
+    OUT_ARG="--discover --buildfile $BUILDFILE"
+else
+    OUT_ARG="--output $OUT_FILE"
+fi
+# shellcheck disable=SC2086
+"$TOOL" ide $LOCK_ARG --third-party-dir $THIRD_PARTY_DIR --sysroot $SYSROOT \
+    --sysroot-src $SYSROOT_SRC --first-party $FILES $SUBARGS $OUT_ARG
+
+if [ "$DISCOVER" = 0 ]; then
+    echo "$NAME: wrote $OUT_FILE (`echo $FILES | wc -w` first-party crates, $SUBN from subrepos)"
+fi

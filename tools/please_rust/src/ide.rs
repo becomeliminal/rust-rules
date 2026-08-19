@@ -60,6 +60,32 @@ pub struct IdeArgs {
     /// Where to write the project file
     #[arg(long, default_value = "rust-project.json")]
     pub output: PathBuf,
+
+    /// List the subrepos holding proc macros, one per line, and stop.
+    ///
+    /// A proc macro is a dylib rust-analyzer dlopens, so naming one in the
+    /// project file is not the same as it existing - and if it does not, the
+    /// derives quietly fail to expand and the editor reports errors in code
+    /// that compiles. The caller builds these before asking for the project.
+    /// Read from the lock, so it needs nothing else built first.
+    #[arg(long)]
+    pub list_proc_macros: bool,
+
+    /// Speak rust-analyzer's discover protocol on stdout instead of writing a
+    /// file.
+    ///
+    /// `rust-analyzer.workspace.discoverConfig` names a command to run when a
+    /// project is opened, and re-runs it when a watched file changes. That is
+    /// the same shape go-rules uses for gopls, where a GOPACKAGESDRIVER binary
+    /// answers queries instead of a file being generated and kept in step:
+    /// nothing to run by hand and nothing to go stale.
+    #[arg(long)]
+    pub discover: bool,
+
+    /// The build file to report as the one this project came from. Only
+    /// meaningful with --discover; rust-analyzer keys a workspace on it.
+    #[arg(long, default_value = "BUILD")]
+    pub buildfile: String,
 }
 
 /// What a first-party rule knows about itself, which is everything
@@ -124,6 +150,25 @@ struct Project {
     #[serde(skip_serializing_if = "Option::is_none")]
     sysroot_project: Option<SysrootProject>,
     crates: Vec<CrateEntry>,
+}
+
+/// rust-analyzer's discover protocol: JSON objects, one per line.
+///
+/// Provisional and versioned only by the analyzer, so it is spelled out here
+/// rather than derived from anything: `kind` is the tag and the variants are
+/// snake_case.
+#[derive(Serialize)]
+#[serde(tag = "kind")]
+#[serde(rename_all = "snake_case")]
+enum DiscoverData<'a> {
+    Finished {
+        buildfile: &'a str,
+        project: &'a Project,
+    },
+    Error {
+        error: String,
+        source: Option<String>,
+    },
 }
 
 #[derive(Serialize)]
@@ -440,8 +485,38 @@ fn first_party_env(fp: &FirstParty) -> BTreeMap<String, String> {
 }
 
 pub fn run(args: IdeArgs) -> Result<()> {
+    if !args.discover {
+        return describe_project(args);
+    }
+    // A discover command that exits non-zero with nothing on stdout tells
+    // rust-analyzer only that something went wrong. The protocol has a place
+    // to say what.
+    let buildfile = args.buildfile.clone();
+    match describe_project(args) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let line = serde_json::to_string(&DiscoverData::Error {
+                error: format!("{:#}", e),
+                source: Some(buildfile),
+            })?;
+            println!("{}", line);
+            Ok(())
+        }
+    }
+}
+
+fn describe_project(args: IdeArgs) -> Result<()> {
     let lock = crate::resolve::LockFile::load(&args.lock)
         .with_context(|| format!("reading {}", args.lock.display()))?;
+
+    if args.list_proc_macros {
+        for (subrepo, entry) in lock.crates.iter().chain(lock.host_crates.iter()) {
+            if entry.is_proc_macro {
+                println!("{}", subrepo);
+            }
+        }
+        return Ok(());
+    }
 
     // The sysroot is described as a nested project rather than as crates in
     // the main list, so rust-analyzer registers it as the sysroot and its
@@ -604,9 +679,19 @@ pub fn run(args: IdeArgs) -> Result<()> {
         sysroot_project,
         crates,
     };
-    let json = serde_json::to_string_pretty(&project)?;
-    std::fs::write(&args.output, json + "\n")
-        .with_context(|| format!("writing {}", args.output.display()))?;
+    if args.discover {
+        // One line, because the protocol is JSONL and a pretty-printed object
+        // is a hundred lines of syntax error to a line-oriented reader.
+        let line = serde_json::to_string(&DiscoverData::Finished {
+            buildfile: &args.buildfile,
+            project: &project,
+        })?;
+        println!("{}", line);
+    } else {
+        let json = serde_json::to_string_pretty(&project)?;
+        std::fs::write(&args.output, json + "\n")
+            .with_context(|| format!("writing {}", args.output.display()))?;
+    }
 
     // One line per crate is unreadable when the whole lock is stale, and that
     // is exactly when it happens: a lock built by a please_rust older than the
@@ -640,11 +725,15 @@ pub fn run(args: IdeArgs) -> Result<()> {
             krate, label
         );
     }
-    eprintln!(
-        "ide: wrote {} crates to {}",
-        project.crates.len(),
-        args.output.display()
-    );
+    if args.discover {
+        eprintln!("ide: described {} crates", project.crates.len());
+    } else {
+        eprintln!(
+            "ide: wrote {} crates to {}",
+            project.crates.len(),
+            args.output.display()
+        );
+    }
     Ok(())
 }
 
@@ -968,6 +1057,41 @@ c = ["other/thing"]
             .is_none());
         // And the name alone would have matched, which is the bug.
         assert_eq!(fp.display_name, fp.deps[0].name);
+    }
+
+    /// rust-analyzer reads the discover protocol as JSONL and keys on `kind`.
+    /// The shape is the analyzer's, not ours, and it is provisional - so it is
+    /// asserted here rather than left to be noticed when an editor silently
+    /// ignores a line it cannot parse.
+    #[test]
+    fn discover_output_is_the_shape_rust_analyzer_reads() {
+        let project = Project {
+            sysroot: Some("plz-out/bin/rustc".to_string()),
+            sysroot_src: None,
+            sysroot_project: None,
+            crates: Vec::new(),
+        };
+        let finished = serde_json::to_string(&DiscoverData::Finished {
+            buildfile: "BUILD",
+            project: &project,
+        })
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&finished).unwrap();
+        assert_eq!(v["kind"], "finished");
+        assert_eq!(v["buildfile"], "BUILD");
+        assert_eq!(v["project"]["sysroot"], "plz-out/bin/rustc");
+        // One line: the reader is line-oriented, and a pretty-printed object
+        // is a hundred lines of syntax error to it.
+        assert!(!finished.contains('\n'));
+
+        let failed = serde_json::to_string(&DiscoverData::Error {
+            error: "no lock".to_string(),
+            source: Some("BUILD".to_string()),
+        })
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&failed).unwrap();
+        assert_eq!(v["kind"], "error");
+        assert_eq!(v["error"], "no lock");
     }
 
     #[test]

@@ -387,10 +387,10 @@ BuildScriptJobs = 8
 ### rust-analyzer
 Editors get code intelligence — go-to-definition, completion, inline errors —
 from rust-analyzer, which normally learns the crate graph by running cargo.
-With no cargo to run it reads a `rust-project.json` instead, and `rust_project`
-writes one.
+With no cargo to run it asks a command instead, the same way gopls asks
+go-rules' package driver rather than running `go list`.
 
-Put one declaration in the **repo root** `BUILD` file:
+Declare `rust_project` in the **repo root** `BUILD` file:
 
 ```python
 rust_project(
@@ -399,35 +399,47 @@ rust_project(
 )
 ```
 
-and run it:
+and point your editor at it, once:
 
-```sh
-plz run //:rust-project
+```json
+"rust-analyzer.workspace.discoverConfig": {
+    "command": ["plz", "run", "-p", "-v", "error", "//:rust-project", "--", "--discover", "{arg}"],
+    "progressLabel": "rust-rules",
+    "filesToWatch": ["BUILD", ".plzconfig"]
+}
 ```
 
-That finds every `rust_library`, `rust_binary` and `rust_test` in the repo,
-joins them to the third-party crates in the lock, and writes
-`rust-project.json` at the repo root. **There is no list of crates to keep up
-to date** — a crate added anywhere is picked up by the next run. Re-run it
-after adding or removing a crate, or after changing a crate's dependencies;
-editing code inside a crate needs no re-run.
+That is the whole setup. rust-analyzer runs the command when it opens the
+project and runs it again whenever a watched file changes, so **a crate added
+anywhere appears without anyone running anything**. There is no list of crates
+to maintain and no generated file to keep in step.
 
-It is a `plz run` target rather than something `plz build` produces because
-the crate list can only be found by querying the build graph, which a rule
-cannot do while it is itself being parsed.
+It finds every `rust_library`, `rust_binary` and `rust_test` in the repo, joins
+them to the third-party crates in the lock, builds what it is about to name —
+the toolchain, the standard library's sources, the proc-macro dylibs — and
+hands the graph back over stdout.
 
-**Your editor needs the rust-analyzer extension installed** — the file is
-useless without it, and nothing warns you. VS Code and Cursor:
+**Your editor also needs the rust-analyzer extension installed.** Nothing warns
+you if it is missing; the setting is simply ignored. VS Code and Cursor:
 
 ```sh
 code --install-extension rust-lang.rust-analyzer     # or: cursor --install-...
 ```
 
-Neovim, Helix and Emacs' `lsp-mode`/`eglot` need the `rust-analyzer` binary on
-`PATH` and pick the file up from the project root with no further setup. In
-every case the file must sit at the repo root, because the paths inside it are
-repo-relative — which is also why the output is identical on every machine and
-can be committed if you want it.
+Neovim, Helix and Emacs' `lsp-mode`/`eglot` take the same setting through their
+own LSP configuration.
+
+#### Without an editor
+The same target writes a file, which is what CI wants and what to reach for
+when debugging:
+
+```sh
+plz run //:rust-project        # writes rust-project.json at the repo root
+```
+
+The paths inside are repo-relative, so the file is identical on every machine
+and belongs at the repo root — which is also the directory the editor must
+open, since that is what they resolve against.
 
 #### Crates in subrepos
 Crates in a subrepo are described too — a repo you pulled in with `github_repo`

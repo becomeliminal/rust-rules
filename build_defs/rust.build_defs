@@ -633,6 +633,8 @@ def rust_project(name:str, lock:str='', targets:list=['//...'], exclude:list=[],
         'SYSROOT_TARGET=%s' % _sq('' if sysroot else rustc_target),
         'SYSROOT_SRC_TARGET=%s' % _sq('' if sysroot_src else src_target),
         'OUT_FILE=%s' % _sq(out),
+        # What rust-analyzer keys a discovered workspace on.
+        'BUILDFILE=%s' % _sq(package_name() + '/BUILD' if package_name() else 'BUILD'),
     ]
     return build_rule(
         name = name,
