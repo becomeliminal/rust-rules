@@ -240,6 +240,177 @@ binary-link time.
       overrides (done via download=), env injection for build scripts
 
 ### Explicit non-goals (decided, revisit only on demand)
+- [x] rust-analyzer / `rust-project.json` — `rust_project` emits one.
+      `examples/ide` is a first-party library with a third-party dependency
+      and a binary depending on the library; rust-analyzer 0.3.3016 reports
+      zero diagnostics across it, run from outside the repo as an editor
+      would. Across this whole repo 35 remain, all of them
+      `type annotations needed` inside serde's derive expansions, which is
+      rust-analyzer's own inference rather than the project file.
+
+      The standard library is declared through `sysroot_project`, a nested
+      project rust-analyzer resolves relative to `sysroot_src`. The two
+      obvious alternatives both fail, and neither says why:
+      * listing core and std among the ordinary crates leaves them crates
+        that merely happen to be called core and std - lang items attach only
+        to the crate rust-analyzer believes *is* the sysroot, so `Sized` is
+        unsatisfied for `char` and `Iterator` has no impls, while every
+        import and macro around them resolves
+      * letting it discover them runs `cargo metadata` over the stdlib
+        sources with a nightly-only `-Z` flag against whatever cargo is on
+        PATH, which is ambient tooling and fails on a stable cargo
+
+      Measured with the version-matched analyzer. An analyzer older than the
+      toolchain reports success by failing to load the sysroot at all, which
+      is how an earlier attempt was recorded as clean when it was not.
+- [ ] Nightly / channel toolchains policy
+
+### Build speed
+- [x] rmeta pipelining via the rules_rust two-action scheme: each crate
+      splits into a `_X#rmeta` metadata compile (the full command, cut off
+      the moment rustc reports the rmeta artifact — a plain --emit=metadata
+      rmeta lacks the MIR dependents need) that dependents' compiles hang
+      off, a `_X#link` full compile in parallel, and a public filegroup
+      that stages transitive rlibs for binary links. First-party routes
+      via provides/requires ('rust_rmeta'); subrepos wire twins explicitly.
+      Opt-in via PipelinedCompilation (on in this repo, off by default).
+      Side effect: all compiles now pass --remap-path-prefix=$CWD= (twins
+      must hash identically across sandboxes), so artifacts are
+      path-independent — better remote cache portability for free
+
+### Tooling rules
+- [x] `rust_clippy` (clippy-driver from the dist, copied next to rustc for
+      its librustc_driver RUNPATH; metadata-only compile through it, -D
+      warnings by default so findings fail the build; ClippyTool knob)
+- [x] rustfmt exposure (toolchain_rustfmt) + `rust_fmt_test` check rule
+      (RustfmtTool knob)
+- [x] `rust_doc` (rustdoc HTML via the test wrapper's --externs-from-cwd
+      dep resolution)
+- [x] Coverage: `-C instrument-coverage` wired into `plz cover` / llvm-cov
+      (profraw → llvm-profdata/llvm-cov → per-file line coverage; paths
+      remapped to repo-relative; consumers add `.rs` to `[cover]
+      FileExtension`. Note: rust_test routes sources through a filegroup
+      dep, not srcs — plz excludes test-target srcs from coverage reports)
+
+### Hardening
+- [x] Remote execution: verified against a real cluster by the labs pilot
+      (1461 build tasks, 525 third-party crates, CI green). Six bugs fixed,
+      all of one shape — an action assuming the environment around it rather
+      than naming what it needs, because a worker stages only what is named:
+      subrepo configs carrying cross-repo labels, the tool default resolving
+      into the consuming repo, a second toolchain download, Please crashing
+      on a subrepo with no remote tree (mitigated by building crate subrepos
+      locally, fixed upstream in thought-machine/please#3577), rustc's
+      driver library unstaged for every compile, and copies into a nested
+      output directory that does not exist yet
+- [ ] Three paths remain **expected but not demonstrated** under remote
+      execution, because the reference consumer cannot reach them: the test
+      wrapper's use of `$RESULTS_FILE` and its coverage-profile directory
+      (its Rust targets live under an `experimentaldir`, excluded from its
+      CI's affected-target queries, so no Rust test has ever run remotely),
+      rustdoc staging its driver library (no doc targets there), and the
+      coverage tools staging libLLVM (no coverage step). Reasoning says they
+      are fine and an audit of the wrapper found nothing; an audit also
+      missed the compile-action instance before v0.4.5, so treat these as
+      unverified. Pointing a remote executor at them, in that order, closes
+      it; asked of the labs pilot on 2026-08-17. The entry-point toolchain
+      makes the rustdoc and llvm cases structurally the same as the compile
+      path that was verified remotely, which is an argument, not a run
+- [x] Upstream plz WaitForPackage race (found 2026-08): a lost-wakeup
+      TOCTOU on `packageWaits` in src/core/state.go hangs builds when many
+      packages concurrently subinclude the plugin's build_defs — all plz
+      versions incl. master. Reproduced (1/12 cold builds on a 40-package
+      consumer), root-caused, three-line AddOrGet fix written and validated
+      (0/16 with a patched plz). Our own repo dodges it via
+      preloadbuilddefs. Fix + regression test submitted upstream as
+      thought-machine/please#3576 and **merged**; until it lands in a
+      released plz, large plugin consumers can rarely hit a wedged parse
+- [ ] Remote execution audit (absolute-path canonicalization, cwd walks)
+- [x] Scale test: the corpus graph is 1,102 crates through
+      sync/resolve/build
+- [x] Subrepo name collision, reproduced and fixed (2026-08). plz derives
+      subrepo names from package path + name (`filepath.Join(pkg.Name,
+      name)` in its subrepo builtin) with no qualification by the declaring
+      repo, so a plugin's `third_party/rust/itoa` and a consumer's are one
+      global name. This plugin now keeps its own crates in
+      `third_party/crates`, and `rust_repo` derives both `third_party_path`
+      and `lock` from the package the declarations live in, so relocating
+      them is all it takes. A consumer building its own `itoa` alongside the
+      plugin's tool target is now a regression test. go-rules shares the
+      naming but is never parsed by consumers, so it has not had to solve it
+- [x] Shipped config must not carry dev assumptions: plugin_repo ships this
+      repo's .plzconfig, so `[Parse]` preloads became requirements on every
+      consumer that parsed a plugin package (proto, shell and python plugins
+      declared). Preloads removed and our own BUILD files subinclude
+      explicitly, matching go-rules, whose config has no [Parse] section
+
+## Track 2: Cargo parity (log)
+
+### Resolver
+- [x] Differential testing: `scripts/differential.sh` in the corpus puts the
+      same request to cargo, which is what tells a bug in these rules apart
+      from a crate that cannot be built as asked. It settled sqlx-postgres
+      (cargo fails the same way), derive_more and moka (features must be
+      chosen), and four -sys crates blocked on missing system packages
+- [ ] Differential testing at rule level: cargo resolution as an oracle — pick
+      real-world repos, resolve with cargo and with us, diff. Lives in a
+      separate corpus repo (rust-rules-corpus), not here; run several repos
+      and expand over time
+- [x] PubGrub backtracking, via the pubgrub crate (proven at scale by uv).
+      Each (crate, compatibility bucket) is a package, so incompatible
+      majors coexist as cargo allows; a requirement spanning several buckets
+      becomes a proxy package whose versions are the candidate buckets, so
+      the bucket choice is itself backtrackable. Declared versions are pins
+      (preferences), not requirements, so an unrelated `--add` never churns
+      the graph and no-op adds stay offline-safe; same-bucket changes upgrade
+      a declaration in place instead of duplicating it. `--greedy` keeps the
+      old walk. Neither go-rules (Go's MVS needs no backtracking) nor
+      rules_rust (delegates to cargo) has an equivalent, and cargo itself
+      uses a bespoke solver
+- [x] MSRV-aware resolution: releases requiring a newer rustc than the
+      declared `rust_toolchain` are filtered out (cargo >=1.84 semantics),
+      relaxing with a warning if a package would otherwise be unsolvable.
+      `--ignore-msrv` opts out. Verified end to end: clap resolves to the
+      4.5 line on rustc 1.97 and to 4.0.32 with the older dependency stack
+      on rustc 1.63
+- [ ] Multi-platform lock entries (per-triple resolution outputs). The
+      declaration set already covers every platform in `--targets`; what is
+      missing is carrying more than one triple's resolved entries in the
+      lock, so a build for another platform reads rather than re-solves
+
+### Dependency management
+- [ ] `sync --upgrade` (`cargo update` parity: bump all to latest compatible)
+- [x] `lock --add crate@req --features a,b` + auto-fetch of newly-activated
+      optional deps: resolution reports what it needed but could not find,
+      and lock re-solves to declare it (bounded loop). No more manual
+      matching-version adds
+- [ ] Generic git fetcher (gitlab/self-hosted; github archive URLs work)
+- On-demand only (decided 2026-08): private/alternative registries and
+  registry auth. crates.io is effectively universal; git forks and
+  download= overrides cover the common private-code cases
+
+### Build fidelity
+- [x] Profiles: opt-level, lto, codegen-units, panic, strip and
+      debug-assertions via plugin config, mapped onto plz's build configs.
+      Per-dep overrides remain open (rarely used; cargo's own
+      `[profile.*.package]`)
+- [ ] `cargo bench` profile semantics for rust_benchmark
+- [ ] Build-script env completeness audit against cargo docs (rerun as cargo
+      versions land; last audit 2026-08 caught error=, rustc-flags,
+      CARGO_CRATE_NAME et al.)
+
+### Ecosystem burn-down
+- [x] Crate corpus: 240 deliberately awkward crates, 1,102 in the graph,
+      all building. Chosen by what predicts trouble (links, build deps,
+      platform-gated deps, feature and optional-dep counts, live majors)
+      rather than by download count, and each drop verified against cargo
+      before dropping. 19 bugs found, none of which had appeared in this
+      repo's own ~190 crates. Lives in the private becomeliminal/rust-corpus.
+      Still wanted: running it in CI, and a public pass-rate
+- [ ] Per-crate escape hatches: patches (arg exists, unexercised), source
+      overrides (done via download=), env injection for build scripts
+
+### Explicit non-goals (decided, revisit only on demand)
 - [ ] rust-analyzer / `rust-project.json` — unparked 2026-08-19 and
       **partially working**. `rust_project` emits a file, `examples/ide`
       exercises both a third-party and a first-party edge, and those resolve.

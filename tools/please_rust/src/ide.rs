@@ -89,6 +89,26 @@ struct Project {
     sysroot: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     sysroot_src: Option<String>,
+    /// The standard library, described rather than discovered.
+    ///
+    /// Listing core and std among the ordinary crates does not work: they are
+    /// then crates that happen to be called "core" and "std", and
+    /// rust-analyzer only attaches lang items to the crate it believes *is*
+    /// the sysroot - so `Sized` is unsatisfied for `char` and `Iterator` has
+    /// no impls, while every import and macro around them resolves fine.
+    ///
+    /// Letting it discover them instead means it runs `cargo metadata` over
+    /// the stdlib sources with a nightly-only `-Z` flag, against whatever
+    /// cargo is on PATH. This is the third option rust-analyzer offers, and
+    /// the only one that is both correct and hermetic. Paths inside are
+    /// relative to `sysroot_src`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sysroot_project: Option<SysrootProject>,
+    crates: Vec<CrateEntry>,
+}
+
+#[derive(Serialize)]
+struct SysrootProject {
     crates: Vec<CrateEntry>,
 }
 
@@ -136,10 +156,6 @@ const SYSROOT_CRATES: &[(&str, &[&str])] = &[
     ("test", &["core", "std", "proc_macro"]),
 ];
 
-/// What every non-sysroot crate depends on. Explicit because with the sysroot
-/// named as crates there is no discovery step left to inject them.
-const SYSROOT_DEPS: &[&str] = &["core", "alloc", "std", "proc_macro", "test"];
-
 /// A crate's identity in the lock: its subrepo, and which unit of it. The
 /// host unit of a dual crate is a different crate to rust-analyzer - it is
 /// compiled for a different platform and may have different features.
@@ -149,20 +165,20 @@ pub fn run(args: IdeArgs) -> Result<()> {
     let lock = crate::resolve::LockFile::load(&args.lock)
         .with_context(|| format!("reading {}", args.lock.display()))?;
 
-    // The sysroot goes first, so its indices are stable and everything else
-    // can depend on it by number.
-    let mut crates: Vec<CrateEntry> = Vec::new();
-    let mut sysroot_index: BTreeMap<&str, usize> = BTreeMap::new();
+    // The sysroot is described as a nested project rather than as crates in
+    // the main list, so rust-analyzer registers it as the sysroot and its
+    // lang items attach. Indices inside it are its own.
+    let mut sysroot_project = None;
     if let Some(src) = &args.sysroot_src {
+        let mut sys: Vec<CrateEntry> = Vec::new();
+        let mut at: BTreeMap<&str, usize> = BTreeMap::new();
         for (name, _) in SYSROOT_CRATES {
-            sysroot_index.insert(name, crates.len());
-            crates.push(CrateEntry {
+            at.insert(name, sys.len());
+            sys.push(CrateEntry {
                 display_name: name.to_string(),
-                root_module: rel(&src.join(name).join("src/lib.rs")),
-                // Read rather than assumed: the standard library moved to
-                // edition 2024, and parsing it as 2021 fails in ways that
-                // surface as core's lang items being missing - `char: Sized
-                // is not satisfied` rather than anything mentioning editions.
+                // Relative to sysroot_src, which is what rust-analyzer
+                // absolutizes these against.
+                root_module: format!("{}/src/lib.rs", name),
                 edition: sysroot_edition(&src.join(name)),
                 deps: Vec::new(),
                 cfg: Vec::new(),
@@ -172,30 +188,22 @@ pub fn run(args: IdeArgs) -> Result<()> {
                 is_workspace_member: false,
             });
         }
-        // Second pass now that every sysroot crate has an index.
         for (name, deps) in SYSROOT_CRATES {
-            let at = sysroot_index[name];
-            crates[at].deps = deps
+            let i = at[name];
+            sys[i].deps = deps
                 .iter()
                 .filter_map(|d| {
-                    sysroot_index.get(d).map(|i| DepEntry {
-                        krate: *i,
+                    at.get(d).map(|j| DepEntry {
+                        krate: *j,
                         name: d.to_string(),
                     })
                 })
                 .collect();
         }
+        sysroot_project = Some(SysrootProject { crates: sys });
     }
-    let sysroot_deps: Vec<DepEntry> = SYSROOT_DEPS
-        .iter()
-        .filter_map(|d| {
-            sysroot_index.get(d).map(|i| DepEntry {
-                krate: *i,
-                name: d.to_string(),
-            })
-        })
-        .collect();
-    let offset = crates.len();
+    let mut crates: Vec<CrateEntry> = Vec::new();
+    let offset = 0usize;
 
     // Pass one: assign an index to every crate, so deps can name them.
     let mut order: Vec<(Key, &crate::resolve::LockEntry)> = Vec::new();
@@ -215,10 +223,7 @@ pub fn run(args: IdeArgs) -> Result<()> {
     let mut skipped = Vec::new();
     for ((subrepo, _host), entry) in &order {
         match describe(&args.third_party_dir, subrepo, entry, &index) {
-            Ok(mut c) => {
-                c.deps.extend(sysroot_deps.iter().cloned());
-                crates.push(c)
-            }
+            Ok(c) => crates.push(c),
             Err(e) => {
                 skipped.push(format!("{}: {:#}", subrepo, e));
                 // A crate that cannot be described must still occupy its
@@ -262,7 +267,6 @@ pub fn run(args: IdeArgs) -> Result<()> {
                 }
             }
         }
-        deps.extend(sysroot_deps.iter().cloned());
         crates.push(CrateEntry {
             display_name: fp.display_name.clone(),
             root_module: fp.root_module.clone(),
@@ -285,6 +289,7 @@ pub fn run(args: IdeArgs) -> Result<()> {
     let project = Project {
         sysroot: args.sysroot.as_ref().map(|p| rel(p)),
         sysroot_src: args.sysroot_src.as_ref().map(|p| rel(p)),
+        sysroot_project,
         crates,
     };
     let json = serde_json::to_string_pretty(&project)?;
