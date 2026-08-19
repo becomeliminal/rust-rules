@@ -61,15 +61,17 @@ pub struct IdeArgs {
     #[arg(long, default_value = "rust-project.json")]
     pub output: PathBuf,
 
-    /// List the subrepos holding proc macros, one per line, and stop.
+    /// Write every file this project will point at, as `subrepo<TAB>path`.
     ///
-    /// A proc macro is a dylib rust-analyzer dlopens, so naming one in the
-    /// project file is not the same as it existing - and if it does not, the
-    /// derives quietly fail to expand and the editor reports errors in code
-    /// that compiles. The caller builds these before asking for the project.
-    /// Read from the lock, so it needs nothing else built first.
+    /// Naming a path is not the same as it existing, and the difference is
+    /// always silent: rust-analyzer degrades and says nothing useful. The
+    /// caller builds whatever is missing before handing the project over.
+    ///
+    /// Emitted rather than listed by kind, because listing by kind is a list
+    /// to keep right - it was wrong four times, once per artifact, before this
+    /// existed.
     #[arg(long)]
-    pub list_proc_macros: bool,
+    pub emit_inputs: Option<PathBuf>,
 
     /// Speak rust-analyzer's discover protocol on stdout instead of writing a
     /// file.
@@ -527,15 +529,6 @@ fn describe_project(args: IdeArgs) -> Result<()> {
     let lock = crate::resolve::LockFile::load(&args.lock)
         .with_context(|| format!("reading {}", args.lock.display()))?;
 
-    if args.list_proc_macros {
-        for (subrepo, entry) in lock.crates.iter().chain(lock.host_crates.iter()) {
-            if entry.is_proc_macro {
-                println!("{}", subrepo);
-            }
-        }
-        return Ok(());
-    }
-
     // The sysroot is described as a nested project rather than as crates in
     // the main list, so rust-analyzer registers it as the sysroot and its
     // lang items attach. Indices inside it are its own.
@@ -595,9 +588,18 @@ fn describe_project(args: IdeArgs) -> Result<()> {
 
     // Pass two: describe each one.
     let mut skipped = Vec::new();
+    // What the project will point at, and which crate has to be built for it
+    // to be there.
+    let mut inputs: Vec<(String, String)> = Vec::new();
     for ((subrepo, _host), entry) in &order {
         match describe(&args.third_party_dir, subrepo, entry, &index) {
-            Ok(c) => crates.push(c),
+            Ok(c) => {
+                inputs.push((subrepo.clone(), c.root_module.clone()));
+                if let Some(dylib) = &c.proc_macro_dylib_path {
+                    inputs.push((subrepo.clone(), dylib.clone()));
+                }
+                crates.push(c)
+            }
             Err(e) => {
                 skipped.push(format!("{}: {:#}", subrepo, e));
                 // A crate that cannot be described must still occupy its
@@ -605,6 +607,14 @@ fn describe_project(args: IdeArgs) -> Result<()> {
                 crates.push(placeholder(entry));
             }
         }
+    }
+
+    if let Some(path) = &args.emit_inputs {
+        let text: String = inputs
+            .iter()
+            .map(|(subrepo, file)| format!("{}\t{}\n", subrepo, file))
+            .collect();
+        std::fs::write(path, text).with_context(|| format!("writing {}", path.display()))?;
     }
 
     // First-party crates go after the third-party ones so the indices

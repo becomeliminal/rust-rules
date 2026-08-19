@@ -219,26 +219,42 @@ while read -r s; do
     echo "$NAME: could not parse $s, so any crates in it are not described" >&2
 done < "$WORK/skipped"
 
-# A proc macro is a dylib rust-analyzer dlopens, and naming one is not the same
-# as it existing: nothing so far has built the crates themselves. Built before
-# the project is described rather than after, because the answer comes from the
-# lock and not from the file we are about to write. A crate's target lives in
-# the package that declares the lock, named for its subrepo.
+# Build whatever the project is about to point at.
+#
+# Naming a path is not the same as it existing, and the difference is silent
+# every time: rust-analyzer degrades and reports something unrelated. This was
+# a list of artifact kinds, and the list was wrong four times - the sysroot,
+# its sources, the lock, the proc-macro dylibs - so it is not a list any more.
+# The tool says what it will point at; anything missing gets built, whatever
+# kind of thing it is.
 if [ -n "$LOCK_LABEL" ]; then
     LOCK_PKG=${LOCK_LABEL%:*}
-    : > "$WORK/pm_targets"
     # shellcheck disable=SC2086
-    "$TOOL" ide $LOCK_ARG --list-proc-macros --third-party-dir $THIRD_PARTY_DIR \
-        > "$WORK/pm" 2>/dev/null || : > "$WORK/pm"
-    while IFS= read -r pm; do
-        if [ -n "$pm" ]; then echo "$LOCK_PKG:$pm" >> "$WORK/pm_targets"; fi
-    done < "$WORK/pm"
-    if [ -s "$WORK/pm_targets" ]; then
-        say "building `wc -l < "$WORK/pm_targets"` proc macros"
-        # One that will not build is not fatal: the rest still expand.
+    "$TOOL" ide $LOCK_ARG --third-party-dir $THIRD_PARTY_DIR --sysroot $SYSROOT \
+        --sysroot-src $SYSROOT_SRC --first-party $FILES $SUBARGS \
+        --emit-inputs "$WORK/inputs" --output "$WORK/scratch.json" >/dev/null 2>&1 || \
+        : > "$WORK/inputs"
+    : > "$WORK/missing"
+    while IFS="	" read -r subrepo file; do
+        if [ -n "$file" ] && [ ! -e "$file" ]; then
+            echo "$LOCK_PKG:$subrepo" >> "$WORK/missing"
+        fi
+    done < "$WORK/inputs"
+    if [ -s "$WORK/missing" ]; then
+        sort -u "$WORK/missing" > "$WORK/missing.u"
+        say "building `wc -l < "$WORK/missing.u"` crates the project points at"
+        # One that will not build is not fatal: everything else still resolves.
         # shellcheck disable=SC2046
-        plz build $(tr '\n' ' ' < "$WORK/pm_targets") >/dev/null 2>&1 || \
-            echo "$NAME: some proc macros did not build, so their derives will not expand" >&2
+        plz build $(tr '\n' ' ' < "$WORK/missing.u") >/dev/null 2>&1 || true
+        # Still absent after building means it is never coming - a crate whose
+        # recorded root module is not the file it ships, which is a lock to
+        # fix rather than a build to retry. Said once, rather than retried
+        # silently on every run for the life of the repo.
+        while IFS="	" read -r subrepo file; do
+            if [ -n "$file" ] && [ ! -e "$file" ]; then
+                echo "$NAME: $subrepo points at $file, which building it did not produce" >&2
+            fi
+        done < "$WORK/inputs"
     fi
 fi
 
