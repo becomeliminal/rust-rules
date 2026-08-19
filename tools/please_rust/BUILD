@@ -41,6 +41,34 @@ if _HOST_PLAT not in PLEASE_RUST_HASHES:
         visibility = ["PUBLIC"],
     )
 
+_MODULES = [
+    "src/build_script.rs",
+    "src/compile.rs",
+    "src/generate.rs",
+    "src/pubgrub_solver.rs",
+    "src/resolve.rs",
+    "src/sync.rs",
+    "src/workspace.rs",
+    "src/test.rs",
+    "src/timing.rs",
+]
+
+_DEPS = [
+    "//third_party/crates:anyhow",
+    "//third_party/crates:cargo_toml",
+    "//third_party/crates:cfg_expr",
+    "//third_party/crates:clap",
+    "//third_party/crates:proc_macro2",
+    "//third_party/crates:pubgrub",
+    "//third_party/crates:semver",
+    "//third_party/crates:serde",
+    "//third_party/crates:serde_json",
+    "//third_party/crates:syn",
+    "//third_party/crates:thiserror",
+    "//third_party/crates:toml",
+    "//third_party/crates:walkdir",
+]
+
 # please_rust built hermetically by this plugin's own rules against the
 # rust_repo crate graph in //third_party/rust. This is the real tool; the
 # cargo bootstrap below exists only to break the egg (rust_repo subrepos are
@@ -48,68 +76,34 @@ if _HOST_PLAT not in PLEASE_RUST_HASHES:
 rust_binary(
     name = "please_rust",
     main = "src/main.rs",
-    modules = [
-        "src/build_script.rs",
-        "src/compile.rs",
-        "src/generate.rs",
-        "src/pubgrub_solver.rs",
-        "src/resolve.rs",
-        "src/sync.rs",
-        "src/workspace.rs",
-        "src/test.rs",
-        "src/timing.rs",
-    ],
+    modules = _MODULES,
     edition = "2021",
     manifest = "Cargo.toml",
     visibility = ["PUBLIC"],
-    deps = [
-        "//third_party/crates:anyhow",
-        "//third_party/crates:cargo_toml",
-        "//third_party/crates:cfg_expr",
-        "//third_party/crates:clap",
-        "//third_party/crates:proc_macro2",
-        "//third_party/crates:pubgrub",
-        "//third_party/crates:semver",
-        "//third_party/crates:serde",
-        "//third_party/crates:serde_json",
-        "//third_party/crates:syn",
-        "//third_party/crates:thiserror",
-        "//third_party/crates:toml",
-        "//third_party/crates:walkdir",
-    ],
+    deps = _DEPS,
 )
 
 rust_test(
     name = "please_rust_test",
     root = "src/main.rs",
-    modules = [
-        "src/build_script.rs",
-        "src/compile.rs",
-        "src/generate.rs",
-        "src/pubgrub_solver.rs",
-        "src/resolve.rs",
-        "src/sync.rs",
-        "src/workspace.rs",
-        "src/test.rs",
-        "src/timing.rs",
-    ],
+    modules = _MODULES,
     edition = "2021",
     manifest = "Cargo.toml",
-    deps = [
-        "//third_party/crates:anyhow",
-        "//third_party/crates:cargo_toml",
-        "//third_party/crates:cfg_expr",
-        "//third_party/crates:clap",
-        "//third_party/crates:proc_macro2",
-        "//third_party/crates:pubgrub",
-        "//third_party/crates:semver",
-        "//third_party/crates:serde",
-        "//third_party/crates:serde_json",
-        "//third_party/crates:syn",
-        "//third_party/crates:thiserror",
-        "//third_party/crates:toml",
-        "//third_party/crates:walkdir",
-    ],
+    deps = _DEPS,
+)
+
+# The tool's own source was never linted - rust_clippy existed but was
+# applied only to examples/package, so the 7k lines everything else depends
+# on went unchecked. It passes at deny=warnings. A matching rust_fmt_test is
+# not here yet because the source has never been rustfmt'd and doing so is a
+# 1,368-line mechanical diff across all ten files.
+rust_clippy(
+    name = "lint",
+    root = "src/main.rs",
+    crate_name = "please_rust",
+    modules = _MODULES,
+    edition = "2021",
+    deps = _DEPS,
 )
 
 # Bootstrap target that builds please_rust using cargo directly.
