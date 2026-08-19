@@ -3,7 +3,7 @@ plugin_repo(
     name = "rust",
     owner = "becomeliminal",
     plugin = "rust-rules",
-    revision = "master",
+    revision = "main",
 )
 
 plugin_repo(
