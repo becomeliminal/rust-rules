@@ -78,10 +78,11 @@ drop_excluded() {
 # Breadth-first over files rather than a recursive function: POSIX sh has no
 # local variables, so a recursive sweep overwrites the path it is walking.
 sweep() {
-    sweep_sub=$1
+    sweep_prefix=$1
     sweep_root=$2
     sweep_maxdepth=$3
-    printf '%s\n' "" > "$WORK/level"
+    sweep_start=${4:-}
+    printf '%s\n' "$sweep_start" > "$WORK/level"
     sweep_depth=0
     sweep_budget=200
     while [ -s "$WORK/level" ]; do
@@ -90,9 +91,9 @@ sweep() {
             if [ "$sweep_budget" -le 0 ]; then break; fi
             sweep_budget=`expr $sweep_budget - 1`
             if [ -n "$sweep_path" ]; then
-                sweep_pat="///$sweep_sub//$sweep_path/..."
+                sweep_pat="$sweep_prefix$sweep_path/..."
             else
-                sweep_pat="///$sweep_sub//..."
+                sweep_pat="$sweep_prefix..."
             fi
             if sweep_out=`plz query alltargets "$sweep_pat" --include rust_ide --hidden 2>/dev/null`; then
                 if [ -n "$sweep_out" ]; then echo "$sweep_out" >> "$WORK/found"; fi
@@ -125,16 +126,22 @@ sweep() {
     done
 }
 
-# This repo's own crates. plz's own failures are reported rather than swallowed:
-# an empty result and a failed query look identical from here, and the first
-# time this ran under an editor it reported "no crates found" when the truth
-# was that plz had not run at all.
-if ! FRAGS=`plz query alltargets $TARGETS --include rust_ide --hidden 2>"$WORK/queryerr"`; then
-    die "plz could not query $TARGETS: `cat \"$WORK/queryerr\"`"
-fi
-FRAGS=`drop_excluded "$FRAGS"`
+# This repo's own crates, swept the same way a subrepo is. A package that will
+# not parse - one referencing a plugin this repo does not have, or a crate
+# declaration that is missing - would otherwise take the whole repo with it,
+# and the only way round that was to name subtrees in the BUILD file and hope
+# they stayed right.
+: > "$WORK/found"
+for target in $TARGETS; do
+    # `//src/...` and `//...` differ only in where they start from.
+    target_path=${target#//}
+    target_path=${target_path%...}
+    target_path=${target_path%/}
+    sweep "//" "." 4 "$target_path"
+done
+FRAGS=`drop_excluded "\`cat \"$WORK/found\"\`"`
 if [ -z "$FRAGS" ]; then
-    die "no Rust crates found under $TARGETS (plz said: `cat \"$WORK/queryerr\"`)"
+    die "no Rust crates found under $TARGETS"
 fi
 say "describing `echo $FRAGS | wc -w` crates"
 # The toolchain too: resolving where it lands is not the same as it being
@@ -192,7 +199,7 @@ while read -r sub target; do
         fi
     fi
     : > "$WORK/found"
-    sweep "$sub" "$root" 3
+    sweep "///$sub//" "$root" 3
     drop_excluded "`cat "$WORK/found"`" > "$WORK/frags"
     while read -r frag; do
         if [ -z "$frag" ]; then continue; fi
