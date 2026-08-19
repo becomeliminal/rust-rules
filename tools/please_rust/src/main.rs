@@ -6,7 +6,9 @@
 //! - build-script: Execute Cargo build scripts and parse output
 //! - testmain: Generate test harness main.rs
 //! - cover: Instrument for coverage
-//! - crate_info: Emit crate metadata as JSON
+//!
+//! Set PLEASE_RUST_TIMINGS=1 for per-phase timings, call counts and peak RSS
+//! on stderr.
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -19,6 +21,7 @@ mod resolve;
 mod sync;
 mod workspace;
 mod test;
+mod timing;
 
 #[derive(Parser)]
 #[command(name = "please_rust")]
@@ -58,6 +61,23 @@ fn main() -> Result<()> {
 }
 
 fn dispatch(cli: Cli) -> Result<()> {
+    let name = match &cli.command {
+        Commands::Compile(_) => "compile",
+        Commands::BuildScript(_) => "build-script",
+        Commands::Generate(_) => "generate",
+        Commands::Resolve(_) => "resolve",
+        Commands::Sync(_) => "sync",
+        Commands::Lock(_) => "lock",
+        Commands::Test(_) => "test",
+    };
+    // Reported even when the command fails: a run that died slowly is worth
+    // as much to a profile as one that succeeded.
+    let out = run_command(cli);
+    timing::report(name);
+    out
+}
+
+fn run_command(cli: Cli) -> Result<()> {
     match cli.command {
         Commands::Compile(args) => compile::run(args),
         Commands::BuildScript(args) => build_script::run(args),
