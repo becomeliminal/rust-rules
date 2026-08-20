@@ -78,7 +78,7 @@ rust_doc_test(
 ```
 
 You can define third-party crates using `rust_repo`. Only your direct
-dependencies need declaring — versions, features and transitive dependencies
+dependencies need declaring. Versions, features and transitive dependencies
 are resolved from each crate's `Cargo.toml`, the same way Cargo would:
 ```python
 subinclude("///rust//build_defs:rust")
@@ -213,7 +213,7 @@ And run the benchmark with Please:
 plz run //path/to/your_benchmark -- --bench
 ```
 
-FFI bindings come from `rust_bindgen` — the bindgen binary is built from
+FFI bindings come from `rust_bindgen`. The bindgen binary is built from
 crates by `rust_repo` (declare `bindgen-cli` via `lock --add`), and libclang
 comes from the host like the C compiler does (`LibclangPath` pins one):
 ```python
@@ -237,19 +237,19 @@ plugin's language definitions.
 Clippy, rustfmt and rustdoc ship in the toolchain, with a rule each:
 ```python
 rust_clippy(
-    name = "lint",           # plz build //pkg:lint — any clippy finding fails
+    name = "lint",           # plz build //pkg:lint, any finding fails
     root = "src/lib.rs",
     modules = ["src/util.rs"],
     deps = [":lib_deps"],
 )
 
 rust_fmt_test(
-    name = "fmt_test",       # plz test //pkg:fmt_test — fails on unformatted code
+    name = "fmt_test",       # plz test //pkg:fmt_test, fails if unformatted
     srcs = glob(["src/*.rs"]),
 )
 
 rust_doc(
-    name = "docs",           # plz build //pkg:docs — rustdoc HTML output
+    name = "docs",           # plz build //pkg:docs, rustdoc HTML
     root = "src/lib.rs",
     deps = [":lib_deps"],
 )
@@ -278,16 +278,6 @@ nothing beyond the two above. `CargoTool` and `LlvmTools` name
 `toolchain_cargo` and `toolchain_llvm_tools`; only the from-source bootstrap
 uses the first and only `plz cover` the second, so nothing that compiles Rust
 stages either.
-
-Two things shape that layout, both learned from remote execution. A binary
-and the libraries beside it never separate - rustc resolves
-`librustc_driver` through `../lib` relative to itself, so `toolchain_rustc`
-holds `bin` and `lib` together and splitting them produces a compiler that
-cannot start on a worker. And a non-empty directory cannot be an entry point
-at all: Please validates entry points by membership in the flattened action
-outputs, and a directory's own path is never a key there, so a sysroot has to
-be a whole output rather than a path inside one. Locally both mistakes are
-invisible, because the whole tree is already on disk.
 
 ### Cross-compilation
 `plz build --arch darwin_arm64 //...` compiles for another platform.
@@ -321,8 +311,8 @@ TargetTriple = wasm32-unknown-unknown
 
 Set it and every compile passes that `--target`, whatever `--arch` says;
 leave it empty and the triple is derived from `--arch` as before. The
-standard library still has to be there, which `rust_toolchain` handles —
-`architectures` accepts a raw triple as readily as an os/arch pair:
+standard library still has to be there. `rust_toolchain(architectures = ...)`
+accepts a raw triple as readily as an os/arch pair:
 
 ```python
 rust_toolchain(
@@ -332,10 +322,6 @@ rust_toolchain(
     std_hashes = {"wasm32-unknown-unknown": "<hash>"},
 )
 ```
-
-A triple set this way is checked against the host's to decide whether a
-build is cross-compiling at all, so setting it to the triple you are already
-on is a no-op rather than a second code path.
 
 ### DefaultStatic
 Binaries statically link the C runtime by default, producing self-contained
@@ -369,16 +355,13 @@ CriterionDep = //third_party/crates:criterion
 
 `ClippyTool` and `RustfmtTool` are entry points on the rustc component and
 follow `Rustc` unless you set them, so moving the toolchain moves them too.
-`BindgenTool` is the `bindgen` binary `rust_bindgen` runs — declared as an
-ordinary crate and built by these rules, so the tool generating your
-bindings is in your build graph rather than on your PATH. `CriterionDep` is
-the crate `rust_benchmark` links against.
+`BindgenTool` is the `bindgen` binary `rust_bindgen` runs. It is declared as
+an ordinary crate and built by these rules. `CriterionDep` is the crate
+`rust_benchmark` links against.
 
 ### LocalSubrepos
 Crate downloads and BUILD generation run locally rather than on a remote
-worker. They fetch a tarball and write text, so there is little to gain
-remotely, and Please crashes reading a remote subrepo's config when its tree
-is not in the remote cache. Set false if you would rather it went out:
+worker. Set false to run them remotely:
 
 ```ini
 [Plugin "rust"]
@@ -389,9 +372,8 @@ LocalSubrepos = false
 The `please_rust` binary. The default is a hash-pinned download of a
 released one, per platform, the way go-rules ships `please_go`: nothing to
 build, no toolchain, no cargo, and it works under remote execution. A
-platform with no published binary yet falls back to building it from
-source, which is a cargo build needing network access — correct, but slow
-enough that you will notice.
+platform with no published binary builds the tool from source with cargo,
+which needs network access.
 
 Point it at your own build or your own pin if you would rather not depend
 on the release:
@@ -411,10 +393,6 @@ remote_file(
 PleaseRustTool = //third_party/rust:please_rust_tool
 ```
 
-Note that a parse-only command such as `plz query` still has to build the
-crate subrepos it touches, and building those needs this tool — so the
-choice affects far more than a full build.
-
 ### Profiles
 Cargo's profile settings, mapped onto Please's build configs. The tuning
 knobs apply to optimised builds (`plz build -c opt`); `DebugAssertions`
@@ -430,23 +408,18 @@ DebugAssertions = false
 ```
 
 ### BuildScriptJobs
-`NUM_JOBS`, which is what cc-rs and cmake-rs read to decide how many C
-compilers to run. It reaches nothing else — not rustc, which parallelises
-by codegen units, and not Please's own scheduler — so it is the width of a
-`-sys` crate's vendored C tree and of nothing else. Unset it is half the
-machine, on the grounds that Please is already running other actions beside
-this one and several heavy C builds each going flat out is worse than
-either extreme.
+`NUM_JOBS`, which cc-rs and cmake-rs read to decide how many C compilers to
+run. It caps C compilation in `-sys` crates and nothing else. Unset it is
+half the machine.
 ```ini
 [Plugin "rust"]
 BuildScriptJobs = 8
 ```
 
 ### rust-analyzer
-Editors get code intelligence — go-to-definition, completion, inline errors —
-from rust-analyzer, which normally learns the crate graph by running cargo.
-With no cargo to run it asks a command instead, the same way gopls asks
-go-rules' package driver rather than running `go list`.
+rust-analyzer provides code intelligence, and normally learns the crate graph
+by running cargo. With no cargo to run it asks a command instead, the same way
+gopls asks go-rules' package driver rather than running `go list`.
 
 Declare `rust_project` in the **repo root** `BUILD` file:
 
@@ -471,17 +444,13 @@ That is the whole setup. rust-analyzer runs the command when it opens the
 project, and again when a watched file changes. There is no list of crates to
 maintain and no generated file to keep in step.
 
-`filesToWatch` entries are globs relative to the repo root, so `BUILD` is the
-root build file only. Widening it to `**/BUILD` also matches the generated
-build file of every crate under `plz-out` — 1187 of them against 10 real ones
-in one repo here — so a build rewrites hundreds of watched files at once.
-After adding a crate in a subdirectory, re-run discovery yourself: *rust-
-analyzer: Restart Server*, or `plz run //:rust-project`.
+`filesToWatch` entries are globs relative to the repo root, so `BUILD` watches
+the root build file. After adding a crate elsewhere, run
+`plz run //:rust-project` or restart the server.
 
-It finds every `rust_library`, `rust_binary` and `rust_test` in the repo, joins
-them to the third-party crates in the lock, builds what it is about to name —
-the toolchain, the standard library's sources, the proc-macro dylibs — and
-hands the graph back over stdout.
+It finds every `rust_library`, `rust_binary` and `rust_test` in the repo and
+joins them to the third-party crates in the lock. Anything the project points
+at is built first.
 
 **Your editor also needs the rust-analyzer extension installed.** Nothing warns
 you if it is missing; the setting is simply ignored. VS Code and Cursor:
@@ -502,12 +471,11 @@ plz run //:rust-project        # writes rust-project.json at the repo root
 ```
 
 The paths inside are repo-relative, so the file is identical on every machine
-and belongs at the repo root — which is also the directory the editor must
-open, since that is what they resolve against.
+and belongs at the repo root. That is also the directory the editor must
+open.
 
 #### Crates in subrepos
-Crates in a subrepo are described too — a repo you pulled in with `github_repo`
-or a plugin whose own Rust you want to read. Plugin subrepos need no naming;
+Crates in a subrepo are described too. Plugin subrepos need no naming, since
 plz already lists them. Anything brought in another way is named:
 
 ```python
@@ -518,14 +486,13 @@ rust_project(
 )
 ```
 
-They are **described but never checked on save** — a subrepo is checked in its
-own repo, and having its errors in this repo's problems panel is noise about
-code this checkout cannot fix.
+They are **described but never checked on save**. A subrepo is checked in its
+own repo.
 
 Sweeping a subrepo can hit packages that will not parse from here: one that
 references a plugin this repo does not have, or one that declares a plugin
 this repo also declares, since plugin names are a single global namespace.
-Neither loses the rest of the subrepo — the sweep descends and skips only the
+Neither loses the rest of the subrepo. The sweep descends and skips only the
 packages that fail, naming each. Third-party crates never go through this at
 all; they come from the lock, which already records where their sources
 landed.
@@ -545,39 +512,20 @@ rust_project(
 ```
 
 `targets` is where to look; `exclude` drops labels by prefix. A monorepo can
-also declare several of these, one per subtree, each with its own `out` — but
-only the file at the repo root is the one an editor opened at the repo root
-will find.
+also declare several of these, one per subtree, each with its own `out`. Only
+the file at the repo root is the one an editor will find.
 
 #### When something does not resolve
-- **Imports of a third-party crate don't resolve.** That crate's declaration
-  is in a lock the run wasn't given — a project file joins one lock, and a
-  subrepo with its own `rust_resolve` has another. `plz run` prints a line
-  naming the crate and the dependency for every one of these, so the output
-  tells you which.
-- **A crate's `#[cfg(...)]` items look inactive.** Build-script cfgs are read
-  from what the build has already produced, so a crate whose build script has
-  not run yet contributes none of them — `libc` and the `-sys` crates gate a
-  lot of their API this way. It corrects itself as you build; nothing here
-  compiles the whole graph just to open an editor.
-- **`unrecognized subcommand 'ide'`.** The `please_rust` in use predates this
-  rule. Either pin a release that has it, or point `PleaseRustTool` at
-  `///rust//tools/please_rust:bootstrap`.
-- **Third-party crates appear but go nowhere**, and the run reports crates
-  with no root module. The lock was written by an older `please_rust` than the
-  one generating the project file, so it does not carry the fields this needs.
-  Rebuild it — and set the tool in `.plzconfig` rather than passing `plz -o`:
-  **discovery shells out to `plz`, and a nested invocation does not inherit
-  command-line overrides**, so the lock gets rebuilt by the old tool
-  underneath you. `PLZ_OVERRIDES` in the environment does carry through.
-- **Nothing resolves at all, including `std`.** Go-to-definition into the
-  standard library needs the `rust-src` component, which is only downloaded if
-  the toolchain asks for it: set `rust_toolchain(src_hash = ...)`. Without it
-  a repo never builds `<toolchain>_sysroot_src` and rust-analyzer has no
-  standard library to attach lang items to.
-- **It worked, then stopped.** A build that re-stages `plz-out` reads to the
-  editor's file watcher as a mass delete, and rust-analyzer does not always
-  recover. Run *rust-analyzer: Restart Server* from the command palette.
+- **A third-party crate's imports do not resolve.** Its declaration is in a
+  lock this project file was not given. The run names the crate and the
+  dependency.
+- **A crate's `#[cfg(...)]` items look inactive.** Build-script cfgs come from
+  what the build has produced. It corrects itself as you build.
+- **Nothing resolves, including `std`.** Set `rust_toolchain(src_hash = ...)`
+  to fetch the `rust-src` component.
+- **It worked, then stopped.** Run *rust-analyzer: Restart Server*.
+
+[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) covers the rest.
 
 `examples/ide` is a working example of the whole thing.
 

@@ -8,8 +8,8 @@ you will actually see.
 Please derives subrepo names from the declaring package path plus the name,
 with nothing identifying which repo declared them, so a plugin's
 `third_party/rust/serde` and yours are the same global name. Any command
-that parses a package of the plugin — `plz cover`, or running a tool target
-inside it — hits the clash.
+that parses a package of the plugin hits the clash: `plz cover`, or running
+a tool target inside it.
 
 Fixed in v0.3.2: this plugin keeps its own crates in `third_party/crates`.
 If you see it against an older version, upgrade. If you see it between two
@@ -21,7 +21,7 @@ that is the whole change.
 
 A crate you declared depends on one you did not. The generated build file for
 the dependent names a subrepo nothing creates, so the whole graph stops
-parsing — `plz build //...` fails before building anything.
+parsing. `plz build //...` fails before building anything.
 
 It happens most often with a crate whose dependency is optional and enabled by
 a default feature, and with platform-specific crates: resolution drops a crate
@@ -33,7 +33,7 @@ please_rust lock --add <dep>@<version> \
     --build-file third_party/crates/BUILD --third-party-folder third_party/crates
 ```
 
-Declaring it is enough even when the crate never builds here — the declaration
+Declaring it is enough even when the crate never builds here. The declaration
 is what makes the graph parseable.
 
 ## `Found multiple definitions for subrepo '<plugin>'`
@@ -44,7 +44,7 @@ surfaces when something parses that subrepo's own `plugins/` package, which a
 normal build never does but a repo-wide query can.
 
 Nothing needs changing in either repo: query the packages you mean rather than
-the whole subrepo. `rust_project` does this for you — a sweep that fails
+the whole subrepo. `rust_project` does this for you: a sweep that fails
 descends and skips only the package that will not parse, naming it.
 
 ## `error: the 'alloc' feature must currently be enabled` (or similar)
@@ -127,28 +127,28 @@ PleaseRustTool = ///rust//tools/please_rust:bootstrap
 
 Set it in `.plzconfig` rather than passing `plz -o`. **A nested `plz` does not
 inherit command-line overrides**, and project discovery shells out to `plz`, so
-`-o` reaches the outer invocation only — the lock gets rebuilt underneath by
-whichever tool the config names. `PLZ_OVERRIDES` in the environment does carry
+`-o` reaches the outer invocation only, and the lock gets rebuilt underneath
+by whichever tool the config names. `PLZ_OVERRIDES` in the environment does carry
 through.
 
 ## Third-party crates are listed in the editor but go nowhere
 
 The lock was written by an older `please_rust` than the one generating the
 project, so it does not carry the fields that need. The run says so, naming
-how many crates it affects. Rebuild it — and check which tool the *lock rule*
-uses, not the one you invoked, per the note above.
+how many crates it affects. Rebuild it, and check which tool the *lock rule*
+uses rather than the one you invoked.
 
 ## `failed to get rustc cfgs ... has no bin/ directory`
 
 rust-analyzer runs `<sysroot>/bin/rustc --print cfg` to learn the target's
-cfgs, so `sysroot` has to be a rustup-shaped root — `bin/` beside `lib/` —
+cfgs, so `sysroot` has to be a rustup-shaped root with `bin/` beside `lib/`,
 which is the rustc component and not what `Sysroot` names. Leave
 `rust_project`'s `sysroot` unset and it derives both from the toolchain you
 already configured.
 
 ## `Error preparing directories ...: unlinkat ...: directory not empty`
 
-A previous build was killed — Ctrl-C, a timeout, an OOM — leaving a partly
+A previous build was killed by Ctrl-C, a timeout or an OOM, leaving a partly
 written directory that Please then cannot clean. `plz-out/tmp` is scratch and
 safe to remove:
 
@@ -179,8 +179,8 @@ whose build scripts publish link metadata, `links` and
 
 Parsing a package that references a crate subrepo has to build that subrepo,
 and building it needs `please_rust`. With the default the tool is built from
-source, which pulls a toolchain and runs the cargo bootstrap — expensive, and
-it needs network, which remote execution setups often do not grant build
+source, which pulls a toolchain and runs the cargo bootstrap. That needs
+network access, which remote execution setups often do not grant build
 actions.
 
 Pin the released binary instead (see PleaseRustTool in the README). It is
@@ -248,5 +248,5 @@ Nothing here needs setting in a normal repo - the defaults name all of it.
 The tool prints the exact rustc invocation before running it, so a failing
 compile can be reproduced by hand from the build log. Include that, the
 declaration for the crate, and the resolved entry
-(`plz build //third_party/crates:rust_lock` then read the JSON) — those
-three usually identify the cause immediately.
+(`plz build //third_party/crates:rust_lock` then read the JSON). Those three
+identify the cause immediately.

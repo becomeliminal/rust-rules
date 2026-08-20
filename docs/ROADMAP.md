@@ -1,7 +1,7 @@
 # Roadmap: beyond Cargo
 
 Where rust-rules stands against Cargo today, what is missing, and the path to
-being the better choice — not just a hermetic alternative. Written against
+being the better choice, not just a hermetic alternative. Written against
 v0.2.0 (2026-08).
 
 ## Where we already beat Cargo
@@ -13,7 +13,7 @@ tool:
 |---|---|---|
 | Hermeticity | Everything hash-verified: toolchain, crates, tool. Sandboxed builds, no network, no ambient env | Ambient `RUSTFLAGS`/`PATH`/`.cargo/config`, network by default, host cc silently |
 | Reproducibility | Content-addressed inputs; CI produced identical results on a cold machine first try | Fingerprints are mtime-fragile; "works on my machine" is a genre |
-| Test caching | Unchanged tests cost 0s — plz caches results | `cargo test` reruns everything, every time |
+| Test caching | Unchanged tests cost 0s, plz caches results | `cargo test` reruns everything, every time |
 | Build caching | Per-crate, shareable via plz remote cache across machines/CI | Per-workspace `target/` dir; sccache bolts on partially |
 | Monorepo | One graph across Rust, Go, C, JS, proto. A `grpc_library` generates Rust *and* Go stubs from the same proto | One language, one workspace; polyglot means glue scripts |
 | Static binaries | Default (`crt-static`), like Go | Opt-in flag folklore |
@@ -28,7 +28,7 @@ Honest list, ordered by how much it matters to a developer choosing daily.
 
 Development here is editor-agnostic and increasingly agent-driven; what
 matters is that `plz build`/`plz test` are fast, targeted, and give clear
-diagnostics — which they already are and do. The remaining gaps:
+diagnostics, which they already are and do. The remaining gaps:
 
 - **Incremental compilation**: rustc's incremental cache makes small edits
   to a big crate fast under Cargo. We rebuild whole crates (plz caches
@@ -36,12 +36,12 @@ diagnostics — which they already are and do. The remaining gaps:
   splitting is idiomatic in monorepos anyway, and pipelined compilation
   (done 2026-08, `PipelinedCompilation`) builds dependency chains at
   frontend depth.
-- ~~fmt / clippy / doc~~ — done 2026-08: `rust_clippy`, `rust_fmt_test`,
+- ~~fmt / clippy / doc~~. Done 2026-08: `rust_clippy`, `rust_fmt_test`,
   `rust_doc`, all from the dist tarball's own binaries.
 
 ### 2. Ecosystem long tail
 
-- ~~`links` / `DEP_<LINKS>_<KEY>` propagation~~ — done 2026-08
+- ~~`links` / `DEP_<LINKS>_<KEY>` propagation~~. Done 2026-08
   (test/links proves the pair end to end). bindgen too: `rust_bindgen`,
   with the bindgen binary built from crates in-graph.
 - **The native build tail**: `cc`-crate builds work (host cc via the cc
@@ -74,8 +74,8 @@ diagnostics — which they already are and do. The remaining gaps:
   plugin config mapped into plz's dbg/opt configurations, with per-target
   overrides.
 - **More targets**: wasm, musl, embedded (`build-std`). Cross-compilation
-  itself shipped in v0.5.0 — `--arch` picks the platform, `rust_toolchain`
-  installs its `rust-std` — so each new target is a matter of a `rust-std`
+  itself shipped in v0.5.0: `--arch` picks the platform and `rust_toolchain`
+  installs its `rust-std`, so each new target is a matter of a `rust-std`
   and, for wasm, the bindgen-shaped rule around it.
 - **Nightly / channel toolchains**: the toolchain rule takes any version;
   channels with moving hashes need a policy.
@@ -85,7 +85,7 @@ diagnostics — which they already are and do. The remaining gaps:
 - **First-party workspace importer** (`sync --import-workspace`): walk a
   cargo workspace's manifests and source tree, emit
   `rust_library`/`rust_binary`/`rust_test` BUILD files. This is puku for
-  Rust and the single biggest adoption lever — it turns "switching is a
+  Rust and the single biggest adoption lever. It turns "switching is a
   slog" into an afternoon.
 
 ### 6. Operational debt (from the labs pilot)
@@ -108,37 +108,37 @@ diagnostics — which they already are and do. The remaining gaps:
 
 Phases ordered by leverage. S = hours, M = a day or two, L = up to a week.
 
-### Phase 1 — Daily-drivable (win the developer)
+### Phase 1: Daily-drivable (win the developer)
 
 The phase that makes someone *choose* this over Cargo for their next
 service.
 
-1. ~~Workspace importer~~ — done 2026-08: `sync --import-workspace`
+1. ~~Workspace importer~~. Done 2026-08: `sync --import-workspace`
   emits member BUILD files and scaffolds the repo config; a bare
   40-crate cargo workspace imports, builds and tests in one command.
-2. ~~fmt / clippy / doc rules~~ — done 2026-08.
-3. ~~Profile knobs~~ — done 2026-08: opt-level, lto, codegen-units,
+2. ~~fmt / clippy / doc rules~~. Done 2026-08.
+3. ~~Profile knobs~~. Done 2026-08: opt-level, lto, codegen-units,
   panic, strip, debug-assertions.
-4. ~~Pilot debt~~ — done 2026-08: `lock` feature UX, release-on-tag CI, and
+4. ~~Pilot debt~~. Done 2026-08: `lock` feature UX, release-on-tag CI, and
   the subrepo namespacing fix (this plugin keeps its crates in
   third_party/crates so they cannot collide with a consumer's).
 
 **Exit criterion:** a cargo project ports with one command, clippy and fmt
 gate CI, and builds/tests get faster.
 
-### Phase 2 — Ecosystem depth (stop losing on crates)
+### Phase 2: Ecosystem depth (stop losing on crates)
 
-6. ~~`links`/`DEP_*` propagation~~ — done 2026-08.
-7. **Top-100-crates corpus in CI** — a generated test package that locks and
+6. ~~`links`/`DEP_*` propagation~~. Done 2026-08.
+7. **Top-100-crates corpus in CI**. a generated test package that locks and
   builds the most-downloaded crates; the pass-rate is the public metric.
   (M, then continuous)
-8. ~~Optional hermetic C toolchain target~~ — dropped by decision (2026-08):
+8. ~~Optional hermetic C toolchain target~~. Dropped by decision (2026-08):
   go-rules has shipped on a host cc forever, and `CCTool` takes a build
   label for anyone who wants their own. bindgen shipped separately.
 9. **Generic git fetcher** (gitlab, self-hosted; github archive URLs already
   work). Private registries dropped to on-demand by decision (2026-08):
   crates.io plus git forks and `download=` overrides cover the cases. (M)
-10. ~~PubGrub at the `select()` seam; MSRV-aware resolution~~ — done
+10. ~~PubGrub at the `select()` seam; MSRV-aware resolution~~. Done
   2026-08: backtracking version selection over the sparse index, with
   compatibility buckets, declared versions as preferences, and MSRV
   filtered from the index's `rust_version`.
@@ -146,7 +146,7 @@ gate CI, and builds/tests get faster.
 **Exit criterion:** corpus pass-rate ≥90 of top 100, with the failures
 individually explained.
 
-### Phase 3 — Platform breadth
+### Phase 3: Platform breadth
 
 Unparked and largely done (2026-08). It was parked on the grounds that a
 single-platform team has no consumer to validate cross-platform work; what
@@ -156,18 +156,18 @@ a declaration set generated on linux was quietly wrong for anyone else.
 11. **More targets** (musl, wasm, embedded) now that cross-compilation
   itself works: each needs a `rust-std` and, for wasm, a bindgen-shaped
   rule. (M)
-12. ~~macOS host support~~ — done 2026-08: `plz build //...` and
+12. ~~macOS host support~~. Done 2026-08: `plz build //...` and
   `plz test //...` are green natively on macos-latest in gating CI, and the
   release publishes a darwin_arm64 binary. Five bugs stood in the way, each
   found by building on a Mac rather than by reading. Intel is not covered:
   its runners were dropped in December 2025.
 13. **Nightly/channel toolchains.** (S)
 
-### Phase 4 — Proof (make the "faster than Cargo" claim with numbers)
+### Phase 4: Proof (make the "faster than Cargo" claim with numbers)
 
-14. ~~Benchmark harness~~ — done 2026-08: `scripts/benchmark.sh`, numbers
+14. ~~Benchmark harness~~. Done 2026-08: `scripts/benchmark.sh`, numbers
   in [BENCHMARKS.md](BENCHMARKS.md).
-15. **Remote cache/execution validation** at labs scale — mostly done
+15. **Remote cache/execution validation** at labs scale, mostly done
   2026-08: verified against a real cluster (1461 build tasks, 525 crates,
   CI green), six bugs fixed. Three paths remain expected-but-not-shown; the
   labs pilot is driving them against its cluster now. (M)
@@ -185,17 +185,17 @@ a declaration set generated on linux was quietly wrong for anyone else.
 
 ## What we deliberately do not chase
 
-- **Editor/IDE integration** — no longer a non-goal; shipped 2026-08-19.
+- **Editor/IDE integration**. no longer a non-goal; shipped 2026-08-19.
   `plz run //:rust-project` discovers every crate in the repo and writes the
   file rust-analyzer reads. See the README for using it and PARITY for what
   it was measured at, what it does not cover (subrepos, generated sources)
   and the one prerequisite that is not automatic: the editor's rust-analyzer
   extension has to be installed.
-- **Building third-party crates' own test suites** — Cargo doesn't run your
+- **Building third-party crates' own test suites**. Cargo doesn't run your
   dependencies' tests either in normal use.
-- **`cargo publish`** — publishing to crates.io stays with Cargo; this is a
+- **`cargo publish`**. publishing to crates.io stays with Cargo; this is a
   build system, not a registry client.
-- **Bit-for-bit rustc incremental parity** — plz's cross-crate caching plus
+- **Bit-for-bit rustc incremental parity**. plz's cross-crate caching plus
   crate splitting is the monorepo answer; chasing rustc's intra-crate
   incremental state trades away hermeticity.
 
@@ -205,7 +205,7 @@ Cargo is a excellent single-language package manager with a build system
 attached. In a monorepo, its model inverts into a liability: per-workspace
 caches, no cross-language graph, ambient configuration, network coupling,
 and tests that always rerun. Everything in Phases 1–2 is engineering, not
-research — after them, the honest comparison is "Cargo's inner loop
+research. After them, the honest comparison is "Cargo's inner loop
 convenience vs. hermetic builds, shared caches, cached tests, and one graph
 for every language you ship." For a team running services, that trade
 already reads one way; the phases above close the convenience gap so the

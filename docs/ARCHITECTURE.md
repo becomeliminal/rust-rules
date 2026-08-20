@@ -1,16 +1,16 @@
 # Architecture
 
-Hermetic Rust build rules for Please — the `go_repo` experience, for Rust.
+Hermetic Rust build rules for Please: the `go_repo` experience, for Rust.
 This document covers the internals; see the top-level README for usage.
 
-Third-party crates are declared once, by name and version. Everything else —
+Third-party crates are declared once, by name and version. Everything else,
 transitive dependency routing, feature unification, BUILD file generation,
-compilation — is computed by `please_rust`, a single tool that reimplements
+compilation, is computed by `please_rust`, a single tool that reimplements
 cargo's build contract offline. **Cargo is never invoked**: not at build time,
 not at resolution time, not to add a dependency.
 
 ```python
-# third_party/rust/BUILD — maintained by `please_rust sync`
+# third_party/rust/BUILD, maintained by `please_rust sync`
 rust_repo(
     name = "serde",
     crate = "serde",
@@ -110,8 +110,8 @@ rust_test(
 ## Editor integration
 
 rust-analyzer learns a crate graph either by running cargo or by being handed
-a `rust-project.json`. There is no cargo to run, so the second applies — but
-generating that file and remembering to regenerate it is not how this works.
+a `rust-project.json`. There is no cargo to run, so the second applies.
+Generating that file and remembering to regenerate it is not how this works.
 
 go-rules ships a `GOPACKAGESDRIVER` binary that gopls calls instead of
 `go list`. rust-analyzer has the same shape in
@@ -134,7 +134,7 @@ Three things are worth knowing about the shape:
 **Discovery is a query, so it cannot be a build rule.** A rule cannot ask the
 graph what is in it while that graph is being parsed. That is why this is a
 run target rather than something `plz build` produces, and why the same target
-also writes a file when run by hand — CI wants a file to assert against.
+also writes a file when run by hand, which is what CI asserts against.
 
 **Third-party crates never go through the query.** They come from the lock,
 which already records where each crate's sources landed, so a crate in a
@@ -143,7 +143,7 @@ querying, which is why subrepo support is about the query half only.
 
 **Whatever the project names, gets built.** The toolchain, the standard
 library's sources, the proc-macro dylibs: naming a path is not the same as it
-existing, and the difference is silent every time — rust-analyzer degrades and
+existing, and the difference is silent every time. rust-analyzer degrades and
 reports something unrelated. The tool emits the paths it is about to write and
 the driver builds anything absent, rather than keeping a list of artifact
 kinds that has to stay right.
@@ -179,8 +179,7 @@ same applies to any plugin declaring crates on a consumer's behalf.
 **Plugin names are a second global namespace, separate from subrepo names.**
 A subrepo that declares a plugin its consumer also declares collides, and
 Please stops rather than choosing. It only surfaces when something parses that
-subrepo's own `plugins/` package — rare, but a repo-wide query does exactly
-that. Anything sweeping a subrepo should be able to skip a package that will
+subrepo's own `plugins/` package, which a repo-wide query does. Anything sweeping a subrepo should be able to skip a package that will
 not parse rather than lose the subrepo.
 
 **A nested `plz` does not inherit command-line overrides.** A tool that shells
@@ -196,7 +195,7 @@ against go-rules' architecture. What remains open, deliberately:
 
 - **C compiler comes from the cc plugin's configuration**: build scripts
   (`cc` crate) and rustc's linker use the toolchain the cc plugin is
-  configured with — the host cc by default, following cc-rules' and
+  configured with, the host cc by default, following cc-rules' and
   go-rules' convention. The rust plugin's optional `CCTool` knob (the
   go-rules `CC_TOOL` pattern) accepts a build label, so a downloaded
   hermetic toolchain target can be swapped in without changing any rules;

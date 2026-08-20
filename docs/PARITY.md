@@ -23,18 +23,18 @@ binary-link time.
       test/links proves the pair end to end)
 - [x] Rust → C dependency edges: cc_deps on rust_library/binary/test links
       c/cc plugin archives (recorded in the rlib, bundled, flowing to final
-      links; test/cc_interop). Note: use c_library for C — cc_library
+      links; test/cc_interop). Note: use c_library for C, since cc_library
       compiles as C++ and mangles symbols
 - [x] C → Rust dependency edges: c_binary/cc targets link staticlib outputs
       directly (test/cc_interop:uses_rust); cbindgen header generation still
-      open — tracked under the bindgen item
-- [x] ~~Optional hermetic C toolchain target~~ — dropped by decision
+      open, tracked under the bindgen item
+- [x] ~~Optional hermetic C toolchain target~~. Dropped by decision
       (2026-08): go-rules has shipped on host cc via CC_TOOL config
       forever; the CCTool knob exists for anyone who wants to point it at
       their own toolchain target
 - [x] bindgen rule: `rust_bindgen` generates bindings from a C header.
       The bindgen binary is built from crates by rust_repo (bindgen-cli +
-      clang-sys stack — the tool supply chain is in-graph, no prebuilt
+      clang-sys stack. The tool supply chain is in-graph, no prebuilt
       downloads); libclang comes from the host (LibclangPath knob for a
       pinned one), matching the host-cc convention. test/bindgen proves
       header → bindings → rust_test end to end
@@ -97,7 +97,7 @@ binary-link time.
 ### Build speed
 - [x] rmeta pipelining via the rules_rust two-action scheme: each crate
       splits into a `_X#rmeta` metadata compile (the full command, cut off
-      the moment rustc reports the rmeta artifact — a plain --emit=metadata
+      the moment rustc reports the rmeta artifact, since a plain --emit=metadata
       rmeta lacks the MIR dependents need) that dependents' compiles hang
       off, a `_X#link` full compile in parallel, and a public filegroup
       that stages transitive rlibs for binary links. First-party routes
@@ -105,7 +105,7 @@ binary-link time.
       Opt-in via PipelinedCompilation (on in this repo, off by default).
       Side effect: all compiles now pass --remap-path-prefix=$CWD= (twins
       must hash identically across sandboxes), so artifacts are
-      path-independent — better remote cache portability for free
+      path-independent, for better remote cache portability
 
 ### Tooling rules
 - [x] `rust_clippy` (clippy-driver from the dist, copied next to rustc for
@@ -119,12 +119,12 @@ binary-link time.
       (profraw → llvm-profdata/llvm-cov → per-file line coverage; paths
       remapped to repo-relative; consumers add `.rs` to `[cover]
       FileExtension`. Note: rust_test routes sources through a filegroup
-      dep, not srcs — plz excludes test-target srcs from coverage reports)
+      dep, not srcs, since plz excludes test-target srcs from coverage reports)
 
 ### Hardening
 - [x] Remote execution: verified against a real cluster by the labs pilot
       (1461 build tasks, 525 third-party crates, CI green). Six bugs fixed,
-      all of one shape — an action assuming the environment around it rather
+      all of one shape: an action assuming the environment around it rather
       than naming what it needs, because a worker stages only what is named:
       subrepo configs carrying cross-repo labels, the tool default resolving
       into the consuming repo, a second toolchain download, Please crashing
@@ -147,7 +147,7 @@ binary-link time.
       path that was verified remotely, which is an argument, not a run
 - [x] Upstream plz WaitForPackage race (found 2026-08): a lost-wakeup
       TOCTOU on `packageWaits` in src/core/state.go hangs builds when many
-      packages concurrently subinclude the plugin's build_defs — all plz
+      packages concurrently subinclude the plugin's build_defs. All plz
       versions incl. master. Reproduced (1/12 cold builds on a 40-package
       consumer), root-caused, three-line AddOrGet fix written and validated
       (0/16 with a patched plz). Our own repo dodges it via
@@ -181,7 +181,7 @@ binary-link time.
       from a crate that cannot be built as asked. It settled sqlx-postgres
       (cargo fails the same way), derive_more and moka (features must be
       chosen), and four -sys crates blocked on missing system packages
-- [ ] Differential testing at rule level: cargo resolution as an oracle — pick
+- [ ] Differential testing at rule level: cargo resolution as an oracle. Pick
       real-world repos, resolve with cargo and with us, diff. Lives in a
       separate corpus repo (rust-rules-corpus), not here; run several repos
       and expand over time
@@ -240,178 +240,7 @@ binary-link time.
       overrides (done via download=), env injection for build scripts
 
 ### Explicit non-goals (decided, revisit only on demand)
-- [x] rust-analyzer / `rust-project.json` — shipped. The account of what it
-      does, the numbers it was measured at and what it does not cover are in
-      the rust-analyzer entry in the later Track 2 log.
-
-      The standard library is declared through `sysroot_project`, a nested
-      project rust-analyzer resolves relative to `sysroot_src`. The two
-      obvious alternatives both fail, and neither says why:
-      * listing core and std among the ordinary crates leaves them crates
-        that merely happen to be called core and std - lang items attach only
-        to the crate rust-analyzer believes *is* the sysroot, so `Sized` is
-        unsatisfied for `char` and `Iterator` has no impls, while every
-        import and macro around them resolves
-      * letting it discover them runs `cargo metadata` over the stdlib
-        sources with a nightly-only `-Z` flag against whatever cargo is on
-        PATH, which is ambient tooling and fails on a stable cargo
-
-      Describing it is necessary but not sufficient: std is not
-      self-contained, and the crates it is built from have to be described
-      with it - see the hashbrown finding in the later entry.
-
-      Measured with the version-matched analyzer. An analyzer older than the
-      toolchain reports success by failing to load the sysroot at all, which
-      is how an earlier attempt was recorded as clean when it was not.
-- [ ] Nightly / channel toolchains policy
-
-### Build speed
-- [x] rmeta pipelining via the rules_rust two-action scheme: each crate
-      splits into a `_X#rmeta` metadata compile (the full command, cut off
-      the moment rustc reports the rmeta artifact — a plain --emit=metadata
-      rmeta lacks the MIR dependents need) that dependents' compiles hang
-      off, a `_X#link` full compile in parallel, and a public filegroup
-      that stages transitive rlibs for binary links. First-party routes
-      via provides/requires ('rust_rmeta'); subrepos wire twins explicitly.
-      Opt-in via PipelinedCompilation (on in this repo, off by default).
-      Side effect: all compiles now pass --remap-path-prefix=$CWD= (twins
-      must hash identically across sandboxes), so artifacts are
-      path-independent — better remote cache portability for free
-
-### Tooling rules
-- [x] `rust_clippy` (clippy-driver from the dist, copied next to rustc for
-      its librustc_driver RUNPATH; metadata-only compile through it, -D
-      warnings by default so findings fail the build; ClippyTool knob)
-- [x] rustfmt exposure (toolchain_rustfmt) + `rust_fmt_test` check rule
-      (RustfmtTool knob)
-- [x] `rust_doc` (rustdoc HTML via the test wrapper's --externs-from-cwd
-      dep resolution)
-- [x] Coverage: `-C instrument-coverage` wired into `plz cover` / llvm-cov
-      (profraw → llvm-profdata/llvm-cov → per-file line coverage; paths
-      remapped to repo-relative; consumers add `.rs` to `[cover]
-      FileExtension`. Note: rust_test routes sources through a filegroup
-      dep, not srcs — plz excludes test-target srcs from coverage reports)
-
-### Hardening
-- [x] Remote execution: verified against a real cluster by the labs pilot
-      (1461 build tasks, 525 third-party crates, CI green). Six bugs fixed,
-      all of one shape — an action assuming the environment around it rather
-      than naming what it needs, because a worker stages only what is named:
-      subrepo configs carrying cross-repo labels, the tool default resolving
-      into the consuming repo, a second toolchain download, Please crashing
-      on a subrepo with no remote tree (mitigated by building crate subrepos
-      locally, fixed upstream in thought-machine/please#3577), rustc's
-      driver library unstaged for every compile, and copies into a nested
-      output directory that does not exist yet
-- [ ] Three paths remain **expected but not demonstrated** under remote
-      execution, because the reference consumer cannot reach them: the test
-      wrapper's use of `$RESULTS_FILE` and its coverage-profile directory
-      (its Rust targets live under an `experimentaldir`, excluded from its
-      CI's affected-target queries, so no Rust test has ever run remotely),
-      rustdoc staging its driver library (no doc targets there), and the
-      coverage tools staging libLLVM (no coverage step). Reasoning says they
-      are fine and an audit of the wrapper found nothing; an audit also
-      missed the compile-action instance before v0.4.5, so treat these as
-      unverified. Pointing a remote executor at them, in that order, closes
-      it; asked of the labs pilot on 2026-08-17. The entry-point toolchain
-      makes the rustdoc and llvm cases structurally the same as the compile
-      path that was verified remotely, which is an argument, not a run
-- [x] Upstream plz WaitForPackage race (found 2026-08): a lost-wakeup
-      TOCTOU on `packageWaits` in src/core/state.go hangs builds when many
-      packages concurrently subinclude the plugin's build_defs — all plz
-      versions incl. master. Reproduced (1/12 cold builds on a 40-package
-      consumer), root-caused, three-line AddOrGet fix written and validated
-      (0/16 with a patched plz). Our own repo dodges it via
-      preloadbuilddefs. Fix + regression test submitted upstream as
-      thought-machine/please#3576 and **merged**; until it lands in a
-      released plz, large plugin consumers can rarely hit a wedged parse
-- [ ] Remote execution audit (absolute-path canonicalization, cwd walks)
-- [x] Scale test: the corpus graph is 1,102 crates through
-      sync/resolve/build
-- [x] Subrepo name collision, reproduced and fixed (2026-08). plz derives
-      subrepo names from package path + name (`filepath.Join(pkg.Name,
-      name)` in its subrepo builtin) with no qualification by the declaring
-      repo, so a plugin's `third_party/rust/itoa` and a consumer's are one
-      global name. This plugin now keeps its own crates in
-      `third_party/crates`, and `rust_repo` derives both `third_party_path`
-      and `lock` from the package the declarations live in, so relocating
-      them is all it takes. A consumer building its own `itoa` alongside the
-      plugin's tool target is now a regression test. go-rules shares the
-      naming but is never parsed by consumers, so it has not had to solve it
-- [x] Shipped config must not carry dev assumptions: plugin_repo ships this
-      repo's .plzconfig, so `[Parse]` preloads became requirements on every
-      consumer that parsed a plugin package (proto, shell and python plugins
-      declared). Preloads removed and our own BUILD files subinclude
-      explicitly, matching go-rules, whose config has no [Parse] section
-
-## Track 2: Cargo parity (log, continued)
-
-### Resolver
-- [x] Differential testing: `scripts/differential.sh` in the corpus puts the
-      same request to cargo, which is what tells a bug in these rules apart
-      from a crate that cannot be built as asked. It settled sqlx-postgres
-      (cargo fails the same way), derive_more and moka (features must be
-      chosen), and four -sys crates blocked on missing system packages
-- [ ] Differential testing at rule level: cargo resolution as an oracle — pick
-      real-world repos, resolve with cargo and with us, diff. Lives in a
-      separate corpus repo (rust-rules-corpus), not here; run several repos
-      and expand over time
-- [x] PubGrub backtracking, via the pubgrub crate (proven at scale by uv).
-      Each (crate, compatibility bucket) is a package, so incompatible
-      majors coexist as cargo allows; a requirement spanning several buckets
-      becomes a proxy package whose versions are the candidate buckets, so
-      the bucket choice is itself backtrackable. Declared versions are pins
-      (preferences), not requirements, so an unrelated `--add` never churns
-      the graph and no-op adds stay offline-safe; same-bucket changes upgrade
-      a declaration in place instead of duplicating it. `--greedy` keeps the
-      old walk. Neither go-rules (Go's MVS needs no backtracking) nor
-      rules_rust (delegates to cargo) has an equivalent, and cargo itself
-      uses a bespoke solver
-- [x] MSRV-aware resolution: releases requiring a newer rustc than the
-      declared `rust_toolchain` are filtered out (cargo >=1.84 semantics),
-      relaxing with a warning if a package would otherwise be unsolvable.
-      `--ignore-msrv` opts out. Verified end to end: clap resolves to the
-      4.5 line on rustc 1.97 and to 4.0.32 with the older dependency stack
-      on rustc 1.63
-- [ ] Multi-platform lock entries (per-triple resolution outputs). The
-      declaration set already covers every platform in `--targets`; what is
-      missing is carrying more than one triple's resolved entries in the
-      lock, so a build for another platform reads rather than re-solves
-
-### Dependency management
-- [ ] `sync --upgrade` (`cargo update` parity: bump all to latest compatible)
-- [x] `lock --add crate@req --features a,b` + auto-fetch of newly-activated
-      optional deps: resolution reports what it needed but could not find,
-      and lock re-solves to declare it (bounded loop). No more manual
-      matching-version adds
-- [ ] Generic git fetcher (gitlab/self-hosted; github archive URLs work)
-- On-demand only (decided 2026-08): private/alternative registries and
-  registry auth. crates.io is effectively universal; git forks and
-  download= overrides cover the common private-code cases
-
-### Build fidelity
-- [x] Profiles: opt-level, lto, codegen-units, panic, strip and
-      debug-assertions via plugin config, mapped onto plz's build configs.
-      Per-dep overrides remain open (rarely used; cargo's own
-      `[profile.*.package]`)
-- [ ] `cargo bench` profile semantics for rust_benchmark
-- [ ] Build-script env completeness audit against cargo docs (rerun as cargo
-      versions land; last audit 2026-08 caught error=, rustc-flags,
-      CARGO_CRATE_NAME et al.)
-
-### Ecosystem burn-down
-- [x] Crate corpus: 240 deliberately awkward crates, 1,102 in the graph,
-      all building. Chosen by what predicts trouble (links, build deps,
-      platform-gated deps, feature and optional-dep counts, live majors)
-      rather than by download count, and each drop verified against cargo
-      before dropping. 19 bugs found, none of which had appeared in this
-      repo's own ~190 crates. Lives in the private becomeliminal/rust-corpus.
-      Still wanted: running it in CI, and a public pass-rate
-- [ ] Per-crate escape hatches: patches (arg exists, unexercised), source
-      overrides (done via download=), env injection for build scripts
-
-### Explicit non-goals (decided, revisit only on demand)
-- [x] rust-analyzer / `rust-project.json` — **shipped 2026-08-19**, no
+- [x] rust-analyzer / `rust-project.json`: **shipped 2026-08-19**, no
       longer a non-goal. Declare `rust_project` in the repo root BUILD, then
       `plz run //:rust-project`: it queries the build graph for every crate
       in the repo, joins them to the lock, and writes the file at the root.
@@ -419,12 +248,12 @@ binary-link time.
       monorepo whose Rust lives in one subtree.
 
       Measured with the version-matched analyzer from the dist tarball
-      (`rust-analyzer-preview/bin`, 1.97.1) over this repo — 23 first-party
+      (`rust-analyzer-preview/bin`, 1.97.1) over this repo: 23 first-party
       crates, 219 in total. `analysis-stats` infers 107,105 expressions with
       60 unknown (0%), 0 panics, 0 type mismatches. `diagnostics` reports 27,
       and what they are is known:
       * 26 are `#[derive(Deserialize)]` lines. rust-analyzer cannot infer
-        inside that expansion — `#[derive(Serialize)]` and `#[derive(Clone)]`
+        inside that expansion. `#[derive(Serialize)]` and `#[derive(Clone)]`
         on the same struct are clean, which is what says it is the analyzer
         rather than the crate graph. Minimal repro: a two-field struct
         deriving Deserialize, in a project file with nothing else in it
@@ -433,7 +262,7 @@ binary-link time.
         resolve to a generated file outside the source tree
 
       Three bugs the measurement found, all fixed:
-      * every `#[cfg(test)]` module in the repo was grey dead text — 25 of
+      * every `#[cfg(test)]` module in the repo was grey dead text, 25 of
         them. First-party crates now carry `cfg = ["test"]`, which is what
         rust-analyzer does under cargo (`cargo.unsetTest` defaults to
         `["core"]`). It also settles a collision: a rust_library and the
@@ -443,12 +272,28 @@ binary-link time.
         fragment now carries the crate's manifest and the tool reads
         `CARGO_PKG_*` from it, the same as a compile does
       * **`HashMap::new()` did not infer anywhere**, in ordinary first-party
-        code — 13 of what were then 41 errors. std is not self-contained:
+        code, 13 of what were then 41 errors. std is not self-contained:
         `std::collections::HashMap` wraps hashbrown's, and the sysroot was
         described as core/alloc/std alone. The stdlib's own dependency graph
-        is now read out of `rust-src` — the manifests, and the vendored
-        sources beside them — rather than hardcoded, including optional deps
+        is now read out of `rust-src`, from the manifests and the vendored
+        sources beside them, rather than hardcoded, including optional deps
         that a feature turns on, which is the only way hashbrown reaches core
+
+      The standard library is declared through `sysroot_project`, a nested
+      project rust-analyzer resolves relative to `sysroot_src`. The two
+      obvious alternatives both fail, and neither says why:
+      * listing core and std among the ordinary crates leaves them crates
+        that merely happen to be called core and std. Lang items attach only
+        to the crate rust-analyzer believes *is* the sysroot, so `Sized` is
+        unsatisfied for `char` and `Iterator` has no impls, while every
+        import and macro around them resolves
+      * letting it discover them runs `cargo metadata` over the stdlib
+        sources with a nightly-only `-Z` flag against whatever cargo is on
+        PATH, which is ambient tooling and fails on a stable cargo
+
+      Measured with the version-matched analyzer. An analyzer older than the
+      toolchain reports success by failing to load the sysroot at all, which
+      is how an earlier attempt was recorded as clean when it was not.
 
       Environment requirements:
       * **the editor needs the rust-analyzer extension installed.** Nothing
@@ -460,8 +305,8 @@ binary-link time.
       * go-to-definition into std needs `rust_toolchain(src_hash = ...)`,
         which fetches `rust-src`. A repo that never builds
         `<toolchain>_sysroot_src` never downloads it
-      * `sysroot` wants a rustup-shaped root — `bin/rustc` beside
-        `lib/rustlib` — which is `<toolchain>_rustc`, not
+      * `sysroot` wants a rustup-shaped root, `bin/rustc` beside
+        `lib/rustlib`, which is `<toolchain>_rustc`, not
         `<toolchain>_sysroot`
       * the CLI does not read the proc-macro server from the project file; it
         takes `--proc-macro-srv`, and needs `LD_LIBRARY_PATH` set to the
@@ -491,7 +336,7 @@ binary-link time.
       compiling the graph for.
 
       Not covered, in rough order of how much it would be missed:
-      * generated sources — the bindgen case above
+      * generated sources, the bindgen case above
       * one lock per project file. A repo with several `rust_resolve` targets
         can join only one, because each lock has its own `third_party_dir`.
         A dep resolving to no lock is now reported by name rather than
@@ -500,5 +345,5 @@ binary-link time.
 - `cargo publish`
 - rustc incremental compilation, in any mode (decided 2026-08: crate
   splitting + plz caching is the model; cross-machine cached builds likely
-  beat cargo's warm incremental in practice anyway — the benchmark harness
+  beat cargo's warm incremental in practice anyway. The benchmark harness
   will settle it)

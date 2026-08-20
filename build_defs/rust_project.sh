@@ -8,6 +8,21 @@
 # read as syntax.
 set -eu
 
+# Whatever plz invoked this, rather than one on PATH. A repo drives Please
+# through ./pleasew and a CI runner has no `plz` at all, so hardcoding it
+# meant discovery failed there with "no Rust crates found" - true, and not
+# the reason.
+if [ -z "${PLZ:-}" ]; then
+    if command -v plz >/dev/null 2>&1; then
+        PLZ=plz
+    elif [ -x ./pleasew ]; then
+        PLZ=./pleasew
+    else
+        echo "rust_project: no plz on PATH and no ./pleasew; set PLZ" >&2
+        exit 1
+    fi
+fi
+
 # Two ways in. Run by hand it writes a file; run by rust-analyzer through
 # `workspace.discoverConfig` it speaks the discover protocol on stdout - JSON
 # objects, one per line - so the editor asks for the project itself and nobody
@@ -19,7 +34,7 @@ if [ "${1:-}" = "--discover" ]; then
     shift
 fi
 
-cd "`plz query reporoot`"
+cd "`"$PLZ" query reporoot`"
 
 # Progress, in whichever form the caller understands. Messages are kept free of
 # quotes and backslashes so that this needs no JSON escaping.
@@ -95,7 +110,7 @@ sweep() {
             else
                 sweep_pat="$sweep_prefix..."
             fi
-            if sweep_out=`plz query alltargets "$sweep_pat" --include rust_ide --hidden 2>/dev/null`; then
+            if sweep_out=`"$PLZ" query alltargets "$sweep_pat" --include rust_ide --hidden 2>/dev/null`; then
                 if [ -n "$sweep_out" ]; then echo "$sweep_out" >> "$WORK/found"; fi
                 continue
             fi
@@ -146,29 +161,29 @@ fi
 say "describing `echo $FRAGS | wc -w` crates"
 # The toolchain too: resolving where it lands is not the same as it being
 # there, and a sysroot_src that was never built is a std with no sources.
-plz build $TOOL_LABEL $LOCK_LABEL $SYSROOT_TARGET $SYSROOT_SRC_TARGET $FRAGS >/dev/null
-TOOL=`plz query outputs $TOOL_LABEL`
+"$PLZ" build $TOOL_LABEL $LOCK_LABEL $SYSROOT_TARGET $SYSROOT_SRC_TARGET $FRAGS >/dev/null
+TOOL=`"$PLZ" query outputs $TOOL_LABEL`
 # The toolchain is wherever whoever declared it put it, so ask rather than
 # assume. An explicit sysroot in the rule wins and skips this.
 if [ -z "$SYSROOT" ] && [ -n "$SYSROOT_TARGET" ]; then
-    SYSROOT=`plz query outputs "$SYSROOT_TARGET" 2>/dev/null | head -1` || SYSROOT=""
+    SYSROOT=`"$PLZ" query outputs "$SYSROOT_TARGET" 2>/dev/null | head -1` || SYSROOT=""
 fi
 if [ -z "$SYSROOT_SRC" ] && [ -n "$SYSROOT_SRC_TARGET" ]; then
-    SYSROOT_SRC=`plz query outputs "$SYSROOT_SRC_TARGET" 2>/dev/null | head -1` || SYSROOT_SRC=""
+    SYSROOT_SRC=`"$PLZ" query outputs "$SYSROOT_SRC_TARGET" 2>/dev/null | head -1` || SYSROOT_SRC=""
 fi
 if [ -z "$SYSROOT" ]; then
     echo "$NAME: could not locate the toolchain, so rust-analyzer will have no std" >&2
 fi
 LOCK_ARG=""
 if [ -n "$LOCK_LABEL" ]; then
-    LOCK_ARG="--lock `plz query outputs $LOCK_LABEL`"
+    LOCK_ARG="--lock `"$PLZ" query outputs $LOCK_LABEL`"
 fi
-FILES=`plz query outputs $FRAGS`
+FILES=`"$PLZ" query outputs $FRAGS`
 
 # Subrepos. Plugin ones plz already lists, so they need no naming; anything
 # brought in another way was named in `subrepos`. Third-party crates come from
 # the lock and emit no fragments, so a sweep cannot describe one twice.
-plz query config 2>/dev/null | awk '
+"$PLZ" query config 2>/dev/null | awk '
     /^\[/ { name = "" }
     /^\[plugin "/ { name = $0; sub(/^\[plugin "/, "", name); sub(/"\]$/, "", name) }
     /^target = / { if (name != "") { print name, $3; name = "" } }
@@ -182,7 +197,7 @@ while read -r sub target; do
     # what a descent walks.
     root=""
     if [ -n "${target:-}" ]; then
-        root=`plz query outputs "$target" 2>/dev/null | head -1` || root=""
+        root=`"$PLZ" query outputs "$target" 2>/dev/null | head -1` || root=""
     fi
     # Without knowing where the subrepo is, its paths cannot be rebased and
     # every crate in it would point at a file that is not there.
@@ -207,8 +222,8 @@ while read -r sub target; do
         # itself for its own tests does - returns host labels. Describing those
         # again is every crate here twice.
         case "$frag" in ///*) ;; *) continue ;; esac
-        plz build "$frag" >/dev/null 2>&1 || continue
-        json=`plz query outputs "$frag" 2>/dev/null | head -1` || continue
+        "$PLZ" build "$frag" >/dev/null 2>&1 || continue
+        json=`"$PLZ" query outputs "$frag" 2>/dev/null | head -1` || continue
         # Everything the fragment names is relative to the subrepo, and $root
         # is where that subrepo is. plz reports only *this* repo's files as a
         # target's inputs, so asking it where the source is does not work
@@ -252,7 +267,7 @@ if [ -n "$LOCK_LABEL" ]; then
         say "building `wc -l < "$WORK/missing.u"` crates the project points at"
         # One that will not build is not fatal: everything else still resolves.
         # shellcheck disable=SC2046
-        plz build $(tr '\n' ' ' < "$WORK/missing.u") >/dev/null 2>&1 || true
+        "$PLZ" build $(tr '\n' ' ' < "$WORK/missing.u") >/dev/null 2>&1 || true
         # Still absent after building means it is never coming - a crate whose
         # recorded root module is not the file it ships, which is a lock to
         # fix rather than a build to retry. Said once, rather than retried
