@@ -10,41 +10,64 @@ Every number is reproducible with `scripts/benchmark.sh`. Medians of 3 runs.
 
 ## Results
 
+Measured 2026-08-20 at v0.7.1, medians of three, on an idle machine.
+
+### Subject 1: please_rust, 12,440 lines, ~45 registry crates
+
 | scenario | cargo | plz |
 |---|---|---|
-| cold build (all deps + tool) | 15.10s | **8.76s** |
-| cold build, `CARGO_INCREMENTAL=0` | 16.83s | n/a |
-| null rebuild (nothing changed) | **0.05s** | 0.33s |
-| one-file edit, rebuild | **0.54s** | 6.78s |
-| one-file edit, run test suite | **0.92s** | 8.24s |
-| test rerun, nothing changed | 0.30s | 0.37s |
+| cold build (all deps + tool) | 9.27s | **6.65s** |
+| cold build, `CARGO_INCREMENTAL=0` | 8.68s | n/a |
+| cold build, generation cached | n/a | 6.81s |
+| null rebuild (nothing changed) | **0.03s** | 0.19s |
+| one-file edit, rebuild | **0.52s** | 5.36s |
+| one-file edit, run test suite | **0.79s** | 6.54s |
+| test rerun, nothing changed | 0.22s | **0.19s** |
+
+### Subject 2: a generated 40-crate workspace
+
+| scenario | cargo | plz |
+|---|---|---|
+| cold build all | **0.50s** | 1.95s |
+| cold build all, no pipelining | n/a | 1.92s |
+| null rebuild | **0.02s** | 0.16s |
+| leaf edit, run all tests | 1.22s | **0.31s** |
 
 Machine: AMD Ryzen AI 9 HX 370, 24 threads, linux-amd64.
 Toolchain: rustc 1.97.1 for both sides.
 
-**Measured 2026-08-16, at 8c8110c.** Seventeen commits since then touch how
-much a compile stages or how crates are scheduled. The toolchain was split
-into separate components so a compile no longer stages the whole distribution,
-and rmeta pipelining landed. Both plausibly move the plz column and neither
-touches the cargo one, so treat the ratio as indicative until it is re-run.
-Re-measure with `scripts/benchmark.sh` on an idle machine; the numbers above
-are useless from a loaded one.
+### What changed since the previous measurement
+
+The previous numbers were taken 2026-08-16 at 8c8110c and recorded plz winning
+the cold build by 1.7x. It is **1.39x** now. The figure moved because the
+toolchain was split so a compile stages the compiler rather than the whole
+distribution, and because rmeta pipelining landed. Both columns moved: cargo's
+cold build also came down, from 15.10s to 9.27s, which is why the ratio
+narrowed rather than widened.
+
+Two results reversed. plz now wins the test rerun rather than losing it, and
+on the 40-crate workspace plz wins "edit a leaf, run every test" by 3.9x while
+losing the cold build, which is the clearest illustration of where each system
+spends its advantage.
 
 ## Reading the numbers honestly
 
-**plz wins the cold build ~1.7x**, and its number *includes* work cargo
-does not do at build time: dependency resolution and per-crate BUILD
-generation run inside the build graph (cargo precomputes resolution into
-Cargo.lock). Wiping that generated state too barely moves the needle
-(8.76s vs 8.85s with it cached): generation overlaps with compilation.
-The gap is not rustc doing less work, it is scheduling. It is also not
-cargo's incremental bookkeeping: turning incremental off makes cargo's
-cold build no faster (row 2). Part of the difference is profile defaults
-(cargo's dev profile uses 256 codegen units per crate against rustc's
-default 16), part is cargo's fingerprinting and build-script orchestration
-between compiles.
+**plz wins the cold build 1.39x**, and its number *includes* work cargo does
+not do at build time: dependency resolution and per-crate BUILD generation run
+inside the build graph, where cargo precomputes resolution into Cargo.lock.
+Wiping that generated state so it re-runs barely moves the result, 6.65s
+against 6.81s cached, which is within the noise of three runs: generation
+overlaps with compilation.
 
-**cargo wins the single-crate edit loop ~12x.** rustc's incremental cache
+The gap is not rustc doing less work, it is scheduling. Turning cargo's
+incremental bookkeeping off makes its cold build slightly faster, 8.68s
+against 9.27s, so incremental is a small cost at cold-build time rather than
+the explanation. Part of the remaining difference is profile defaults, since
+cargo's dev profile uses 256 codegen units per crate against rustc's default
+16, and part is cargo's fingerprinting and build-script orchestration between
+compiles.
+
+**cargo wins the single-crate edit loop ~10x.** rustc's incremental cache
 recompiles only what changed inside a crate; plz recompiles the whole
 crate. This is a deliberate trade. Intra-crate incremental state is
 machine-local and unreproducible, and caching it would break hermeticity.

@@ -554,11 +554,15 @@ FileExtension = .rs
 
 ## General notes
 Measured against cargo building the identical project with the identical
-rustc, plz is ~1.7x faster on cold builds and caches test results cargo
-always re-runs; cargo keeps a decisive edge on single-crate edit loops.
+rustc, plz builds cold 1.39x faster and caches test results cargo always
+re-runs; cargo keeps a decisive edge on single-crate edit loops.
 The full numbers, methodology and honest caveats are in
 [docs/BENCHMARKS.md](docs/BENCHMARKS.md), reproducible via
 `scripts/benchmark.sh`.
+
+[docs/COMPARISON.md](docs/COMPARISON.md) sets every feature against Bazel's
+rules_rust and against Cargo, marked supported, partial or not supported, with
+an issue linked for each gap.
 
 Hit a confusing failure? [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
 lists the real messages this plugin produces, what causes each, and what to

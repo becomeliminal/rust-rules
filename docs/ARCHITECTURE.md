@@ -188,6 +188,97 @@ applies to the outer one only and the inner build silently uses whatever the
 config names. `PLZ_OVERRIDES` in the environment does carry through. Anything
 that must hold across a nested invocation belongs in `.plzconfig`.
 
+## What went wrong, and what it taught us
+
+Findings that shaped the design. Kept because each one cost real time and none
+of them is obvious from reading the code.
+
+### A large graph breaks things a small one cannot
+
+A 1,102-crate corpus found twenty bugs, and not one had appeared in this
+repo's own ~190 crates. They group by the mechanism that hid them:
+
+- **Two versions of one crate.** Externconfig filenames collided, so syn 2 and
+  syn 3 both wrote `syn.externconfig` and one overwrote the other. Every input
+  is staged flat, so this needs two live majors to appear at all.
+- **Package name is not crate name.** A dep guessed the crate from its label,
+  so rustls-webpki, md-5 and sha-1 resolved to nothing. rustc falls back to
+  searching `-L` and only objects when a second version is reachable, which is
+  why it stayed quiet.
+- **Duality is contagious.** Sharing one artifact between the host and target
+  unit is sound only if everything it links is shared too. `quote` matched in
+  both units so it was shared, `proc-macro2` did not, and the shared `quote`
+  embedded the wrong one. Needs a proc macro whose own dependencies differ per
+  unit.
+- **Feature resolution.** Optional deps did not enable their own feature; an
+  explicit feature named after an optional dep was skipped; `[lib] name` was
+  ignored.
+- **What a compile stages.** Build scripts could not see files beside them,
+  compiles guessed at what a crate reads, and shaderc-sys vendors ~5,000 files
+  of glslang and SPIRV-Tools next to its build script, which is past the exec
+  argument limit.
+
+The lesson generalises past Rust: a test suite covers the mechanisms it can
+reach, and scale is a mechanism.
+
+### A remote worker stages only what an action names
+
+Every remote-execution failure found by the labs pilot was one shape, an
+action assuming the environment around it rather than naming what it needs:
+subrepo configs carrying cross-repo labels, the tool default resolving into
+the consuming repo, a second toolchain download, Please crashing on a subrepo
+with no remote tree, rustc's driver library unstaged for every compile, and
+copies into a nested output directory that does not exist yet.
+
+Two further constraints came out of the same work and shape the toolchain
+layout. A binary and the libraries beside it never separate, because rustc
+resolves `librustc_driver` through `../lib` relative to itself, so
+`toolchain_rustc` holds `bin` and `lib` together. And a non-empty directory
+cannot be an entry point: Please validates entry points by membership in the
+flattened action outputs, and a directory's own path is never a key there, so
+a sysroot has to be a whole output rather than a path inside one. Locally both
+mistakes are invisible, because the whole tree is already on disk.
+
+### The standard library is not self-contained
+
+Describing the sysroot as core, alloc and std alone leaves `HashMap::new()`
+uninferable in every crate, because `std::collections::HashMap` wraps
+hashbrown's. The stdlib's own dependency graph is read out of `rust-src`, from
+the manifests and the vendored sources beside them, including optional deps
+that a feature turns on, which is the only route by which hashbrown reaches
+core.
+
+Declaring it at all has one correct form, `sysroot_project`, and both obvious
+alternatives fail silently. Listing core and std among the ordinary crates
+leaves them crates that merely happen to be called core and std: lang items
+attach only to the crate rust-analyzer believes *is* the sysroot, so `Sized`
+is unsatisfied for `char` while every import around it resolves. Letting
+rust-analyzer discover them runs `cargo metadata` over the stdlib sources with
+a nightly-only flag against whatever cargo is on PATH.
+
+### Please's namespaces are global
+
+Subrepo names come from package path plus name with nothing identifying the
+declaring repo, so a plugin's `third_party/rust/serde` and a consumer's are
+one name. This plugin keeps its crates in `third_party/crates` for that
+reason. Plugin names are a second global namespace, separate from the first,
+so a subrepo declaring a plugin its consumer also declares aborts the parse.
+
+Two upstream fixes came out of this work: thought-machine/please#3576, a
+lost-wakeup TOCTOU on `packageWaits` that hangs builds when many packages
+concurrently subinclude a plugin's build_defs, reproduced at 1 in 12 cold
+builds and merged; and #3577, Please crashing on a subrepo with no remote
+tree.
+
+### Measure with the matching version
+
+rust-analyzer 0.3.2264 reported zero diagnostics against a 1.97.1 toolchain
+because it could not load the sysroot at all, and said so about its
+proc-macro server. That was recorded as clean once. The version-matched
+analyzer ships in the dist tarball. The current baseline, against which a
+regression would show, is 107,105 expressions inferred with 60 unknown, 0
+panics and 0 type mismatches over this repo.
+
 ## Status / known gaps
 
 Audited against cargo's documented build-script and feature contracts and
