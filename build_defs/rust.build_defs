@@ -1337,7 +1337,10 @@ def rust_repo(
         install: Targets to export (defaults to [crate]). Only used if name is set.
         deps: Additional dependencies not in Cargo.toml.
         hashes: Optional hashes to verify the download.
-        patch: Patch files to apply.
+        patch: Patch files applied to the crate after it is unpacked and
+               before its BUILD files are generated, so generation sees
+               the patched manifest. Applied with `patch -p1` from the
+               crate root, the same as go_repo does.
         visibility: Visibility for the install target.
         third_party_path: Where subrepos are placed. Defaults to the package
                           these declarations live in, which is what keeps
@@ -1470,7 +1473,14 @@ def rust_repo(
     tool_ref = _subrepo_ref(CONFIG.RUST.PLEASE_RUST_TOOL)
     rustc_ref = _subrepo_ref(CONFIG.RUST.RUSTC)
     sysroot_ref = _subrepo_ref(CONFIG.RUST.SYSROOT)
-    cmds = [
+    cmds = []
+    if patch:
+        # Before anything reads the tree: a patch can change Cargo.toml, and
+        # generation derives the whole build file from it. -p1 and the crate
+        # root as cwd, matching go_repo, so a patch made against the crate's
+        # own source applies unchanged.
+        cmds += ['for p in $SRCS_PATCH; do patch -d $SRCS_CRATE -p1 < "$TMP_DIR/$p"; done']
+    cmds += [
         # Remove any existing BUILD files or plzconfig
         "rm -rf $SRCS_CRATE/.plzconfig",
         # -type f so a crate shipping a build/ directory survives this on a
@@ -1486,6 +1496,8 @@ def rust_repo(
     srcs = {
         "crate": [download],
     }
+    if patch:
+        srcs["patch"] = patch
     if lock:
         srcs["lock"] = [lock]
 
