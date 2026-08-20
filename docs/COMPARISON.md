@@ -66,10 +66,13 @@ rather than by release:
   [#31](https://github.com/becomeliminal/rust-rules/issues/31) corpus in CI,
   [#32](https://github.com/becomeliminal/rust-rules/issues/32) differential testing,
   [#33](https://github.com/becomeliminal/rust-rules/issues/33) build-script env audit
-- **Decided against:**
+- **No consumer yet, so nothing has been built:**
   [#34](https://github.com/becomeliminal/rust-rules/issues/34) private registries,
   [#35](https://github.com/becomeliminal/rust-rules/issues/35) hermetic C toolchain,
-  [#36](https://github.com/becomeliminal/rust-rules/issues/36) Windows
+  [#36](https://github.com/becomeliminal/rust-rules/issues/36) Windows,
+  [#37](https://github.com/becomeliminal/rust-rules/issues/37) third-party test suites,
+  [#38](https://github.com/becomeliminal/rust-rules/issues/38) cargo publish,
+  [#39](https://github.com/becomeliminal/rust-rules/issues/39) rustc incremental
 
 
 ## Dependency resolution
