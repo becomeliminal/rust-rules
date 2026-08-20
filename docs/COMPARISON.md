@@ -171,4 +171,6 @@ rather than by release:
 | **Refreshes without being asked**<br>Adding a crate updates the editor | **partial**. Watches the root BUILD, nested needs a re-run | **no**. Re-run the generator | **yes**. Native |
 | **Standard library go-to-definition**<br>Stepping into std | **yes**. sysroot_project carrying the stdlib's own dependency graph | **yes**. Supported | **yes**. Native |
 | **Proc macro expansion in the editor**<br>Derives resolving | **yes**. Dylibs built and named for the analyzer | **yes**. Supported | **yes**. Native |
+| **Generated code resolving**<br>include!(concat!(env!("OUT_DIR"), ..)) | **yes**. Absolute OUT_DIR plus the generated dir in include_dirs | **yes**. The same two, from the aspect | **yes**. Native |
+| **#[path] at a build output**<br>A module naming a generated file | **no**. Rust resolves modules relative to the file, so no project-file field redirects it | **no**. The same limit | **yes**. Native |
 | **Crates in subrepos**<br>Code intelligence for pulled-in repos | **yes**. Swept and described, never checked on save | **partial**. Workspace dependent | **no**. Not applicable |
