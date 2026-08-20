@@ -14,7 +14,7 @@ use std::process::Command;
 /// absolute path. Tries, in order: relative to the directives file itself
 /// (the normal case — the out dir is a sibling output of the same rule),
 /// then as given (absolute paths from older directive files).
-fn resolve_out_dir(recorded: &Path, buildscript: Option<&Path>) -> Option<PathBuf> {
+pub(crate) fn resolve_out_dir(recorded: &Path, buildscript: Option<&Path>) -> Option<PathBuf> {
     if let Some(bs) = buildscript {
         if let Some(parent) = bs.parent() {
             let candidate = parent.join(recorded);

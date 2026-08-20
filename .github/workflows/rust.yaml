@@ -106,6 +106,22 @@ jobs:
           names = {c["display_name"] for c in d["sysroot_project"]["crates"]}
           if "hashbrown" not in names:
               sys.exit(f"std's own dependencies are not described: {sorted(names)}")
+          # A crate whose build script generated code reaches it through
+          # include!(concat!(env!("OUT_DIR"), ..)), which needs an absolute
+          # OUT_DIR and an include_dirs entry covering it.
+          gen = [c for c in crates if "OUT_DIR" in c.get("env", {})]
+          print(f"{len(gen)} crates include from OUT_DIR")
+          if not gen:
+              sys.exit("no crate carries OUT_DIR")
+          for c in gen:
+              out = c["env"]["OUT_DIR"]
+              if not os.path.isabs(out):
+                  sys.exit(f"{c['display_name']}: OUT_DIR is not absolute: {out}")
+              if not os.path.isdir(out):
+                  sys.exit(f"{c['display_name']}: OUT_DIR does not exist: {out}")
+              dirs = [os.path.abspath(x) for x in c["source"]["include_dirs"]]
+              if os.path.abspath(out) not in dirs:
+                  sys.exit(f"{c['display_name']}: OUT_DIR is not included: {dirs}")
           PY
 
       - name: Archive logs

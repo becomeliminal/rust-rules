@@ -276,8 +276,27 @@ rust-analyzer 0.3.2264 reported zero diagnostics against a 1.97.1 toolchain
 because it could not load the sysroot at all, and said so about its
 proc-macro server. That was recorded as clean once. The version-matched
 analyzer ships in the dist tarball. The current baseline, against which a
-regression would show, is 107,105 expressions inferred with 60 unknown, 0
-panics and 0 type mismatches over this repo.
+regression would show, is 113,127 expressions inferred with 62 unknown, 0
+panics and 0 type mismatches over this repo, and four diagnostics: three in
+test/bindgen, whose module names a build output, and one clippy hint.
+
+### A wrong diagnosis, kept because the reasoning was plausible
+
+Twenty-six of those diagnostics used to sit on `#[derive(Deserialize)]` lines,
+and were recorded as rust-analyzer failing to infer inside that expansion. The
+evidence offered was that `#[derive(Serialize)]` and `#[derive(Clone)]` on the
+same struct were clean, which looked like it isolated the analyzer from the
+crate graph.
+
+It was the crate graph. proc-macro2 generates code and reaches it through
+`include!(concat!(env!("OUT_DIR"), ..))`, no crate carried `OUT_DIR`, and the
+broken include showed up downstream as failed inference in the largest derive
+expansion rather than as an error where the cause was. Serialize was clean
+because its expansion is smaller, not because the analyzer was at fault.
+
+The lesson is about the shape of the evidence rather than serde: a symptom
+that varies with the size of the thing being expanded is a symptom of
+something incomplete underneath it, not of the expander.
 
 ## Status / known gaps
 

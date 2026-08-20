@@ -183,6 +183,19 @@ struct SysrootProject {
     crates: Vec<CrateEntry>,
 }
 
+/// Which directories a crate's files live in.
+///
+/// Omitted for almost every crate, where rust-analyzer derives it from the
+/// root module's parent and is right. It is needed when a crate's sources are
+/// not all in one place: a build script writes generated code somewhere else,
+/// and rust-analyzer will not load a file from a directory the crate does not
+/// claim, however correct the path in `include!` is.
+#[derive(Serialize)]
+struct CrateSource {
+    include_dirs: Vec<String>,
+    exclude_dirs: Vec<String>,
+}
+
 #[derive(Serialize)]
 struct CrateEntry {
     display_name: String,
@@ -191,6 +204,8 @@ struct CrateEntry {
     deps: Vec<DepEntry>,
     cfg: Vec<String>,
     env: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<CrateSource>,
     is_proc_macro: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     proc_macro_dylib_path: Option<String>,
@@ -315,6 +330,7 @@ fn extend_with_sysroot_deps(
                     .map(|f| format!("feature=\"{}\"", f))
                     .collect(),
                 env: BTreeMap::new(),
+                source: None,
                 is_proc_macro: false,
                 proc_macro_dylib_path: None,
                 is_workspace_member: false,
@@ -547,6 +563,7 @@ fn describe_project(args: IdeArgs) -> Result<()> {
                 deps: Vec::new(),
                 cfg: Vec::new(),
                 env: BTreeMap::new(),
+                source: None,
                 is_proc_macro: false,
                 proc_macro_dylib_path: None,
                 is_workspace_member: false,
@@ -692,6 +709,7 @@ fn describe_project(args: IdeArgs) -> Result<()> {
                 .chain(std::iter::once("test".to_string()))
                 .collect(),
             env: first_party_env(fp),
+            source: None,
             is_proc_macro: fp.is_proc_macro,
             proc_macro_dylib_path: None,
             // This is the code being worked on, which is what the flag means:
@@ -777,6 +795,7 @@ fn placeholder(entry: &crate::resolve::LockEntry) -> CrateEntry {
         deps: Vec::new(),
         cfg: Vec::new(),
         env: BTreeMap::new(),
+        source: None,
         is_proc_macro: false,
         proc_macro_dylib_path: None,
         is_workspace_member: false,
@@ -851,6 +870,21 @@ fn describe(
         env.insert(key.to_string(), parts.next().unwrap_or("0").to_string());
     }
 
+    // A crate whose build script generated sources needs two things, and
+    // neither works alone: OUT_DIR so `include!(concat!(env!("OUT_DIR"), ..))`
+    // names the right file, and the directory claimed by the crate so
+    // rust-analyzer will load it.
+    let source = buildscript_out_dir(&dir).map(|out| {
+        // OUT_DIR absolute, because `include!` concatenates it as a raw string
+        // and resolves the result against the including file. Everything else
+        // stays repo-relative, as the rest of the file is.
+        env.insert("OUT_DIR".to_string(), out.display().to_string());
+        CrateSource {
+            include_dirs: vec![rel(&dir), under_repo(&out)],
+            exclude_dirs: Vec::new(),
+        }
+    });
+
     Ok(CrateEntry {
         display_name: ident,
         root_module: rel(&root),
@@ -862,6 +896,7 @@ fn describe(
         deps,
         cfg,
         env,
+        source,
         is_proc_macro: entry.is_proc_macro,
         proc_macro_dylib_path,
         is_workspace_member: false,
@@ -896,6 +931,39 @@ fn buildscript_cfgs(dir: &Path) -> Vec<String> {
     out
 }
 
+/// Where a crate's build script wrote its generated sources, absolute.
+///
+/// The build script file records it relative to itself. The absolute path in
+/// the comment beside it points into plz-out/tmp and is gone once the build
+/// finishes, so it is the relative one that survives.
+///
+/// Absolute because `include!(concat!(env!("OUT_DIR"), "/x.rs"))` concatenates
+/// a raw string and resolves the result against the including file. A relative
+/// OUT_DIR produces a path relative to the crate's own source directory, which
+/// is not where the generated code is.
+fn buildscript_out_dir(dir: &Path) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.extension().and_then(|s| s.to_str()) != Some("buildscript") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&p) else {
+            continue;
+        };
+        for line in text.lines() {
+            if let Some(rel) = line.strip_prefix("out-dir=") {
+                if let Some(resolved) =
+                    crate::compile::resolve_out_dir(Path::new(rel.trim()), Some(&p))
+                {
+                    return Some(resolved);
+                }
+            }
+        }
+    }
+    None
+}
+
 /// The edition a sysroot crate declares, defaulting to the current one. Only
 /// the `edition = "..."` line is wanted and a full TOML parse of the stdlib's
 /// manifests is not, so this reads the line.
@@ -922,6 +990,18 @@ fn sysroot_edition(dir: &Path) -> String {
 /// machines nor reproducible; verified that rust-analyzer accepts relative
 /// ones before choosing this.
 fn rel(p: &Path) -> String {
+    p.display().to_string()
+}
+
+/// An absolute path inside the repo, said the way the rest of the file says
+/// paths. Anything outside is left alone, since there is nothing to say it
+/// relative to.
+fn under_repo(p: &Path) -> String {
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Ok(stripped) = p.strip_prefix(&cwd) {
+            return stripped.display().to_string();
+        }
+    }
     p.display().to_string()
 }
 
@@ -1120,6 +1200,42 @@ c = ["other/thing"]
         let v: serde_json::Value = serde_json::from_str(&failed).unwrap();
         assert_eq!(v["kind"], "error");
         assert_eq!(v["error"], "no lock");
+    }
+
+    /// A build script that generated sources records where it put them, and
+    /// the crate reaches them through `include!(concat!(env!("OUT_DIR"), ..))`.
+    /// Without OUT_DIR that include resolves to nothing, and in this repo it
+    /// took 26 crates with it: proc-macro2 generates code that way, so every
+    /// `#[derive(Deserialize)]` downstream failed to infer.
+    #[test]
+    fn the_out_dir_a_build_script_wrote_to_is_read_back() {
+        let dir = std::env::temp_dir().join(format!("please_rust_outdir_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("crunchy_out")).unwrap();
+        std::fs::write(
+            dir.join("crunchy.buildscript"),
+            // The absolute path in the comment points into plz-out/tmp and is
+            // gone after the build; the relative one is what survives.
+            "# OUT_DIR=/somewhere/transient/crunchy_out
+out-dir=crunchy_out
+rustc-cfg=fake
+",
+        )
+        .unwrap();
+
+        let found = buildscript_out_dir(&dir).expect("out-dir should be read");
+        assert!(found.is_absolute(), "OUT_DIR must be absolute: {:?}", found);
+        assert!(found.ends_with("crunchy_out"), "{:?}", found);
+
+        // Reading the out dir must not disturb the cfgs beside it.
+        assert_eq!(buildscript_cfgs(&dir), vec!["fake".to_string()]);
+
+        // A crate with no build script has no out dir, rather than a wrong one.
+        let plain = dir.join("plain");
+        std::fs::create_dir_all(&plain).unwrap();
+        assert!(buildscript_out_dir(&plain).is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
