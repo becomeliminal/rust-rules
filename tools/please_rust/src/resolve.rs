@@ -85,6 +85,13 @@ pub struct LockEntry {
     pub edition: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub root_module: String,
+    /// The name the crate is imported by, when a manifest sets `[lib] name`
+    /// and it differs from the package. Recorded for the same reason as
+    /// `root_module`: generating a rust-project.json has the lock and nothing
+    /// else, and a dependent writing `use md5::` finds nothing if the package
+    /// name md-5 is used instead. Empty means the two agree.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub lib_name: String,
     /// A proc macro is a different kind of crate to rust-analyzer, and
     /// resolution already knows because it decides the host unit by it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -846,6 +853,16 @@ fn emit_entry(
             .and_then(|l| l.path.clone())
             .or_else(|| n.manifest.bin.iter().find_map(|b| b.path.clone()))
             .unwrap_or_else(|| "src/lib.rs".to_string()),
+        // Only when it says something the crate name does not, so a lock is
+        // unchanged for the crates where the two agree, which is almost all
+        // of them.
+        lib_name: n
+            .manifest
+            .lib
+            .as_ref()
+            .and_then(|l| l.name.clone())
+            .filter(|l| *l != n.crate_name.replace('-', "_"))
+            .unwrap_or_default(),
         is_proc_macro: n.is_proc_macro,
         // Set by the caller, which is what knows whether this is the entry's
         // primary unit or its _host twin.
