@@ -514,7 +514,14 @@ def _ide_fragment(name:str, crate_name:str, root:str, edition:str, features:list
     build never runs one.
     """
     pkg = package_name()
-    root_path = pkg + '/' + root if pkg else root
+    # A root can be a label rather than a file: a crate whose root module is
+    # generated, which is every crate the proto rules produce. Joining a label
+    # to the package gives service/:_widget_proto#mod_rs, which is not a path
+    # and which nothing can open. plz knows where it put the file, so ask.
+    if root.startswith(':') or root.startswith('//'):
+        root_path = '$(out_location %s)' % root
+    else:
+        root_path = pkg + '/' + root if pkg else root
     dep_json = ', '.join(['{"name": "%s", "label": "%s"}' % (
         canonicalise(d).split(':')[-1].replace('-', '_'), canonicalise(d)) for d in deps])
     feature_json = ', '.join(['"%s"' % f for f in (features or [])])

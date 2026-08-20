@@ -603,13 +603,20 @@ fn describe_project(args: IdeArgs) -> Result<()> {
         .map(|(i, (k, _))| (k.clone(), i + offset))
         .collect();
 
+    // What each crate is imported by, so a dep can be named the way the
+    // depending source writes it rather than the way the package is named.
+    let idents: BTreeMap<Key, String> = order
+        .iter()
+        .map(|(k, e)| (k.clone(), ident_of(e)))
+        .collect();
+
     // Pass two: describe each one.
     let mut skipped = Vec::new();
     // What the project will point at, and which crate has to be built for it
     // to be there.
     let mut inputs: Vec<(String, String)> = Vec::new();
     for ((subrepo, _host), entry) in &order {
-        match describe(&args.third_party_dir, subrepo, entry, &index) {
+        match describe(&args.third_party_dir, subrepo, entry, &index, &idents) {
             Ok(c) => {
                 inputs.push((subrepo.clone(), c.root_module.clone()));
                 if let Some(dylib) = &c.proc_macro_dylib_path {
@@ -662,9 +669,16 @@ fn describe_project(args: IdeArgs) -> Result<()> {
     // Keyed by label, and scoped: a subrepo's labels are relative to itself,
     // so `//foo:bar` there and `//foo:bar` here are different crates.
     let mut by_label: BTreeMap<(String, String), usize> = BTreeMap::new();
+    // What each one is imported by, for the same reason as the third-party
+    // idents: a label names a build target and source names a crate.
+    let mut ident_by_label: BTreeMap<(String, String), String> = BTreeMap::new();
     for (i, (_, fp, scope)) in first.iter().enumerate() {
         if !fp.label.is_empty() {
             by_label.insert((scope.clone(), fp.label.clone()), crates.len() + i);
+            ident_by_label.insert(
+                (scope.clone(), fp.label.clone()),
+                fp.display_name.replace('-', "_"),
+            );
         }
     }
     // A dep that resolves to nothing is dropped, and the only symptom is an
@@ -677,6 +691,13 @@ fn describe_project(args: IdeArgs) -> Result<()> {
             // A first-party dep names another fragment in the same repo;
             // anything else is a declaration in the lock.
             if let Some(i) = by_label.get(&(scope.clone(), d.label.clone())) {
+                // The dep's own name, not the label's. A generated proto
+                // crate is built by a target called _widget_proto#rust and
+                // imported as widget_proto.
+                let name = ident_by_label
+                    .get(&(scope.clone(), d.label.clone()))
+                    .cloned()
+                    .unwrap_or(name);
                 deps.push(DepEntry { krate: *i, name });
             } else if let Some(i) = label_subrepo(&d.label).and_then(|s| index.get(&(s, false))) {
                 // The crate's own name rather than the label's: a label
@@ -789,7 +810,7 @@ fn describe_project(args: IdeArgs) -> Result<()> {
 /// left of where they should.
 fn placeholder(entry: &crate::resolve::LockEntry) -> CrateEntry {
     CrateEntry {
-        display_name: entry.crate_name.replace('-', "_"),
+        display_name: ident_of(entry),
         root_module: String::new(),
         edition: "2021".to_string(),
         deps: Vec::new(),
@@ -807,6 +828,7 @@ fn describe(
     subrepo: &str,
     entry: &crate::resolve::LockEntry,
     index: &BTreeMap<Key, usize>,
+    idents: &BTreeMap<Key, String>,
 ) -> Result<CrateEntry> {
     // Everything but the build-script cfgs comes from the lock, so this works
     // inside a build sandbox where the crate sources are not staged. Reading
@@ -819,9 +841,7 @@ fn describe(
     let dir = third_party.join(subrepo);
     let root = dir.join(&entry.root_module);
 
-    // The crate name is what source imports, which is not the package name
-    // whenever a manifest sets [lib] name.
-    let ident = entry.crate_name.replace('-', "_");
+    let ident = ident_of(entry);
 
     let mut cfg: Vec<String> = entry
         .features
@@ -835,11 +855,20 @@ fn describe(
     let mut deps = Vec::new();
     for d in &entry.deps {
         let is_host = d.target_name.ends_with("_host");
-        if let Some(i) = index.get(&(d.subrepo.clone(), is_host)) {
-            deps.push(DepEntry {
-                krate: *i,
-                name: d.name.replace('-', "_"),
-            });
+        let key = (d.subrepo.clone(), is_host);
+        if let Some(i) = index.get(&key) {
+            // A dependent that renamed the crate writes the rename, and one
+            // that did not writes the crate's own name. Neither is the
+            // package name whenever a manifest sets [lib] name: the package
+            // sha-1 builds sha1, and `extern crate sha1` finds nothing if the
+            // dep is recorded as sha_1.
+            let declared = d.name.replace('-', "_");
+            let name = if declared != d.crate_name.replace('-', "_") {
+                declared
+            } else {
+                idents.get(&key).cloned().unwrap_or(declared)
+            };
+            deps.push(DepEntry { krate: *i, name });
         }
     }
 
@@ -907,6 +936,18 @@ fn describe(
 /// a crate that analyses and one that is half red. libc alone sets dozens.
 /// Already parsed and written next to the crate by `build-script`, so this
 /// reads rather than recomputes.
+/// The name source imports the crate by, which is the `[lib] name` when a
+/// manifest sets one and the package name otherwise. The compile path makes
+/// the same choice in generate.rs; these two disagreeing is what makes a
+/// crate build and not resolve.
+fn ident_of(entry: &crate::resolve::LockEntry) -> String {
+    if entry.lib_name.is_empty() {
+        entry.crate_name.replace('-', "_")
+    } else {
+        entry.lib_name.replace('-', "_")
+    }
+}
+
 fn buildscript_cfgs(dir: &Path) -> Vec<String> {
     let mut out = Vec::new();
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -1271,5 +1312,46 @@ rustc-cfg=fake
         let p = placeholder(&entry);
         assert_eq!(p.display_name, "broken_crate");
         assert!(p.root_module.is_empty());
+    }
+
+    /// A manifest that sets `[lib] name` renames the crate without renaming
+    /// the package, and source imports the lib name. The compile path has
+    /// always known this; the project file did not, so `extern crate sha1`
+    /// against the package sha-1 built and did not resolve.
+    #[test]
+    fn a_crate_is_named_the_way_source_imports_it() {
+        let package_only = crate::resolve::LockEntry {
+            crate_name: "sha-1".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(ident_of(&package_only), "sha_1");
+
+        let with_lib = crate::resolve::LockEntry {
+            crate_name: "sha-1".to_string(),
+            lib_name: "sha1".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(ident_of(&with_lib), "sha1");
+        assert_eq!(placeholder(&with_lib).display_name, "sha1");
+
+        // rustls-webpki builds webpki, and md-5 builds md5.
+        for (package, lib, want) in [
+            ("rustls-webpki", "webpki", "webpki"),
+            ("md-5", "md5", "md5"),
+            (
+                "new_debug_unreachable",
+                "debug_unreachable",
+                "debug_unreachable",
+            ),
+            // The overwhelming majority: no [lib] name, so nothing recorded.
+            ("serde", "", "serde"),
+        ] {
+            let e = crate::resolve::LockEntry {
+                crate_name: package.to_string(),
+                lib_name: lib.to_string(),
+                ..Default::default()
+            };
+            assert_eq!(ident_of(&e), want, "{}", package);
+        }
     }
 }
