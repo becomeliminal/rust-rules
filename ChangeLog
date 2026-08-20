@@ -1,3 +1,15 @@
+Version 0.7.1
+-------------
+  * rust_project finds plz the way the repo does. The discovery script called
+    `plz`, which a CI runner does not have and a repo drives through
+    ./pleasew, so project generation failed there. It resolves $PLZ, then plz
+    on PATH, then ./pleasew.
+  * The default tool download is v0.7.0 rather than v0.6.0, so a consumer on
+    defaults gets a please_rust that has the subcommands these rules call.
+  * Documentation carries the assertion and not the reasoning behind it, and
+    PARITY is no longer doubled: everything from "Build speed" onward was a
+    near-copy of the rest of the file, diverged in both directions.
+
 Version 0.7.0
 -------------
   * Editor integration. `rust_project` describes every Rust crate in the repo
