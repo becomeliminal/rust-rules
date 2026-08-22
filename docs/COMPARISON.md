@@ -48,7 +48,6 @@ rather than by release:
   [#16](https://github.com/becomeliminal/rust-rules/issues/16) musl and embedded,
   [#17](https://github.com/becomeliminal/rust-rules/issues/17) the patches argument
 - **Missing capability:**
-  [#18](https://github.com/becomeliminal/rust-rules/issues/18) editor refresh,
   [#21](https://github.com/becomeliminal/rust-rules/issues/21) git forges,
   [#22](https://github.com/becomeliminal/rust-rules/issues/22) sync --upgrade,
   [#23](https://github.com/becomeliminal/rust-rules/issues/23) cross-compiling C,
@@ -168,7 +167,7 @@ rather than by release:
 | Feature | rust-rules | rules_rust | Cargo |
 |---|---|---|---|
 | **rust-analyzer support**<br>Code intelligence at all | **yes**. Answers workspace.discoverConfig live | **yes**. Generates rust-project.json on request | **yes**. Native, cargo driven |
-| **Refreshes without being asked**<br>Adding a crate updates the editor | **partial**. Watches the root BUILD, nested needs a re-run | **no**. Re-run the generator | **yes**. Native |
+| **Refreshes without being asked**<br>Adding a crate updates the editor | **partial**. Saving any BUILD file in the editor re-discovers; a change made outside it does not | **no**. Re-run the generator | **yes**. Native |
 | **Standard library go-to-definition**<br>Stepping into std | **yes**. sysroot_project carrying the stdlib's own dependency graph | **yes**. Supported | **yes**. Native |
 | **Proc macro expansion in the editor**<br>Derives resolving | **yes**. Dylibs built and named for the analyzer | **yes**. Supported | **yes**. Native |
 | **Generated code resolving**<br>include!(concat!(env!("OUT_DIR"), ..)) | **yes**. Absolute OUT_DIR plus the generated dir in include_dirs | **yes**. The same two, from the aspect | **yes**. Native |

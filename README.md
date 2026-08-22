@@ -440,13 +440,17 @@ and point your editor at it, once:
 }
 ```
 
-That is the whole setup. rust-analyzer runs the command when it opens the
-project, and again when a watched file changes. There is no list of crates to
-maintain and no generated file to keep in step.
+That is the whole setup. rust-analyzer runs the command when it opens a Rust
+file, and again when a `filesToWatch` file is saved. There is no list of crates
+to maintain and no generated file to keep in step.
 
-`filesToWatch` entries are globs relative to the repo root, so `BUILD` watches
-the root build file. After adding a crate elsewhere, run
-`plz run //:rust-project` or restart the server.
+`filesToWatch` entries are file names, matched anywhere in the tree. `BUILD`
+covers every build file, nested ones included. Saving one in your editor
+picks up a crate added in any directory.
+
+rust-analyzer refreshes on a save from the editor, not on a change to the file
+on disk. A build file edited outside the editor needs
+`rust-analyzer: Reload Workspace`.
 
 It finds every `rust_library`, `rust_binary` and `rust_test` in the repo and
 joins them to the third-party crates in the lock. Anything the project points
