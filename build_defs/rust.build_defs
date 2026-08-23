@@ -555,7 +555,7 @@ def _sq(value:str):
     return "'" + value.replace("'", "'\\''") + "'"
 
 
-def rust_project(name:str, lock:str='', targets:list=['//...'], exclude:list=[], subrepos:list=[],
+def rust_project(name:str, lock='', targets:list=['//...'], exclude:list=[], subrepos:list=[],
                  third_party_dir:str='plz-out/gen/third_party/crates',
                  sysroot:str='', sysroot_src:str='',
                  out:str='rust-project.json', visibility:list=None):
@@ -577,8 +577,10 @@ def rust_project(name:str, lock:str='', targets:list=['//...'], exclude:list=[],
 
     Args:
         name (str): Name of the rule.
-        lock (str): The rust_resolve target whose lock describes third-party
-                    crates. Without one only first-party crates are emitted.
+        lock (str | list): The rust_resolve target whose lock describes
+                    third-party crates, or a list of them when a repo declares
+                    crates in more than one place. Without one only
+                    first-party crates are emitted.
         targets (list): Where to look for crates. The default covers the whole
                         repo, which is what a repo of one project wants. A
                         monorepo with Rust in one subtree can narrow it to
@@ -592,7 +594,10 @@ def rust_project(name:str, lock:str='', targets:list=['//...'], exclude:list=[],
                          e.g. a shared crate from a github_repo. Crates found
                          in a subrepo are described but never checked on
                          save: a subrepo is checked in its own repo.
-        third_party_dir (str): Where the generated crate subrepos land.
+        third_party_dir (str): Where the generated crate subrepos land. Used
+                               only with a single lock; with several, each
+                               lock's directory follows the package that
+                               declares its crates.
         sysroot (str): A rustup-shaped toolchain root - `bin/rustc` beside
                        `lib/rustlib`. That is the rustc component, and
                        deliberately not what `Sysroot` names: rust-analyzer
@@ -612,7 +617,8 @@ def rust_project(name:str, lock:str='', targets:list=['//...'], exclude:list=[],
     # the plugin is its own repo); canonicalise gives the label back in the
     # form a command line takes.
     tool = canonicalise(CONFIG.RUST.PLEASE_RUST_TOOL)
-    lock = canonicalise(lock) if lock else ''
+    locks = [lock] if isinstance(lock, str) else lock
+    locks = [canonicalise(l) for l in locks if l]
     # Where the toolchain lands is the toolchain's business, and it moves with
     # whoever declares it: in a consumer it is under the plugin's subrepo, not
     # this repo's third_party. Ask plz at run time rather than write a path
@@ -630,11 +636,11 @@ def rust_project(name:str, lock:str='', targets:list=['//...'], exclude:list=[],
         '#!/bin/sh',
         'NAME=%s' % _sq(name),
         'TOOL_LABEL=%s' % _sq(tool),
-        'LOCK_LABEL=%s' % _sq(lock),
+        'LOCK_LABELS=%s' % _sq(' '.join(locks)),
         'TARGETS=%s' % _sq(' '.join(targets)),
         'EXCLUDES=%s' % _sq(' '.join(exclude)),
         'SUBREPOS=%s' % _sq(' '.join(subrepos)),
-        'THIRD_PARTY_DIR=%s' % _sq(third_party_dir),
+        'THIRD_PARTY_DIR=%s' % _sq(third_party_dir if len(locks) < 2 else ''),
         'SYSROOT=%s' % _sq(sysroot),
         'SYSROOT_SRC=%s' % _sq(sysroot_src),
         'SYSROOT_TARGET=%s' % _sq('' if sysroot else rustc_target),

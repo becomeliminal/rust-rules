@@ -45,8 +45,7 @@ rather than by release:
 - **Believed to work, never demonstrated:**
   [#14](https://github.com/becomeliminal/rust-rules/issues/14) remote execution paths,
   [#15](https://github.com/becomeliminal/rust-rules/issues/15) remote execution audit,
-  [#16](https://github.com/becomeliminal/rust-rules/issues/16) musl and embedded,
-  [#17](https://github.com/becomeliminal/rust-rules/issues/17) the patches argument
+  [#16](https://github.com/becomeliminal/rust-rules/issues/16) musl and embedded
 - **Missing capability:**
   [#21](https://github.com/becomeliminal/rust-rules/issues/21) git forges,
   [#22](https://github.com/becomeliminal/rust-rules/issues/22) sync --upgrade,
@@ -58,8 +57,7 @@ rather than by release:
   [#28](https://github.com/becomeliminal/rust-rules/issues/28) bench profile,
   [#29](https://github.com/becomeliminal/rust-rules/issues/29) per-package profiles
 - **Editor gaps inside a shipped feature:**
-  [#19](https://github.com/becomeliminal/rust-rules/issues/19) generated sources,
-  [#20](https://github.com/becomeliminal/rust-rules/issues/20) one lock per project
+  [#42](https://github.com/becomeliminal/rust-rules/issues/42) a module naming a build output
 - **Evidence:**
   [#30](https://github.com/becomeliminal/rust-rules/issues/30) four-way corpus,
   [#31](https://github.com/becomeliminal/rust-rules/issues/31) corpus in CI,
@@ -86,7 +84,7 @@ rather than by release:
 | **Import an existing Cargo.lock**<br>Adopting a repo that already uses cargo | **yes**. sync --import, and --import-workspace for BUILD files too | **yes**. crate_universe consumes Cargo.toml directly | **yes**. Native |
 | **Git and fork dependencies**<br>Pinned revision instead of crates.io | **partial**. github archive URLs; other forges need download= | **yes**. Supported | **yes**. Native |
 | **Private or alternative registries**<br>Registry auth | **no**. On demand only; forks and download= cover the cases | **yes**. Via cargo | **yes**. Native |
-| **Vendored source overrides**<br>Patch or replace a crate's source | **partial**. download= overrides; patches arg exists, unexercised | **yes**. annotations and patches | **yes**. [patch] and [replace] |
+| **Vendored source overrides**<br>Patch or replace a crate's source | **yes**. download= overrides the source, patch= applies patches to it | **yes**. annotations and patches | **yes**. [patch] and [replace] |
 
 ## The Cargo build contract
 
