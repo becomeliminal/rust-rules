@@ -19,5 +19,13 @@ filegroup(
 # root. Nothing to keep in step: a crate added anywhere is in the next run.
 rust_project(
     name = "rust-project",
-    lock = "//third_party/crates:rust_lock",
+    # Every rust_resolve in the repo. The test packages declare their own so
+    # that what they are testing is isolated, and a crate that depends on one
+    # of those resolves in the editor only if its lock is here too.
+    lock = [
+        "//third_party/crates:rust_lock",
+        "//test/firstparty:firstparty_lock",
+        "//test/links:links_lock",
+        "//test/patch:patch_lock",
+    ],
 )

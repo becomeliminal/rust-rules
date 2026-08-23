@@ -519,10 +519,26 @@ rust_project(
 also declare several of these, one per subtree, each with its own `out`. Only
 the file at the repo root is the one an editor will find.
 
+A repo that declares third-party crates in more than one place passes every
+lock:
+
+```python
+rust_project(
+    name = "rust-project",
+    lock = [
+        "//third_party/crates:rust_lock",
+        "//services/payments/third_party:payments_lock",
+    ],
+)
+```
+
+Each lock's crates are found under the package that declares them. A crate
+depending on a lock that was left out is reported by name.
+
 #### When something does not resolve
 - **A third-party crate's imports do not resolve.** Its declaration is in a
   lock this project file was not given. The run names the crate and the
-  dependency.
+  dependency. Add that `rust_resolve` target to `lock`.
 - **A crate's `#[cfg(...)]` items look inactive.** Build-script cfgs come from
   what the build has produced. It corrects itself as you build.
 - **Nothing resolves, including `std`.** Set `rust_toolchain(src_hash = ...)`

@@ -3,7 +3,7 @@
 # repo and in the subrepos it pulls in, and describe them for rust-analyzer.
 #
 # The rule prepends a prelude setting NAME, TOOL_LABEL, TARGETS, EXCLUDES,
-# SUBREPOS, LOCK_LABEL, THIRD_PARTY_DIR, SYSROOT, SYSROOT_SRC and OUT_FILE.
+# SUBREPOS, LOCK_LABELS, THIRD_PARTY_DIR, SYSROOT, SYSROOT_SRC and OUT_FILE.
 # Values are never substituted into the shell text, so no path or label can be
 # read as syntax.
 set -eu
@@ -161,7 +161,7 @@ fi
 say "describing `echo $FRAGS | wc -w` crates"
 # The toolchain too: resolving where it lands is not the same as it being
 # there, and a sysroot_src that was never built is a std with no sources.
-"$PLZ" build $TOOL_LABEL $LOCK_LABEL $SYSROOT_TARGET $SYSROOT_SRC_TARGET $FRAGS >/dev/null
+"$PLZ" build $TOOL_LABEL $LOCK_LABELS $SYSROOT_TARGET $SYSROOT_SRC_TARGET $FRAGS >/dev/null
 TOOL=`"$PLZ" query outputs $TOOL_LABEL`
 # The toolchain is wherever whoever declared it put it, so ask rather than
 # assume. An explicit sysroot in the rule wins and skips this.
@@ -174,10 +174,22 @@ fi
 if [ -z "$SYSROOT" ]; then
     echo "$NAME: could not locate the toolchain, so rust-analyzer will have no std" >&2
 fi
+# One --lock per rust_resolve. Each carries the package its crates are
+# declared in, so a dep's label picks the right lock, and where that lock's
+# subrepos land. A repo with one lock and an explicit third_party_dir keeps
+# using it.
 LOCK_ARG=""
-if [ -n "$LOCK_LABEL" ]; then
-    LOCK_ARG="--lock `"$PLZ" query outputs $LOCK_LABEL`"
-fi
+LOCK_N=`echo $LOCK_LABELS | wc -w`
+for label in $LOCK_LABELS; do
+    pkg=${label%:*}
+    pkg=${pkg#//}
+    if [ "$LOCK_N" = 1 ] && [ -n "$THIRD_PARTY_DIR" ]; then
+        dir=$THIRD_PARTY_DIR
+    else
+        dir=plz-out/gen/$pkg
+    fi
+    LOCK_ARG="$LOCK_ARG --lock $pkg=$dir=`"$PLZ" query outputs $label`"
+done
 FILES=`"$PLZ" query outputs $FRAGS`
 
 # Subrepos. Plugin ones plz already lists, so they need no naming; anything
@@ -249,17 +261,16 @@ done < "$WORK/skipped"
 # its sources, the lock, the proc-macro dylibs - so it is not a list any more.
 # The tool says what it will point at; anything missing gets built, whatever
 # kind of thing it is.
-if [ -n "$LOCK_LABEL" ]; then
-    LOCK_PKG=${LOCK_LABEL%:*}
+if [ -n "$LOCK_LABELS" ]; then
     # shellcheck disable=SC2086
-    "$TOOL" ide $LOCK_ARG --third-party-dir $THIRD_PARTY_DIR --sysroot $SYSROOT \
+    "$TOOL" ide $LOCK_ARG --sysroot $SYSROOT \
         --sysroot-src $SYSROOT_SRC --first-party $FILES $SUBARGS \
         --emit-inputs "$WORK/inputs" --output "$WORK/scratch.json" >/dev/null 2>&1 || \
         : > "$WORK/inputs"
     : > "$WORK/missing"
     while IFS="	" read -r subrepo file; do
         if [ -n "$file" ] && [ ! -e "$file" ]; then
-            echo "$LOCK_PKG:$subrepo" >> "$WORK/missing"
+            echo "$subrepo" >> "$WORK/missing"
         fi
     done < "$WORK/inputs"
     if [ -s "$WORK/missing" ]; then
@@ -286,7 +297,7 @@ else
     OUT_ARG="--output $OUT_FILE"
 fi
 # shellcheck disable=SC2086
-"$TOOL" ide $LOCK_ARG --third-party-dir $THIRD_PARTY_DIR --sysroot $SYSROOT \
+"$TOOL" ide $LOCK_ARG --sysroot $SYSROOT \
     --sysroot-src $SYSROOT_SRC --first-party $FILES $SUBARGS $OUT_ARG
 
 if [ "$DISCOVER" = 0 ]; then

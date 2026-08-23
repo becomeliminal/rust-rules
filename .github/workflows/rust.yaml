@@ -80,8 +80,15 @@ jobs:
 
       - name: Generate the rust-analyzer project file
         run: |
-          ./pleasew run -p -v notice //:rust-project
+          ./pleasew run -p -v notice //:rust-project 2>&1 | tee /tmp/project.log
           test -f rust-project.json || { echo "no rust-project.json"; exit 1; }
+          # A dep in a package no lock covers resolves to nothing in the
+          # editor, and this repo has four rust_resolve targets.
+          if grep -q "in no lock" /tmp/project.log; then
+            echo "a dep is outside every lock passed to rust_project:"
+            grep "in no lock" /tmp/project.log
+            exit 1
+          fi
           python3 - <<'PY'
           import json, os, sys
           d = json.load(open("rust-project.json"))

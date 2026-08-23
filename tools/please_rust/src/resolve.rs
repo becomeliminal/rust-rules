@@ -116,7 +116,7 @@ pub struct LockDep {
     pub target_name: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct LockFile {
     pub target: String,
     /// Primary entry per subrepo (target unit; host unit if host-only)

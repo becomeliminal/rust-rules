@@ -18,12 +18,21 @@ use std::path::{Path, PathBuf};
 
 #[derive(Args)]
 pub struct IdeArgs {
-    /// The resolved lock, as `rust_resolve` produces it
+    /// A resolved lock, as `rust_resolve` produces it. Repeatable, because a
+    /// repo can declare third-party crates in more than one place and each
+    /// `rust_resolve` produces its own lock.
+    ///
+    /// Two forms. `<package>=<third_party_dir>=<path>` says which build
+    /// package the lock's crates are declared in, which is how a dep's label
+    /// picks the lock it belongs to, and where that lock's subrepos are
+    /// checked out. A bare `<path>` is the old single-lock form and pairs
+    /// with `--third-party-dir`.
     #[arg(long)]
-    pub lock: PathBuf,
+    pub lock: Vec<String>,
 
-    /// Directory holding the generated crate subrepos, one per declaration
-    #[arg(long)]
+    /// Directory holding the generated crate subrepos, one per declaration.
+    /// Applies to a `--lock` given in the bare form.
+    #[arg(long, default_value = "plz-out/gen/third_party/crates")]
     pub third_party_dir: PathBuf,
 
     /// A rustup-shaped toolchain root: `bin/rustc` beside `lib/rustlib`.
@@ -133,6 +142,13 @@ struct FirstPartyDep {
 /// is the subrepo `serde`, which is how the lock keys it.
 fn label_subrepo(label: &str) -> Option<String> {
     label.rsplit(':').next().map(|t| t.to_string())
+}
+
+/// The build package a label names, without the leading slashes or the
+/// target: `//third_party/crates:serde` is declared in `third_party/crates`.
+fn label_package(label: &str) -> String {
+    let body = label.split_once(':').map(|(p, _)| p).unwrap_or(label);
+    body.trim_start_matches('/').to_string()
 }
 
 #[derive(Serialize)]
@@ -456,7 +472,51 @@ fn expand_features(
 /// A crate's identity in the lock: its subrepo, and which unit of it. The
 /// host unit of a dual crate is a different crate to rust-analyzer - it is
 /// compiled for a different platform and may have different features.
-type Key = (String, bool);
+/// A crate's identity across every lock: which lock it came from, its
+/// subrepo, and which unit of it. The lock is part of the key because two
+/// locks can each hold a `serde` and they are different crates.
+type Key = (usize, String, bool);
+
+/// One lock, and what is needed to place the crates in it.
+struct LockSource {
+    /// The build package its crates are declared in, e.g. `third_party/crates`.
+    /// A first-party dep names `//third_party/crates:serde`, and this is how
+    /// that label finds its lock.
+    package: String,
+    /// Where this lock's subrepos are checked out.
+    third_party_dir: PathBuf,
+    lock: crate::resolve::LockFile,
+}
+
+/// Which lock a dep's label belongs to, by the package its crates are
+/// declared in. A lock given in the bare form has no package recorded and
+/// matches anything, which is what a single-lock repo has always done.
+fn lock_for_label(sources: &[LockSource], label: &str) -> Option<usize> {
+    let pkg = label_package(label);
+    sources
+        .iter()
+        .position(|s| s.package == pkg)
+        .or_else(|| sources.iter().position(|s| s.package.is_empty()))
+}
+
+/// Parse a `--lock` value. `<package>=<dir>=<path>`, or a bare path paired
+/// with `--third-party-dir`.
+fn parse_lock_spec(spec: &str, fallback_dir: &Path) -> (String, PathBuf, PathBuf) {
+    let parts: Vec<&str> = spec.splitn(3, '=').collect();
+    if parts.len() == 3 {
+        (
+            parts[0].to_string(),
+            PathBuf::from(parts[1]),
+            PathBuf::from(parts[2]),
+        )
+    } else {
+        (
+            String::new(),
+            fallback_dir.to_path_buf(),
+            PathBuf::from(spec),
+        )
+    }
+}
 
 /// rust-analyzer panics rather than errors on a relative buildfile, so no
 /// caller gets to pass one.
@@ -542,8 +602,17 @@ pub fn run(args: IdeArgs) -> Result<()> {
 }
 
 fn describe_project(args: IdeArgs) -> Result<()> {
-    let lock = crate::resolve::LockFile::load(&args.lock)
-        .with_context(|| format!("reading {}", args.lock.display()))?;
+    let mut sources: Vec<LockSource> = Vec::new();
+    for spec in &args.lock {
+        let (package, third_party_dir, path) = parse_lock_spec(spec, &args.third_party_dir);
+        let lock = crate::resolve::LockFile::load(&path)
+            .with_context(|| format!("reading {}", path.display()))?;
+        sources.push(LockSource {
+            package,
+            third_party_dir,
+            lock,
+        });
+    }
 
     // The sysroot is described as a nested project rather than as crates in
     // the main list, so rust-analyzer registers it as the sysroot and its
@@ -591,11 +660,13 @@ fn describe_project(args: IdeArgs) -> Result<()> {
 
     // Pass one: assign an index to every crate, so deps can name them.
     let mut order: Vec<(Key, &crate::resolve::LockEntry)> = Vec::new();
-    for (subrepo, entry) in &lock.crates {
-        order.push(((subrepo.clone(), false), entry));
-    }
-    for (subrepo, entry) in &lock.host_crates {
-        order.push(((subrepo.clone(), true), entry));
+    for (li, src) in sources.iter().enumerate() {
+        for (subrepo, entry) in &src.lock.crates {
+            order.push(((li, subrepo.clone(), false), entry));
+        }
+        for (subrepo, entry) in &src.lock.host_crates {
+            order.push(((li, subrepo.clone(), true), entry));
+        }
     }
     let index: BTreeMap<Key, usize> = order
         .iter()
@@ -615,12 +686,26 @@ fn describe_project(args: IdeArgs) -> Result<()> {
     // What the project will point at, and which crate has to be built for it
     // to be there.
     let mut inputs: Vec<(String, String)> = Vec::new();
-    for ((subrepo, _host), entry) in &order {
-        match describe(&args.third_party_dir, subrepo, entry, &index, &idents) {
+    for ((li, subrepo, _host), entry) in &order {
+        match describe(
+            &sources[*li].third_party_dir,
+            *li,
+            subrepo,
+            entry,
+            &index,
+            &idents,
+        ) {
             Ok(c) => {
-                inputs.push((subrepo.clone(), c.root_module.clone()));
+                // The buildable label, because with more than one lock a
+                // subrepo name does not say which package declares it.
+                let target = if sources[*li].package.is_empty() {
+                    subrepo.clone()
+                } else {
+                    format!("//{}:{}", sources[*li].package, subrepo)
+                };
+                inputs.push((target.clone(), c.root_module.clone()));
                 if let Some(dylib) = &c.proc_macro_dylib_path {
-                    inputs.push((subrepo.clone(), dylib.clone()));
+                    inputs.push((target, dylib.clone()));
                 }
                 crates.push(c)
             }
@@ -699,7 +784,10 @@ fn describe_project(args: IdeArgs) -> Result<()> {
                     .cloned()
                     .unwrap_or(name);
                 deps.push(DepEntry { krate: *i, name });
-            } else if let Some(i) = label_subrepo(&d.label).and_then(|s| index.get(&(s, false))) {
+            } else if let Some(i) = lock_for_label(&sources, &d.label)
+                .zip(label_subrepo(&d.label))
+                .and_then(|(li, s)| index.get(&(li, s, false)))
+            {
                 // The crate's own name rather than the label's: a label
                 // carries the package, and rustls-webpki builds webpki.
                 let resolved = crates[*i].display_name.clone();
@@ -825,6 +913,7 @@ fn placeholder(entry: &crate::resolve::LockEntry) -> CrateEntry {
 
 fn describe(
     third_party: &Path,
+    lock_index: usize,
     subrepo: &str,
     entry: &crate::resolve::LockEntry,
     index: &BTreeMap<Key, usize>,
@@ -855,7 +944,9 @@ fn describe(
     let mut deps = Vec::new();
     for d in &entry.deps {
         let is_host = d.target_name.ends_with("_host");
-        let key = (d.subrepo.clone(), is_host);
+        // A lock's deps name subrepos in the same lock, so the crate is
+        // looked up in the lock it came from.
+        let key = (lock_index, d.subrepo.clone(), is_host);
         if let Some(i) = index.get(&key) {
             // A dependent that renamed the crate writes the rename, and one
             // that did not writes the crate's own name. Neither is the
@@ -1312,6 +1403,62 @@ rustc-cfg=fake
         let p = placeholder(&entry);
         assert_eq!(p.display_name, "broken_crate");
         assert!(p.root_module.is_empty());
+    }
+
+    /// A repo can declare third-party crates in more than one place, and each
+    /// rust_resolve produces its own lock. Two locks can hold a crate of the
+    /// same name, so a dep's label picks the lock by the package that
+    /// declares it.
+    #[test]
+    fn a_dep_finds_the_lock_its_package_declares() {
+        let (pkg, dir, path) = parse_lock_spec(
+            "test/patch=plz-out/gen/test/patch=/tmp/l.json",
+            Path::new("fb"),
+        );
+        assert_eq!(pkg, "test/patch");
+        assert_eq!(dir, PathBuf::from("plz-out/gen/test/patch"));
+        assert_eq!(path, PathBuf::from("/tmp/l.json"));
+
+        // The old single-lock form takes its directory from the flag.
+        let (pkg, dir, path) = parse_lock_spec("/tmp/only.json", Path::new("fallback/dir"));
+        assert!(pkg.is_empty());
+        assert_eq!(dir, PathBuf::from("fallback/dir"));
+        assert_eq!(path, PathBuf::from("/tmp/only.json"));
+
+        assert_eq!(
+            label_package("//third_party/crates:serde"),
+            "third_party/crates"
+        );
+        assert_eq!(label_package("//test/patch:patched"), "test/patch");
+
+        let sources = vec![
+            LockSource {
+                package: "third_party/crates".to_string(),
+                third_party_dir: PathBuf::from("plz-out/gen/third_party/crates"),
+                lock: Default::default(),
+            },
+            LockSource {
+                package: "test/patch".to_string(),
+                third_party_dir: PathBuf::from("plz-out/gen/test/patch"),
+                lock: Default::default(),
+            },
+        ];
+        assert_eq!(lock_for_label(&sources, "//test/patch:patched"), Some(1));
+        assert_eq!(
+            lock_for_label(&sources, "//third_party/crates:serde"),
+            Some(0)
+        );
+        // A dep in a package no lock declares belongs to no lock, which is
+        // what the warning is about.
+        assert_eq!(lock_for_label(&sources, "//elsewhere:thing"), None);
+
+        // One lock in the old form answers for everything, as it always has.
+        let legacy = vec![LockSource {
+            package: String::new(),
+            third_party_dir: PathBuf::from("plz-out/gen/third_party/crates"),
+            lock: Default::default(),
+        }];
+        assert_eq!(lock_for_label(&legacy, "//anywhere:thing"), Some(0));
     }
 
     /// A manifest that sets `[lib] name` renames the crate without renaming
