@@ -908,7 +908,7 @@ def rust_binary(name:str, main:str, modules:list=None, deps:list=[], cc_deps:lis
     return bin_rule
 
 
-def rust_test(name:str, root:str, modules:list=None, deps:list=[], cc_deps:list=[], edition:str="2018", features:list=None, manifest:str=None, visibility:list=None):
+def rust_test(name:str, root:str, modules:list=None, deps:list=[], cc_deps:list=[], edition:str="2018", features:list=None, manifest:str=None, labels:list=[], visibility:list=None):
     """Defines a test rule for a Rust library.
 
     Note that the Rust test runner has no ability to output in a format plz
@@ -922,6 +922,10 @@ def rust_test(name:str, root:str, modules:list=None, deps:list=[], cc_deps:list=
         deps (list): Dependencies of the test harness.
         edition (str): Rust edition to compile with (2015, 2018, 2021, 2024).
         features (list): Feature cfgs to enable.
+        labels (list): Extra labels, on top of the `rust` one every rule
+                       carries. Labels are how a run selects or skips tests,
+                       so a test that only passes under some condition can say
+                       so and be excluded with `plz test --exclude <label>`.
         visibility (list): Visibility declaration.
     """
     crate_name = name.replace('-', '_') + '_test'
@@ -979,7 +983,7 @@ def rust_test(name:str, root:str, modules:list=None, deps:list=[], cc_deps:list=
         tools = _rust_tools(link = True),
         needs_transitive_deps = True,
         visibility = visibility,
-        labels = ['rust'],
+        labels = ['rust'] + labels,
     )
     _ide_fragment(name, crate_name, root, edition, features, deps, manifest = manifest)
     return test_rule

@@ -33,5 +33,9 @@ rust_test(
     name = "buildscript_env_test",
     root = "buildscript_env_test.rs",
     edition = "2021",
+    # The fix this proves is in the tool, so a released tool from before it
+    # still fails here. That is the point of the test and not a regression,
+    # so the pinned-tool run skips it until a release carries the fix.
+    labels = ["requires_unreleased_tool"],
     deps = [":genpath"],
 )
