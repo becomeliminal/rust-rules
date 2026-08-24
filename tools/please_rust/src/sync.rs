@@ -1317,27 +1317,44 @@ fn parse_rust_version(s: &str) -> Option<Version> {
 fn report_upgrades(upgraded: &[(String, String, Version)], upgrading: bool) {
     use crate::pubgrub_solver::Bucket;
     const LIST_LIMIT: usize = 25;
+
+    // A version can move backwards during an upgrade, and it is not a bug.
+    // Taking the newest of one crate can mean stepping another back, because
+    // the newer release of that other crate forbade it: crypto-common 0.1.7
+    // requires generic-array =0.14.7, so reaching generic-array 0.14.9 costs
+    // crypto-common 0.1.6. Saying `^` about that is a lie, and a version
+    // going down is exactly the thing a reader needs to see.
+    let down = |from: &str, to: &Version| Version::parse(from).map(|f| f > *to).unwrap_or(false);
+    let mark = |from: &str, to: &Version| if down(from, to) { "v" } else { "^" };
+
     if !upgrading || upgraded.len() <= LIST_LIMIT {
         for (name, from, to) in upgraded {
-            eprintln!("lock: ^ {} {} -> {}", name, from, to);
+            eprintln!("lock: {} {} {} -> {}", mark(from, to), name, from, to);
         }
         return;
     }
-    let major: Vec<&(String, String, Version)> = upgraded
+
+    // Past the limit, the list is not read. What is worth saying is how many
+    // moved, and then every crate that either crossed a major version or went
+    // backwards, since those are the two ways this stops compiling.
+    let notable: Vec<&(String, String, Version)> = upgraded
         .iter()
         .filter(|(_, from, to)| {
-            Version::parse(from)
-                .map(|f| Bucket::of(&f) != Bucket::of(to))
-                .unwrap_or(false)
+            down(from, to)
+                || Version::parse(from)
+                    .map(|f| Bucket::of(&f) != Bucket::of(to))
+                    .unwrap_or(false)
         })
         .collect();
+    let backwards = upgraded.iter().filter(|(_, f, t)| down(f, t)).count();
     eprintln!(
-        "lock: upgraded {} crates, {} of them across a major version",
+        "lock: moved {} crates, {} across a major version, {} backwards",
         upgraded.len(),
-        major.len()
+        notable.len() - backwards,
+        backwards
     );
-    for (name, from, to) in &major {
-        eprintln!("lock: ^ {} {} -> {}", name, from, to);
+    for (name, from, to) in &notable {
+        eprintln!("lock: {} {} {} -> {}", mark(from, to), name, from, to);
     }
 }
 
@@ -2475,6 +2492,46 @@ mod lock_cmd_tests {
         assert!(out.contains("hashes = [\"ccc333\"]"));
         assert!(out.contains("indirect = True"));
         assert!(out.contains("rust_resolve("));
+    }
+
+    /// An upgrade can move a version backwards, and the report has to say so.
+    /// Taking the newest generic-array costs crypto-common a version, because
+    /// the newer crypto-common pins generic-array exactly. Found by running
+    /// --upgrade over rust-corpus.
+    #[test]
+    fn a_version_that_moved_backwards_is_not_reported_as_an_upgrade() {
+        let moved = vec![
+            (
+                "crypto-common".to_string(),
+                "0.1.7".to_string(),
+                Version::parse("0.1.6").unwrap(),
+            ),
+            (
+                "generic-array".to_string(),
+                "0.14.7".to_string(),
+                Version::parse("0.14.9").unwrap(),
+            ),
+        ];
+        // The marker is chosen per crate rather than for the run.
+        let back = Version::parse(&moved[0].1).unwrap() > moved[0].2;
+        let fwd = Version::parse(&moved[1].1).unwrap() < moved[1].2;
+        assert!(back, "crypto-common went backwards");
+        assert!(fwd, "generic-array went forwards");
+
+        // Both forms print without panicking, over and under the list limit.
+        report_upgrades(&moved, true);
+        let many: Vec<(String, String, Version)> = (0..40)
+            .map(|i| {
+                (
+                    format!("crate{}", i),
+                    "1.0.0".to_string(),
+                    Version::parse("1.1.0").unwrap(),
+                )
+            })
+            .chain(moved.clone())
+            .collect();
+        report_upgrades(&many, true);
+        report_upgrades(&many, false);
     }
 
     /// The acceptance test for --upgrade: deliberately old declarations move,
