@@ -1134,9 +1134,15 @@ pub struct LockCmdArgs {
     pub greedy: bool,
 
     /// Ignore rust-version when selecting releases (MSRV filtering is on by
-    /// default, using the toolchain declared in the third-party BUILD file)
+    /// default, using the version the repo's rust_toolchain declares)
     #[arg(long)]
     pub ignore_msrv: bool,
+
+    /// The toolchain version to filter against, e.g. 1.97.1. Found from the
+    /// repo's `rust_toolchain` declaration when not given, which is what it
+    /// is for.
+    #[arg(long)]
+    pub toolchain_version: Option<String>,
 
     /// Features to enable on the crates being added (comma-separated).
     /// Optional dependencies these turn on are declared automatically.
@@ -1355,6 +1361,82 @@ fn report_upgrades(upgraded: &[(String, String, Version)], upgrading: bool) {
     );
     for (name, from, to) in &notable {
         eprintln!("lock: {} {} {} -> {}", mark(from, to), name, from, to);
+    }
+}
+
+/// The toolchain version MSRV filtering compares against.
+///
+/// It used to be scraped out of whichever file the declarations came from,
+/// which is only right when the toolchain happens to be declared beside them.
+/// This repo keeps them apart, so filtering was off here for every run: a
+/// crate needing a newer rustc was declared without complaint, and the
+/// warning written for exactly that case cannot fire while the filter is off.
+/// Since #20 a repo can have several declaration files, so where the
+/// toolchain sits is no longer a safe guess at all.
+///
+/// A rust_toolchain declares its version, so find it: the flag if given, the
+/// declarations file if it is there, then the repo.
+fn toolchain_for_msrv(args: &LockCmdArgs, build_text: &str) -> Option<Version> {
+    if let Some(v) = &args.toolchain_version {
+        match Version::parse(v) {
+            Ok(v) => return Some(v),
+            Err(e) => {
+                eprintln!("lock: --toolchain-version {} is not a version ({})", v, e);
+                return None;
+            }
+        }
+    }
+    if let Some(v) = crate::pubgrub_solver::toolchain_version(build_text) {
+        return Some(v);
+    }
+    let root = repo_root(&args.build_file);
+    let mut found: Vec<(PathBuf, Version)> = Vec::new();
+    for entry in walkdir::WalkDir::new(&root)
+        .max_depth(6)
+        .into_iter()
+        .filter_entry(|e| {
+            let n = e.file_name().to_string_lossy();
+            // plz-out holds generated BUILD files for every crate, and none
+            // of them declares a toolchain.
+            !(e.depth() > 0 && e.file_type().is_dir() && (n == "plz-out" || n.starts_with('.')))
+        })
+        .filter_map(Result::ok)
+    {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name != "BUILD" && name != "BUILD.plz" {
+            continue;
+        }
+        if let Ok(text) = fs::read_to_string(entry.path()) {
+            if let Some(v) = crate::pubgrub_solver::toolchain_version(&text) {
+                found.push((entry.path().to_path_buf(), v));
+            }
+        }
+    }
+    found.sort_by(|a, b| a.1.cmp(&b.1));
+    match found.len() {
+        0 => {
+            eprintln!(
+                "lock: no rust_toolchain found under {}, so MSRV filtering is off and a crate \
+                 needing a newer rustc than yours can be declared. Pass --toolchain-version to \
+                 say which rustc to resolve for.",
+                root.display()
+            );
+            None
+        }
+        1 => Some(found.remove(0).1),
+        _ => {
+            // The oldest, because a declaration set is shared and has to build
+            // for whoever has the oldest toolchain.
+            let names: Vec<String> = found
+                .iter()
+                .map(|(p, v)| format!("{} ({})", v, p.display()))
+                .collect();
+            eprintln!(
+                "lock: several rust_toolchain versions found, resolving for the oldest: {}",
+                names.join(", ")
+            );
+            Some(found.remove(0).1)
+        }
     }
 }
 
@@ -1757,11 +1839,7 @@ fn lock_round(
         let toolchain = if args.ignore_msrv {
             None
         } else {
-            let tc = crate::pubgrub_solver::toolchain_version(build_text);
-            if tc.is_none() {
-                eprintln!("lock: no rust_toolchain version found; MSRV filtering is off");
-            }
-            tc
+            toolchain_for_msrv(args, build_text)
         };
         solver.msrv(toolchain);
 
@@ -1929,6 +2007,7 @@ fn clone_lock_args(args: &LockCmdArgs) -> LockCmdArgs {
         ignore_msrv: args.ignore_msrv,
         features: args.features.clone(),
         upgrade: args.upgrade.clone(),
+        toolchain_version: args.toolchain_version.clone(),
     }
 }
 
@@ -2467,6 +2546,7 @@ mod lock_cmd_tests {
 
         lock(LockCmdArgs {
             upgrade: None,
+            toolchain_version: None,
             build_file: build_file.clone(),
             third_party_folder: "third_party/rust".to_string(),
             add: vec!["hexlib@0.4".to_string()],
@@ -2492,6 +2572,95 @@ mod lock_cmd_tests {
         assert!(out.contains("hashes = [\"ccc333\"]"));
         assert!(out.contains("indirect = True"));
         assert!(out.contains("rust_resolve("));
+    }
+
+    /// MSRV filtering compares against the toolchain the repo declares. It
+    /// used to be scraped from whichever file the declarations came from, so
+    /// a repo keeping the two apart resolved with no filter at all and said
+    /// so in a line that read as informational.
+    #[test]
+    fn the_toolchain_is_found_even_when_it_is_declared_elsewhere() {
+        let dir = std::env::temp_dir().join(format!("please_rust_msrv_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("third_party/rust")).unwrap();
+        fs::create_dir_all(dir.join("third_party/crates")).unwrap();
+        fs::write(dir.join(".plzconfig"), "").unwrap();
+        fs::write(
+            dir.join("third_party/rust/BUILD"),
+            "rust_toolchain(\n    name = \"toolchain\",\n    version = \"1.74.0\",\n)\n",
+        )
+        .unwrap();
+        let decls = dir.join("third_party/crates/BUILD");
+        fs::write(&decls, "").unwrap();
+
+        let args = |tv: Option<&str>| LockCmdArgs {
+            upgrade: None,
+            toolchain_version: tv.map(str::to_string),
+            build_file: decls.clone(),
+            third_party_folder: "third_party/crates".to_string(),
+            add: vec![],
+            index_url: "https://index.invalid".to_string(),
+            cache_dir: None,
+            offline: true,
+            target: "x86_64-unknown-linux-gnu".to_string(),
+            targets: "x86_64-unknown-linux-gnu".to_string(),
+            curl: "false".to_string(),
+            plz: "".to_string(),
+            greedy: false,
+            ignore_msrv: false,
+            features: None,
+        };
+
+        // The declarations file has no toolchain, so this is the case that
+        // used to silently disable filtering.
+        assert_eq!(
+            toolchain_for_msrv(&args(None), ""),
+            Some(Version::parse("1.74.0").unwrap())
+        );
+
+        // An explicit version wins over anything found.
+        assert_eq!(
+            toolchain_for_msrv(&args(Some("1.60.0")), ""),
+            Some(Version::parse("1.60.0").unwrap())
+        );
+
+        // A toolchain beside the declarations is still read without a search.
+        assert_eq!(
+            toolchain_for_msrv(
+                &args(None),
+                "rust_toolchain(\n    version = \"1.80.0\",\n)\n"
+            ),
+            Some(Version::parse("1.80.0").unwrap())
+        );
+
+        // Two disagreeing toolchains resolve for the oldest, because a
+        // declaration set is shared and has to build for whoever has the
+        // oldest rustc.
+        fs::create_dir_all(dir.join("services/other")).unwrap();
+        fs::write(
+            dir.join("services/other/BUILD"),
+            "rust_toolchain(\n    name = \"t2\",\n    version = \"1.70.0\",\n)\n",
+        )
+        .unwrap();
+        assert_eq!(
+            toolchain_for_msrv(&args(None), ""),
+            Some(Version::parse("1.70.0").unwrap())
+        );
+
+        // No toolchain anywhere is not an error, but it is not silent either.
+        let bare =
+            std::env::temp_dir().join(format!("please_rust_msrv_none_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&bare);
+        fs::create_dir_all(&bare).unwrap();
+        fs::write(bare.join(".plzconfig"), "").unwrap();
+        let bare_build = bare.join("BUILD");
+        fs::write(&bare_build, "").unwrap();
+        let mut a = args(None);
+        a.build_file = bare_build;
+        assert_eq!(toolchain_for_msrv(&a, ""), None);
+
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&bare);
     }
 
     /// An upgrade can move a version backwards, and the report has to say so.
@@ -2604,6 +2773,7 @@ mod lock_cmd_tests {
 
         let args = |upgrade| LockCmdArgs {
             upgrade,
+            toolchain_version: None,
             build_file: build_file.clone(),
             third_party_folder: "third_party/rust".to_string(),
             add: vec![],
@@ -2662,6 +2832,7 @@ mod lock_cmd_tests {
         fs::write(&build_file, "").unwrap();
         let err = lock(LockCmdArgs {
             upgrade: None,
+            toolchain_version: None,
             build_file,
             third_party_folder: "third_party/rust".to_string(),
             add: vec!["ghost@1".to_string()],
@@ -2824,6 +2995,7 @@ rust_resolve(
         let before = fs::read_to_string(&build_file).unwrap();
         lock(LockCmdArgs {
             upgrade: None,
+            toolchain_version: None,
             build_file: build_file.clone(),
             third_party_folder: "third_party/rust".to_string(),
             add: vec!["present@1".to_string()],
