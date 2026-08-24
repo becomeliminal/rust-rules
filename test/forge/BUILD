@@ -44,6 +44,19 @@ _forge_cases = [
     ],
 ]
 
+# A tag can contain a slash. On gitlab the revision is its own path segment,
+# so it has to be escaped: sequoia tags releases openpgp/v2.4.1 because one
+# repository holds several crates.
+_slash = forge_archive_url("https://gitlab.com/sequoia-pgp/sequoia", "openpgp/v2.4.1", "github.com", "")
+_want_slash = "https://gitlab.com/sequoia-pgp/sequoia/-/archive/openpgp%2Fv2.4.1/sequoia-openpgp/v2.4.1.tar.gz"
+if _slash != _want_slash:
+    fail("slashed gitlab tag: got %s, want %s" % (_slash, _want_slash))
+
+# Github takes the ref as the last segment, where a slash needs no escaping.
+_ghslash = forge_archive_url("owner/repo", "release/1.0", "github.com", "")
+if _ghslash != "https://github.com/owner/repo/archive/release/1.0.tar.gz":
+    fail("slashed github ref should not be escaped: %s" % _ghslash)
+
 for _case in _forge_cases:
     _got = forge_archive_url(_case[0], "abc123", "github.com", _case[1])
     if _got != _case[2]:

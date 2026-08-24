@@ -1283,9 +1283,19 @@ def forge_archive_url(repo:str, revision:str, host:str="github.com", forge:str="
         kind = "gitlab" if forge_host == "gitlab.com" or forge_host.startswith("gitlab.") else "github"
     if kind == "gitlab":
         # The tarball is named for the project, which is the last path
-        # segment, not for the whole path: a repo under a group nests.
+        # segment, not for the whole path: a repo under a group nests. The
+        # name itself is cosmetic, gitlab serves the archive whatever it says.
         project = path.split("/")[-1]
-        return f"{base}/-/archive/{revision}/{project}-{revision}.tar.gz"
+        # The revision is its own path segment here, followed by that name, so
+        # a tag with a slash in it has to be escaped or gitlab reads the part
+        # before the slash as the whole ref. sequoia tags releases
+        # openpgp/v2.4.1 because one repository holds several crates. It
+        # happens to resolve unescaped today only because no branch is named
+        # openpgp; one appearing would silently fetch a different tree.
+        ref = revision.replace("/", "%2F")
+        return f"{base}/-/archive/{ref}/{project}-{revision}.tar.gz"
+    # Github takes the ref as the last segment before the extension, where a
+    # slash needs no escaping and escaping it would break the URL.
     return f"{base}/archive/{revision}.tar.gz"
 
 
