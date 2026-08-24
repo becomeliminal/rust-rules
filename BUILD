@@ -26,6 +26,7 @@ rust_project(
         "//third_party/crates:rust_lock",
         "//test/firstparty:firstparty_lock",
         "//test/links:links_lock",
+        "//test/forge_fetch:forge_lock",
         "//test/patch:patch_lock",
     ],
 )
