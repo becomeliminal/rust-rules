@@ -116,6 +116,10 @@ A direct declaration keeps its compatibility range, so `0.4.1` reaches the
 newest `0.4.x` and does not cross to `0.5`. Indirect crates move when the
 crate that needs them asks for something newer. MSRV filtering still applies.
 
+A crate can move backwards, marked `v` rather than `^`. Taking the newest of
+one crate can cost another a version, because the newer release of that other
+crate forbade it.
+
 Version selection is a PubGrub solve over the crates.io index: it backtracks
 rather than failing when a late requirement rules out an earlier choice, and
 it respects `rust-version`, so an older `rust_toolchain` gets the newest
