@@ -24,6 +24,7 @@ rust_project(
     # of those resolves in the editor only if its lock is here too.
     lock = [
         "//third_party/crates:rust_lock",
+        "//test/buildscript_env:buildscript_env_lock",
         "//test/firstparty:firstparty_lock",
         "//test/links:links_lock",
         "//test/patch:patch_lock",

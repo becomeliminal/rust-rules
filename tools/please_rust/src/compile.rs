@@ -610,6 +610,12 @@ fn build_command(args: &CompileArgs) -> Result<Command> {
 
     // Link libraries from build script
     if let Some(ref directives) = buildscript_directives {
+        // The same resolution as the search paths above: where the out dir
+        // ended up, rather than where the build script left it.
+        let resolved_out = directives
+            .out_dir
+            .as_ref()
+            .and_then(|d| resolve_out_dir(d, args.buildscript.as_deref()));
         for lib in &directives.rustc_link_libs {
             // Handle KIND=NAME format (e.g., "static=foo", "dylib=bar")
             if let Some((kind, name)) = lib.split_once('=') {
@@ -624,9 +630,23 @@ fn build_command(args: &CompileArgs) -> Result<Command> {
             cmd.arg("-C").arg(format!("link-arg={}", arg));
         }
 
-        // Set environment variables from build script
+        // Set environment variables from build script.
+        //
+        // A value can be a path into the out dir, and that path was recorded
+        // where the build script ran, which is gone by now. mime_guess sets
+        // MIME_TYPES_GENERATED_PATH and then does
+        // include!(env!("MIME_TYPES_GENERATED_PATH")), so without rebasing it
+        // the crate does not compile at all. Anything that is not a path
+        // under the out dir is passed through untouched.
         for (key, value) in &directives.rustc_envs {
-            cmd.env(key, value);
+            cmd.env(
+                key,
+                rebase_build_path(
+                    value,
+                    directives.built_out_dir.as_deref(),
+                    resolved_out.as_deref(),
+                ),
+            );
         }
     }
 
@@ -726,6 +746,34 @@ mod tests {
         );
         // Nothing to rebase against: unchanged rather than mangled
         assert_eq!(rebase_build_path("/some/dir", None, Some(now)), "/some/dir");
+    }
+
+    /// A build script can hand a path to the compiler through a custom env
+    /// var rather than through OUT_DIR, and that path was recorded where the
+    /// build script ran. mime_guess does
+    /// include!(env!("MIME_TYPES_GENERATED_PATH")) and could not compile at
+    /// all: the recorded path pointed into the build script's sandbox, which
+    /// is gone by then.
+    #[test]
+    fn an_env_var_holding_a_generated_path_is_rebased() {
+        let built = Path::new("/plz-out/tmp/x/_mime_guess_build_script._build/mime_guess_out");
+        let now = Path::new("/plz-out/gen/x/mime_guess_out");
+
+        assert_eq!(
+            rebase_build_path(
+                "/plz-out/tmp/x/_mime_guess_build_script._build/mime_guess_out/mime_types_generated.rs",
+                Some(built),
+                Some(now)
+            ),
+            "/plz-out/gen/x/mime_guess_out/mime_types_generated.rs"
+        );
+
+        // An env var that is not a path is not a path, and passes through.
+        assert_eq!(
+            rebase_build_path("something=else", Some(built), Some(now)),
+            "something=else"
+        );
+        assert_eq!(rebase_build_path("1", Some(built), Some(now)), "1");
     }
 
     #[test]
