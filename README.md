@@ -134,6 +134,10 @@ different one. Declaring the toolchain in a different package from the crates
 is the ordinary case, and on rustc 1.74 `clap` reaches 4.5.61 rather than
 4.6.6, which needs 1.85.
 
+Filtering never turns a solvable graph into an error. When nothing that
+builds on your toolchain satisfies a requirement, the newest release that
+does satisfy it is taken and named, along with the rustc it needs.
+
 Declarations are shared by everyone working in the repo, so `lock` solves
 for every platform in `--targets` (linux x86_64 and both darwin arches by
 default) and declares the union. A linux developer adding `chrono` declares

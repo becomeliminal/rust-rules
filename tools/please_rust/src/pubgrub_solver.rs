@@ -206,6 +206,18 @@ impl<'a, S: ReleaseSource> Solver<'a, S> {
     /// skip yanked (unless pinned), then apply MSRV, relaxing it only if that
     /// would leave nothing to choose.
     fn candidates(&self, name: &str, bucket: Bucket) -> Result<Vec<Release>> {
+        Ok(self.candidates_split(name, bucket)?.0)
+    }
+
+    /// The same, but keeping what MSRV filtering removed.
+    ///
+    /// Whether a requirement is satisfiable depends on the requirement, and
+    /// this only knows the bucket. A bucket can keep plenty of releases and
+    /// still lose every one that a particular dependent asked for: thiserror
+    /// 2.x has eighteen releases that build on rustc 1.70 and none of them
+    /// satisfies ^2.0.20, because 2.0.20 needs 1.71. The caller has the
+    /// requirement, so it gets both halves and decides.
+    fn candidates_split(&self, name: &str, bucket: Bucket) -> Result<(Vec<Release>, Vec<Release>)> {
         let pinned = self.pinned.get(name);
         let mut in_bucket: Vec<Release> = self
             .releases(name)?
@@ -236,11 +248,16 @@ impl<'a, S: ReleaseSource> Solver<'a, S> {
                         name, bucket, toolchain
                     );
                 }
-                return Ok(in_bucket);
+                return Ok((in_bucket, Vec::new()));
             }
-            return Ok(ok);
+            let excluded: Vec<Release> = in_bucket
+                .iter()
+                .filter(|r| !ok.iter().any(|k| k.version == r.version))
+                .cloned()
+                .collect();
+            return Ok((ok, excluded));
         }
-        Ok(in_bucket)
+        Ok((in_bucket, Vec::new()))
     }
 
     /// Buckets a requirement can be satisfied by, newest bucket first.
@@ -305,11 +322,41 @@ impl<'a, S: ReleaseSource> Solver<'a, S> {
         bucket: Bucket,
         req: &VersionReq,
     ) -> Result<Ranges<Version>> {
+        let (ok, excluded) = self.candidates_split(package, bucket)?;
         let mut range = Ranges::empty();
-        for r in self.candidates(package, bucket)? {
+        for r in &ok {
             if req.matches(&r.version) {
-                range = range.union(&Ranges::singleton(r.version));
+                range = range.union(&Ranges::singleton(r.version.clone()));
             }
+        }
+        if !range.is_empty() {
+            return Ok(range);
+        }
+        // A bucket can keep most of its releases and still lose every one
+        // this requirement asked for. Refusing to resolve is worse than
+        // declaring a crate that needs a newer rustc, which is what the
+        // whole-bucket case already chooses; the difference is that leaving
+        // the range empty produces an error saying no release satisfies a
+        // requirement that several releases do satisfy.
+        if let Some(r) = excluded.iter().find(|r| req.matches(&r.version)) {
+            if self.relaxed.borrow_mut().insert(package.to_string()) {
+                eprintln!(
+                    "warning: nothing that satisfies {} {} builds on rustc {}; taking {}, \
+                     which needs rustc {}",
+                    package,
+                    req,
+                    self.msrv
+                        .as_ref()
+                        .map(|v| v.to_string())
+                        .unwrap_or_default(),
+                    r.version,
+                    r.rust_version
+                        .as_ref()
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "an unstated version".to_string()),
+                );
+            }
+            return Ok(Ranges::singleton(r.version.clone()));
         }
         Ok(range)
     }
@@ -436,8 +483,8 @@ impl<'a, S: ReleaseSource> DependencyProvider for Solver<'a, S> {
                     .find(|v| range.contains(v)))
             }
             Pkg::Crate { name, bucket } => {
-                let candidates = self
-                    .candidates(name, *bucket)
+                let (candidates, excluded) = self
+                    .candidates_split(name, *bucket)
                     .map_err(|e| SolverError(e.to_string()))?;
                 // An already-declared version wins when it is still in range,
                 // so `lock --add` does not churn unrelated crates.
@@ -450,10 +497,40 @@ impl<'a, S: ReleaseSource> DependencyProvider for Solver<'a, S> {
                         return Ok(Some(p.clone()));
                     }
                 }
-                Ok(candidates
-                    .into_iter()
-                    .map(|r| r.version)
-                    .find(|v| range.contains(v)))
+                if let Some(v) = candidates
+                    .iter()
+                    .map(|r| r.version.clone())
+                    .find(|v| range.contains(v))
+                {
+                    return Ok(Some(v));
+                }
+                // Nothing this toolchain can build satisfies the requirement,
+                // but something does. Refusing to resolve is worse than
+                // declaring a crate that may need a newer rustc, which is the
+                // same choice the whole-bucket case above already makes. Said
+                // out loud, because the alternative is an error claiming no
+                // release satisfies a requirement that several do.
+                if let Some(r) = excluded.iter().find(|r| range.contains(&r.version)) {
+                    if self.relaxed.borrow_mut().insert(name.to_string()) {
+                        eprintln!(
+                            "warning: no release of {} that supports rustc {} satisfies what \
+                             depends on it; taking {} {}, which needs rustc {}",
+                            name,
+                            self.msrv
+                                .as_ref()
+                                .map(|v| v.to_string())
+                                .unwrap_or_default(),
+                            name,
+                            r.version,
+                            r.rust_version
+                                .as_ref()
+                                .map(|v| v.to_string())
+                                .unwrap_or_else(|| "an unstated version".to_string()),
+                        );
+                    }
+                    return Ok(Some(r.version.clone()));
+                }
+                Ok(None)
             }
         }
     }
@@ -916,6 +993,40 @@ mod tests {
         let f = b.build();
         let got = solve_with(&f, &[("hard", "^1")], &[], Some("1.60.0")).unwrap();
         assert_eq!(got["hard"], Version::parse("1.0.0").unwrap());
+    }
+
+    /// A bucket can keep most of its releases and still lose every one a
+    /// particular requirement asked for. Found in rust-corpus at rustc 1.70:
+    /// thiserror 2.x has eighteen releases that build on 1.70 and none of
+    /// them satisfies ^2.0.20, because 2.0.20 needs 1.71. Resolution failed
+    /// with "no release of thiserror satisfies ^2.0.20", which is not true.
+    #[test]
+    fn msrv_relaxes_for_a_requirement_no_supported_release_satisfies() {
+        let mut b = idx();
+        // Plenty of the bucket builds on the toolchain, so the whole-bucket
+        // relaxation never fires.
+        b.add("t", "2.0.0", &[]);
+        b.add("t", "2.0.5", &[]);
+        b.add("t", "2.0.17", &[]);
+        // Only this one satisfies ^2.0.20, and it needs a newer rustc.
+        b.msrv_release("t", "2.0.20", "1.71.0");
+        let f = b.build();
+
+        let got = solve_with(&f, &[("t", "^2.0.20")], &[], Some("1.70.0")).unwrap();
+        assert_eq!(
+            got["t"],
+            Version::parse("2.0.20").unwrap(),
+            "the only release satisfying the requirement should be taken, with a warning"
+        );
+
+        // A requirement the toolchain can satisfy is unaffected: still the
+        // newest release that builds, not the newest release.
+        let got = solve_with(&f, &[("t", "^2")], &[], Some("1.70.0")).unwrap();
+        assert_eq!(got["t"], Version::parse("2.0.17").unwrap());
+
+        // And with no MSRV at all, the newest wins as before.
+        let got = solve_with(&f, &[("t", "^2")], &[], None).unwrap();
+        assert_eq!(got["t"], Version::parse("2.0.20").unwrap());
     }
 
     #[test]
