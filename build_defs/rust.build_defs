@@ -1220,6 +1220,56 @@ def rust_bindgen(name:str, header:str, srcs:list=[], clang_args:list=[], bindgen
     )
 
 
+def rust_cbindgen(name:str, root:str, srcs:list=[], lang:str="c", config:str="", crate_name:str="",
+                  cbindgen_flags:list=[], visibility:list=None):
+    """Generates a C or C++ header from Rust, the reverse of rust_bindgen.
+
+    C code calling into a `staticlib` or `cdylib` needs declarations for what
+    it is calling. Hand-writing them means nothing checks them against the
+    Rust definitions, and a signature that changes on one side goes on
+    compiling on the other until it crashes.
+
+    The output is a single header, usable as a `hdrs` entry of a c_library or
+    included directly by a c_binary's sources.
+
+    Args:
+        name (str): Name of the rule; the output is <name>.h, or .hpp for C++.
+        root (str): The crate's root module, the same file a rust_library
+                    would take as its root.
+        srcs (list): The rest of the crate's sources, when the root declares
+                     modules. cbindgen follows `mod` from the root, so a
+                     crate of several files needs them staged.
+        lang (str): Output language: 'c', 'c++' or 'cython'.
+        config (str): A cbindgen.toml, for anything the flags do not cover.
+        crate_name (str): Crate name recorded in the header's include guard.
+                          Defaults to the rule name.
+        cbindgen_flags (list): Extra flags passed to cbindgen.
+        visibility (list): Visibility declaration.
+    """
+    ext = "hpp" if lang == "c++" else ("pyx" if lang == "cython" else "h")
+    flags = " ".join(cbindgen_flags)
+    cfg = " --config $SRCS_CONFIG" if config else ""
+    crate_flag = f" --crate {crate_name}" if crate_name else ""
+    return build_rule(
+        name = name,
+        srcs = {
+            "root": [root],
+            "mods": srcs,
+            "config": [config] if config else [],
+        },
+        outs = [f"{name}.{ext}"],
+        # cbindgen parses the source rather than compiling it, so it needs no
+        # toolchain and no dependencies: a crate's public extern "C" surface
+        # is decided by its own text.
+        cmd = f"$TOOLS_CBINDGEN --lang {lang}{cfg}{crate_flag} -o $OUT {flags} $SRCS_ROOT",
+        tools = {
+            "cbindgen": [CONFIG.RUST.CBINDGEN_TOOL],
+        },
+        visibility = visibility,
+        labels = ["rust", "codegen"],
+    )
+
+
 def rust_crate_download(name:str, crate:str, version:str, hashes:list=None, labels:list=[], visibility:list=None):
     """Downloads a crate from crates.io.
 
