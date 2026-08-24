@@ -1,8 +1,13 @@
 name: Release
+# Disabled alongside the test workflow. This fires on a version tag and
+# builds a macos runner among others, so cutting a release would spend
+# again. Restore with:
+#   on:
+#     push:
+#       tags:
+#         - 'v*'
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write

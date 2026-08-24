@@ -1,5 +1,10 @@
 name: Rust rules
-on: [push, pull_request]
+# Disabled: this ran on every push and every pull_request, so each PR branch
+# built the whole suite twice, macos included. Run it by hand from the
+# Actions tab when it is wanted. Restore with:
+#   on: [pull_request]
+on:
+  workflow_dispatch:
 jobs:
   test:
     runs-on: ubuntu-latest
