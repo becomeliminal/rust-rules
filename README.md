@@ -179,8 +179,24 @@ rust_repo(
     git_revision = "1.0.86",
 )
 ```
-(`sync --import` translates `git+https://github.com/...` lockfile sources
-automatically.)
+`git_repo` also takes a full URL, for any forge:
+```python
+rust_repo(
+    name = "thing",
+    crate = "thing",
+    version = "0.3.0",
+    git_repo = "https://gitlab.com/group/thing",
+    git_revision = "v0.3.0",
+)
+```
+Most forges serve `/archive/<rev>.tar.gz`, which is what github, gitea and
+its forks, and sourcehut all do. GitLab serves
+`/-/archive/<rev>/<project>-<rev>.tar.gz`, and is recognised by its host.
+GitLab running somewhere its name does not say needs `git_forge = "gitlab"`.
+A forge serving neither scheme needs `download = ...`, naming any rule that
+produces the crate's source.
+
+`sync --import` translates `git+https://` lockfile sources from any host.
 
 `rust_library` builds an `rlib` by default; `crate_type` also supports
 `proc-macro`, `dylib`, `cdylib` and `staticlib` for compiler plugins and
