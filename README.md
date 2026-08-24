@@ -128,6 +128,12 @@ so adding one crate does not churn the rest of the graph, and `--upgrade` is
 how you drop that preference. `--ignore-msrv` turns MSRV filtering off;
 `--greedy` selects the older non-backtracking resolver.
 
+The toolchain filtered against is the one your `rust_toolchain` declares,
+found wherever it is declared. `--toolchain-version 1.74.0` resolves for a
+different one. Declaring the toolchain in a different package from the crates
+is the ordinary case, and on rustc 1.74 `clap` reaches 4.5.61 rather than
+4.6.6, which needs 1.85.
+
 Declarations are shared by everyone working in the repo, so `lock` solves
 for every platform in `--targets` (linux x86_64 and both darwin arches by
 default) and declares the union. A linux developer adding `chrono` declares
