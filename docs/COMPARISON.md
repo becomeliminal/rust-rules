@@ -48,7 +48,6 @@ rather than by release:
   [#16](https://github.com/becomeliminal/rust-rules/issues/16) musl and embedded
 - **Missing capability:**
   [#21](https://github.com/becomeliminal/rust-rules/issues/21) git forges,
-  [#22](https://github.com/becomeliminal/rust-rules/issues/22) sync --upgrade,
   [#23](https://github.com/becomeliminal/rust-rules/issues/23) cross-compiling C,
   [#24](https://github.com/becomeliminal/rust-rules/issues/24) channels,
   [#25](https://github.com/becomeliminal/rust-rules/issues/25) cbindgen,
@@ -81,6 +80,7 @@ rather than by release:
 | **Backtracking solver**<br>Recovers when a late requirement rules out an earlier pick | **yes**. PubGrub, incompatible majors as separate packages | **no**. Whatever cargo does | **yes**. Bespoke solver |
 | **MSRV-aware selection**<br>Skip releases needing a newer rustc | **yes**. cargo >=1.84 semantics, --ignore-msrv opts out | **no**. Only if the vendored cargo does it | **yes**. Since 1.84 |
 | **Add a dependency in one command**<br>No repin step | **yes**. lock --add crate@req, re-solves and declares | **partial**. cargo add then a repin of crate_universe | **yes**. cargo add |
+| **Upgrade to the newest compatible versions**<br>The cargo update equivalent | **yes**. lock --upgrade for everything, or named crates; stays inside each declaration's compatibility range | **no**. Re-run the generator against new requirements | **yes**. cargo update |
 | **Import an existing Cargo.lock**<br>Adopting a repo that already uses cargo | **yes**. sync --import, and --import-workspace for BUILD files too | **yes**. crate_universe consumes Cargo.toml directly | **yes**. Native |
 | **Git and fork dependencies**<br>Pinned revision instead of crates.io | **partial**. github archive URLs; other forges need download= | **yes**. Supported | **yes**. Native |
 | **Private or alternative registries**<br>Registry auth | **no**. On demand only; forks and download= cover the cases | **yes**. Via cargo | **yes**. Native |
