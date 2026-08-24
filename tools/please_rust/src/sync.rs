@@ -883,8 +883,9 @@ fn import_cargo_lock(path: &Path, decls: &mut Vec<Decl>) -> Result<()> {
     Ok(())
 }
 
-/// Newest declared version of a crate gets the plain normalized name; older
-/// duplicates get `crate_norm-x.y.z`. Returns old->new subrepo renames.
+/// A root declaration of a crate gets the plain normalized name, newest
+/// first; everything else gets `crate_norm-x.y.z`. Returns old->new subrepo
+/// renames.
 fn normalize_names(decls: &mut [Decl]) -> Result<BTreeMap<String, String>> {
     let mut by_crate: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (i, d) in decls.iter().enumerate() {
@@ -900,7 +901,15 @@ fn normalize_names(decls: &mut [Decl]) -> Result<BTreeMap<String, String>> {
                 .with_context(|| format!("Bad version {} for {}", decls[i].version, crate_name))?;
             versions.push((v, i));
         }
-        versions.sort_by(|a, b| b.0.cmp(&a.0));
+        // The bare name goes to a root before it goes to whatever is newest.
+        // A root is what somebody declared and what first-party rules name:
+        // //third_party/crates:toml. Handing the bare name to the newest
+        // version instead means a new major arriving as an indirect
+        // dependency of something unrelated takes the label, and every rule
+        // depending on it moves a major version without anyone saying so.
+        // Adding cbindgen, which wants toml 0.9, silently moved please_rust
+        // from the toml 0.8 it asks for.
+        versions.sort_by(|a, b| decls[b.1].root.cmp(&decls[a.1].root).then(b.0.cmp(&a.0)));
         for (rank, (_, i)) in versions.iter().enumerate() {
             let new_name = if rank == 0 {
                 norm.clone()
@@ -2061,6 +2070,45 @@ pub fn target_applies(target_cfg: &str, triple: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bare label is what first-party rules name, so it has to keep
+    /// meaning the same crate. Adding cbindgen, which wants toml 0.9, handed
+    /// the bare toml label to that indirect entry and moved please_rust off
+    /// the toml 0.8 it asks for. The symptom was an unrelated test failing to
+    /// parse a lockfile.
+    #[test]
+    fn the_bare_name_goes_to_a_root_not_to_whatever_is_newest() {
+        let decl = |crate_name: &str, version: &str, root: bool| {
+            let mut d = parse(
+                "rust_repo(\n    name = \"x\",\n    crate = \"x\",\n    version = \"1.0.0\",\n)\n",
+            )
+            .remove(0);
+            d.crate_name = crate_name.to_string();
+            d.version = version.to_string();
+            d.root = root;
+            d.name = None;
+            d
+        };
+
+        // A root and a newer indirect: the root keeps the name it is
+        // depended on by.
+        let mut decls = vec![decl("toml", "0.8.23", true), decl("toml", "0.9.12", false)];
+        normalize_names(&mut decls).unwrap();
+        assert_eq!(decls[0].subrepo(), "toml");
+        assert_eq!(decls[1].subrepo(), "toml-0.9.12");
+
+        // Two roots: the newest wins, as before.
+        let mut decls = vec![decl("serde", "1.0.0", true), decl("serde", "2.0.0", true)];
+        normalize_names(&mut decls).unwrap();
+        assert_eq!(decls[1].subrepo(), "serde");
+        assert_eq!(decls[0].subrepo(), "serde-1.0.0");
+
+        // Nothing is a root: the newest wins, as before.
+        let mut decls = vec![decl("log", "0.4.1", false), decl("log", "0.4.9", false)];
+        normalize_names(&mut decls).unwrap();
+        assert_eq!(decls[1].subrepo(), "log");
+        assert_eq!(decls[0].subrepo(), "log-0.4.1");
+    }
 
     fn parse(text: &str) -> Vec<Decl> {
         let lines: Vec<String> = text.lines().map(|s| s.to_string()).collect();
