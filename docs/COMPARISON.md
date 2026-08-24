@@ -49,7 +49,6 @@ rather than by release:
 - **Missing capability:**
   [#23](https://github.com/becomeliminal/rust-rules/issues/23) cross-compiling C,
   [#24](https://github.com/becomeliminal/rust-rules/issues/24) channels,
-  [#25](https://github.com/becomeliminal/rust-rules/issues/25) cbindgen,
   [#26](https://github.com/becomeliminal/rust-rules/issues/26) wasm-bindgen,
   [#27](https://github.com/becomeliminal/rust-rules/issues/27) multi-platform locks,
   [#28](https://github.com/becomeliminal/rust-rules/issues/28) bench profile,
@@ -120,7 +119,7 @@ rather than by release:
 | **Documentation**<br>rustdoc HTML | **yes**. rust_doc | **yes**. rust_doc | **yes**. cargo doc |
 | **Coverage**<br>Line coverage from instrumented tests | **yes**. -C instrument-coverage into plz cover | **yes**. Supported | **partial**. External tooling, llvm-cov |
 | **C header bindings**<br>bindgen | **yes**. rust_bindgen, tool built from declared crates | **yes**. rust_bindgen | **partial**. build.rs calling bindgen |
-| **Rust to C headers**<br>cbindgen | **no**. Open | **yes**. Supported | **partial**. build.rs calling cbindgen |
+| **Rust to C headers**<br>cbindgen | **yes**. rust_cbindgen, tool built from declared crates | **yes**. Supported | **partial**. build.rs calling cbindgen |
 | **wasm-bindgen**<br>JS bindings | **no**. Groundwork only | **yes**. Supported | **partial**. External tool |
 | **Publish to crates.io**<br>cargo publish | **no**. Deliberate non-goal | **no**. Not its job | **yes**. Native |
 

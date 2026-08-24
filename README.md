@@ -269,6 +269,26 @@ rust_library(
 )
 ```
 
+The reverse, a C header generated from Rust so C can call into a
+`staticlib` or `cdylib`, comes from `rust_cbindgen`. cbindgen is declared the
+same way (`lock --add cbindgen`), and parses the source rather than compiling
+it, so the rule needs no toolchain:
+```python
+rust_cbindgen(
+    name = "ffi_header",         # generates ffi_header.h
+    root = "src/lib.rs",         # .hpp with lang = "c++"
+)
+
+c_binary(
+    name = "uses_rust",
+    srcs = ["main.c"],
+    hdrs = [":ffi_header"],
+    deps = [":rust_ffi"],
+)
+```
+A signature that changes on the Rust side then stops the C compiling, rather
+than compiling and crashing.
+
 Protobuf and gRPC codegen live in
 [rust-proto-rules](https://github.com/becomeliminal/rust-proto-rules), a
 separate plugin that pins these rules by tag and plugs into the proto
