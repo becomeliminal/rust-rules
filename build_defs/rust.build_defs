@@ -1243,8 +1243,54 @@ def rust_crate_download(name:str, crate:str, version:str, hashes:list=None, labe
     )
 
 
+def forge_archive_url(repo:str, revision:str, host:str="github.com", forge:str=""):
+    """The URL of a source archive for one revision of a repository.
+
+    Most forges serve `/archive/<rev>.tar.gz`: github, gitea and its forks
+    (codeberg), and sourcehut all do. GitLab is the exception and serves
+    `/-/archive/<rev>/<project>-<rev>.tar.gz`; its `/archive/` path answers
+    403, so a gitlab repo declared as though it were github fails at download
+    with no hint as to why.
+
+    The host decides the scheme, which cannot work for a self-hosted forge
+    whose name says nothing about what it runs. `forge` says it outright.
+
+    Args:
+        repo: Either `owner/repo`, which means github.com, or a full URL to
+              the repository on any forge.
+        revision: Commit sha or tag to fetch.
+        host: Forge host, when repo is the shorthand.
+        forge: 'github' or 'gitlab' to say which archive scheme the forge
+               serves. Inferred from the host when empty, which is right for
+               gitlab.com and wrong for gitlab running somewhere else.
+    """
+    if repo.startswith("https://") or repo.startswith("http://"):
+        base = repo.rstrip("/")
+        if base.endswith(".git"):
+            base = base[:-4]
+        # Split on the whole path rather than with a maxsplit, which this
+        # dialect does not take.
+        rest = base.replace("https://", "").replace("http://", "")
+        segments = rest.split("/")
+        forge_host = segments[0]
+        path = "/".join(segments[1:])
+    else:
+        forge_host = host
+        path = repo.strip("/")
+        base = f"https://{forge_host}/{path}"
+    kind = forge
+    if not kind:
+        kind = "gitlab" if forge_host == "gitlab.com" or forge_host.startswith("gitlab.") else "github"
+    if kind == "gitlab":
+        # The tarball is named for the project, which is the last path
+        # segment, not for the whole path: a repo under a group nests.
+        project = path.split("/")[-1]
+        return f"{base}/-/archive/{revision}/{project}-{revision}.tar.gz"
+    return f"{base}/archive/{revision}.tar.gz"
+
+
 def rust_git_download(name:str, crate:str, version:str, repo:str, revision:str, hashes:list=None,
-                      host:str="github.com", subdir:str="", visibility:list=None):
+                      host:str="github.com", forge:str="", subdir:str="", visibility:list=None):
     """Downloads a crate's source from a git forge archive (for forks and
     unpublished revisions), normalized to the {crate}-{version} layout that
     rust_repo expects. The go-rules `download` pattern: the crate keeps its
@@ -1254,15 +1300,17 @@ def rust_git_download(name:str, crate:str, version:str, repo:str, revision:str, 
         name: Name of the rule.
         crate: Crate name (canonical, as dependents refer to it).
         version: Version dependents resolve against.
-        repo: owner/repo on the forge.
+        repo: `owner/repo` on github, or a full repository URL on any forge.
         revision: Commit sha or tag to fetch.
         hashes: Optional archive hashes to verify.
-        host: Forge host serving /archive/ tarballs (github.com, gitlab works too).
+        host: Forge host, when repo is the shorthand.
+        forge: Archive scheme to use, 'github' or 'gitlab'. Inferred from the
+               host when empty.
         subdir: Path of the crate within the repo, for workspace members.
     """
     dl = remote_file(
         name = tag(name, "git"),
-        url = f"https://{host}/{repo}/archive/{revision}.tar.gz",
+        url = forge_archive_url(repo, revision, host, forge),
         hashes = hashes,
         extract = True,
     )
@@ -1333,6 +1381,7 @@ def rust_repo(
     download: str = None,
     git_repo: str = "",
     git_revision: str = "",
+    git_forge: str = "",
     platforms: list = None,
 ):
     """Downloads a crate and generates BUILD files as a subrepo.
@@ -1378,9 +1427,13 @@ def rust_repo(
         download: A rule providing the crate source (a {crate}-{version} dir
                   with Cargo.toml at its root) instead of the crates.io
                   tarball — e.g. a rust_git_download of a fork.
-        git_repo: owner/repo shorthand: fetch the source from this git forge
-                  repository instead of crates.io.
+        git_repo: `owner/repo` on github, or a full repository URL on any
+                  forge, to fetch the source from rather than crates.io.
         git_revision: Commit sha or tag for git_repo.
+        git_forge: Archive scheme the forge serves, 'github' or 'gitlab'.
+                   Inferred from the host when empty, which is right for
+                   gitlab.com and wrong for gitlab self-hosted somewhere its
+                   name does not say.
         platforms: The operating systems (in Rust's `target_os` vocabulary)
                    whose resolution reaches this crate. Omitted for the
                    overwhelming majority of crates, which build anywhere;
@@ -1436,6 +1489,7 @@ def rust_repo(
             version = version,
             repo = git_repo,
             revision = git_revision or version,
+            forge = git_forge,
             hashes = hashes,
         )
     elif not download:

@@ -780,15 +780,17 @@ fn import_cargo_lock(path: &Path, decls: &mut Vec<Decl>) -> Result<()> {
             let (url, frag) = rest.split_once('#').unwrap_or((rest, ""));
             let url = url.split('?').next().unwrap_or(url);
             if let Some(path) = url.strip_prefix("https://github.com/") {
+                // The shorthand, because that is what the rule has always
+                // recorded for github and what its declarations look like.
                 git_repo = path.trim_end_matches(".git").to_string();
-                git_revision = frag.to_string();
             } else {
-                eprintln!(
-                    "warning: {} uses a non-github git source ({}); declare it manually with rust_repo(download = ...)",
-                    name, url
-                );
-                continue;
+                // Any other forge is recorded as the URL it was cloned from.
+                // The rule derives the archive scheme from the host, which is
+                // right except for gitlab hosted somewhere its name does not
+                // say; those need git_forge = "gitlab" adding by hand.
+                git_repo = url.trim_end_matches(".git").to_string();
             }
+            git_revision = frag.to_string();
             if git_revision.is_empty() {
                 eprintln!(
                     "warning: {} git source has no pinned revision, skipping",
@@ -2303,8 +2305,13 @@ fresh = { version = "2", features = ["extra"] }
         let forked = decls.iter().find(|d| d.crate_name == "forked").unwrap();
         assert_eq!(forked.git_repo, "owner/forked");
         assert_eq!(forked.git_revision, "abcdef123456");
-        // Non-github git and local path crates skipped
-        assert!(!decls.iter().any(|d| d.crate_name == "elsewhere"));
+        // A git source on any other forge is imported as the URL it was
+        // cloned from, rather than skipped with a note to write the rule by
+        // hand. The rule derives the archive scheme from the host.
+        let elsewhere = decls.iter().find(|d| d.crate_name == "elsewhere").unwrap();
+        assert_eq!(elsewhere.git_repo, "https://gitlab.example.com/x/y");
+        assert_eq!(elsewhere.git_revision, "deadbeef");
+        // A path dependency has no source to fetch, so it stays skipped.
         assert!(!decls.iter().any(|d| d.crate_name == "local_thing"));
     }
 

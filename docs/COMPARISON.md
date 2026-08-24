@@ -47,7 +47,6 @@ rather than by release:
   [#15](https://github.com/becomeliminal/rust-rules/issues/15) remote execution audit,
   [#16](https://github.com/becomeliminal/rust-rules/issues/16) musl and embedded
 - **Missing capability:**
-  [#21](https://github.com/becomeliminal/rust-rules/issues/21) git forges,
   [#23](https://github.com/becomeliminal/rust-rules/issues/23) cross-compiling C,
   [#24](https://github.com/becomeliminal/rust-rules/issues/24) channels,
   [#25](https://github.com/becomeliminal/rust-rules/issues/25) cbindgen,
@@ -82,7 +81,7 @@ rather than by release:
 | **Add a dependency in one command**<br>No repin step | **yes**. lock --add crate@req, re-solves and declares | **partial**. cargo add then a repin of crate_universe | **yes**. cargo add |
 | **Upgrade to the newest compatible versions**<br>The cargo update equivalent | **yes**. lock --upgrade for everything, or named crates; stays inside each declaration's compatibility range | **no**. Re-run the generator against new requirements | **yes**. cargo update |
 | **Import an existing Cargo.lock**<br>Adopting a repo that already uses cargo | **yes**. sync --import, and --import-workspace for BUILD files too | **yes**. crate_universe consumes Cargo.toml directly | **yes**. Native |
-| **Git and fork dependencies**<br>Pinned revision instead of crates.io | **partial**. github archive URLs; other forges need download= | **yes**. Supported | **yes**. Native |
+| **Git and fork dependencies**<br>Pinned revision instead of crates.io | **yes**. Any forge serving source archives, github and gitlab schemes both | **yes**. Supported | **yes**. Native |
 | **Private or alternative registries**<br>Registry auth | **no**. On demand only; forks and download= cover the cases | **yes**. Via cargo | **yes**. Native |
 | **Vendored source overrides**<br>Patch or replace a crate's source | **yes**. download= overrides the source, patch= applies patches to it | **yes**. annotations and patches | **yes**. [patch] and [replace] |
 
