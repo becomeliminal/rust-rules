@@ -1085,6 +1085,16 @@ pub struct LockCmdArgs {
     #[arg(long = "add")]
     pub add: Vec<String>,
 
+    /// Move crates to the newest version their requirements allow, which is
+    /// what `cargo update` does. Bare `--upgrade` moves every declared crate;
+    /// `--upgrade serde --upgrade hex` moves only those.
+    ///
+    /// Without it a declared version is preferred wherever it still fits, so
+    /// adding one crate never churns the rest. That preference is exactly
+    /// what this drops.
+    #[arg(long = "upgrade", num_args = 0.., value_name = "CRATE")]
+    pub upgrade: Option<Vec<String>>,
+
     /// Sparse index URL
     #[arg(long, default_value = "https://index.crates.io")]
     pub index_url: String,
@@ -1295,6 +1305,56 @@ fn parse_rust_version(s: &str) -> Option<Version> {
         1 => Version::parse(&format!("{}.0.0", parts[0])).ok(),
         2 => Version::parse(&format!("{}.{}.0", parts[0], parts[1])).ok(),
         _ => None,
+    }
+}
+
+/// Say what moved.
+///
+/// One line per crate is right for `lock --add`, where a handful move and
+/// each one is news. `--upgrade` across a whole repo moves hundreds, and a
+/// list that long is not read. What matters there is which crossed a major
+/// boundary, because those are the ones that can stop compiling.
+fn report_upgrades(upgraded: &[(String, String, Version)], upgrading: bool) {
+    use crate::pubgrub_solver::Bucket;
+    const LIST_LIMIT: usize = 25;
+    if !upgrading || upgraded.len() <= LIST_LIMIT {
+        for (name, from, to) in upgraded {
+            eprintln!("lock: ^ {} {} -> {}", name, from, to);
+        }
+        return;
+    }
+    let major: Vec<&(String, String, Version)> = upgraded
+        .iter()
+        .filter(|(_, from, to)| {
+            Version::parse(from)
+                .map(|f| Bucket::of(&f) != Bucket::of(to))
+                .unwrap_or(false)
+        })
+        .collect();
+    eprintln!(
+        "lock: upgraded {} crates, {} of them across a major version",
+        upgraded.len(),
+        major.len()
+    );
+    for (name, from, to) in &major {
+        eprintln!("lock: ^ {} {} -> {}", name, from, to);
+    }
+}
+
+/// Whether this crate's declared version should be dropped as a preference.
+///
+/// `None` is the flag absent, `Some([])` is a bare `--upgrade` meaning
+/// everything, and named crates mean only those. Names are compared with `-`
+/// and `_` folded together, because a crate is declared under whichever the
+/// package uses and typed under whichever the user remembers.
+fn upgrading(upgrade: &Option<Vec<String>>, crate_name: &str) -> bool {
+    match upgrade {
+        None => false,
+        Some(names) if names.is_empty() => true,
+        Some(names) => {
+            let want = crate_name.replace('-', "_");
+            names.iter().any(|n| n.replace('-', "_") == want)
+        }
     }
 }
 
@@ -1617,6 +1677,16 @@ fn lock_round(
     // linux solve, and a checked-in declaration set missing it leaves mac
     // developers unable to build.
     let triples = target_list(&args.targets, &args.target);
+    // A name nobody declares moves nothing, and silently doing nothing is how
+    // a typo looks like a crate that is already current.
+    if let Some(names) = &args.upgrade {
+        for n in names {
+            let want = n.replace('-', "_");
+            if !decls.iter().any(|d| d.crate_name.replace('-', "_") == want) {
+                eprintln!("lock: --upgrade {} is not declared here", n);
+            }
+        }
+    }
     let mut solution: BTreeMap<String, (Version, String)> = BTreeMap::new();
     for triple in &triples {
         let source = IndexSource {
@@ -1628,7 +1698,16 @@ fn lock_round(
         // Declared versions are preferences, not requirements: the solve is
         // driven by the additions, so `lock --add` never needs index entries for
         // unrelated crates (which would also break --offline).
+        //
+        // Dropping a crate's preference is the whole of --upgrade. Nothing
+        // else changes: the same solver, the same MSRV filter, the same
+        // requirements. The crate is simply no longer told where it already
+        // is, so the newest version in range wins the way it does for a crate
+        // being declared for the first time.
         for d in &decls {
+            if upgrading(&args.upgrade, &d.crate_name) {
+                continue;
+            }
             let v = Version::parse(&d.version)
                 .with_context(|| format!("Bad version {} for {}", d.version, d.crate_name))?;
             solver.pin(&d.crate_name, v);
@@ -1640,6 +1719,22 @@ fn lock_round(
             let req = semver::VersionReq::parse(req_str)
                 .with_context(|| format!("Bad requirement {} in --add", req_str))?;
             solver.require(name, req);
+        }
+        // Dropping a preference moves nothing on its own: a solve is driven
+        // by requirements, and an ordinary `lock` has none beyond its --add.
+        // An upgraded crate becomes a root requiring its own compatibility
+        // range, which is what its declaration has always meant and what
+        // cargo update honours. Transitive crates are not rooted; they move
+        // when the crate that needs them asks for something newer.
+        for d in &decls {
+            if !d.root || !upgrading(&args.upgrade, &d.crate_name) {
+                continue;
+            }
+            let v = Version::parse(&d.version)
+                .with_context(|| format!("Bad version {} for {}", d.version, d.crate_name))?;
+            let req = semver::VersionReq::parse(&format!("^{}", v))
+                .with_context(|| format!("Bad requirement for {}", d.crate_name))?;
+            solver.require(&d.crate_name, req);
         }
 
         let toolchain = if args.ignore_msrv {
@@ -1689,9 +1784,7 @@ fn lock_round(
     newly.sort();
     upgraded.sort();
 
-    for (name, from, to) in &upgraded {
-        eprintln!("lock: ^ {} {} -> {}", name, from, to);
-    }
+    report_upgrades(&upgraded, args.upgrade.is_some());
 
     if newly.is_empty() && upgraded.is_empty() && args.features.is_none() {
         eprintln!("lock: nothing to do");
@@ -1783,6 +1876,10 @@ fn heal_missing(
         let healed = LockCmdArgs {
             add: adds,
             features: None,
+            // The upgrade already happened and is written down. Healing only
+            // fills in what resolution found missing, and does that against
+            // the versions now declared rather than moving them again.
+            upgrade: None,
             ..clone_lock_args(args)
         };
         let build_text = fs::read_to_string(&args.build_file)?;
@@ -1814,6 +1911,7 @@ fn clone_lock_args(args: &LockCmdArgs) -> LockCmdArgs {
         greedy: args.greedy,
         ignore_msrv: args.ignore_msrv,
         features: args.features.clone(),
+        upgrade: args.upgrade.clone(),
     }
 }
 
@@ -2351,6 +2449,7 @@ mod lock_cmd_tests {
         fs::write(&build_file, "").unwrap();
 
         lock(LockCmdArgs {
+            upgrade: None,
             build_file: build_file.clone(),
             third_party_folder: "third_party/rust".to_string(),
             add: vec!["hexlib@0.4".to_string()],
@@ -2378,6 +2477,124 @@ mod lock_cmd_tests {
         assert!(out.contains("rust_resolve("));
     }
 
+    /// The acceptance test for --upgrade: deliberately old declarations move,
+    /// the graph still resolves, and a second run changes nothing.
+    #[test]
+    fn upgrade_moves_old_declarations_and_is_then_a_no_op() {
+        let dir = std::env::temp_dir().join(format!("please_rust_upgrade_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        // A .plzconfig rather than a chdir: repo_root walks up for one and
+        // falls back to the process cwd, which other tests are also using.
+        fs::write(dir.join(".plzconfig"), "").unwrap();
+
+        let cache = dir.join("index-cache");
+        fs::create_dir_all(cache.join("he/xl")).unwrap();
+        // Three releases in one compatibility bucket. 0.4.1 is what the repo
+        // declares; 0.4.9 is what it should reach.
+        fs::write(
+            cache.join("he/xl/hexlib"),
+            concat!(
+                r#"{"name":"hexlib","vers":"0.4.1","deps":[{"name":"tinydep","req":"^1","features":[],"optional":false,"default_features":true,"target":null,"kind":"normal"}],"cksum":"old111","features":{}}"#,
+                "\n",
+                r#"{"name":"hexlib","vers":"0.4.5","deps":[{"name":"tinydep","req":"^1","features":[],"optional":false,"default_features":true,"target":null,"kind":"normal"}],"cksum":"mid555","features":{}}"#,
+                "\n",
+                r#"{"name":"hexlib","vers":"0.4.9","deps":[{"name":"tinydep","req":"^1","features":[],"optional":false,"default_features":true,"target":null,"kind":"normal"}],"cksum":"new999","features":{}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        fs::create_dir_all(cache.join("ti/ny")).unwrap();
+        fs::write(
+            cache.join("ti/ny/tinydep"),
+            concat!(
+                r#"{"name":"tinydep","vers":"1.0.0","deps":[],"cksum":"tiny100","features":{}}"#,
+                "\n",
+                r#"{"name":"tinydep","vers":"1.4.0","deps":[],"cksum":"tiny140","features":{}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+
+        let store = dir.join("plz-out/gen/third_party/rust");
+        for (name, ver) in [
+            ("hexlib", "0.4.1"),
+            ("hexlib", "0.4.9"),
+            ("tinydep", "1.0.0"),
+            ("tinydep", "1.4.0"),
+        ] {
+            let cdir = store.join(format!("{}-{}", name, ver));
+            fs::create_dir_all(&cdir).unwrap();
+            let manifest = if name == "hexlib" {
+                format!(
+                    "[package]\nname = \"{}\"\nversion = \"{}\"\n\n[dependencies]\ntinydep = \"1\"\n",
+                    name, ver
+                )
+            } else {
+                format!("[package]\nname = \"{}\"\nversion = \"{}\"\n", name, ver)
+            };
+            fs::write(cdir.join("Cargo.toml"), manifest).unwrap();
+        }
+
+        let build_file = dir.join("BUILD");
+        let old = concat!(
+            "rust_repo(\n    name = \"hexlib\",\n    crate = \"hexlib\",\n",
+            "    version = \"0.4.1\",\n    hashes = [\"old111\"],\n)\n\n",
+            "rust_repo(\n    name = \"tinydep\",\n    crate = \"tinydep\",\n",
+            "    version = \"1.0.0\",\n    hashes = [\"tiny100\"],\n    indirect = True,\n)\n",
+        );
+        fs::write(&build_file, old).unwrap();
+
+        let args = |upgrade| LockCmdArgs {
+            upgrade,
+            build_file: build_file.clone(),
+            third_party_folder: "third_party/rust".to_string(),
+            add: vec![],
+            index_url: "https://index.invalid".to_string(),
+            cache_dir: Some(cache.clone()),
+            offline: true,
+            target: "x86_64-unknown-linux-gnu".to_string(),
+            targets: "x86_64-unknown-linux-gnu".to_string(),
+            curl: "false".to_string(),
+            plz: "".to_string(),
+            greedy: false,
+            ignore_msrv: true,
+            features: None,
+        };
+
+        // Without --upgrade the declared versions are preferences that still
+        // fit, so nothing moves.
+        lock(args(None)).unwrap();
+        let kept = fs::read_to_string(&build_file).unwrap();
+        assert!(kept.contains("0.4.1"), "{}", kept);
+        assert!(kept.contains("1.0.0"), "{}", kept);
+
+        // Naming one crate moves that one and leaves the other alone.
+        lock(args(Some(vec!["hexlib".to_string()]))).unwrap();
+        let one = fs::read_to_string(&build_file).unwrap();
+        assert!(one.contains("0.4.9"), "hexlib should move: {}", one);
+        assert!(one.contains("new999"), "hash should follow: {}", one);
+        // tinydep is transitive: it follows hexlib's requirement rather than
+        // being named, so what matters is that it still resolves.
+        assert!(
+            one.contains("tinydep"),
+            "tinydep should still be there: {}",
+            one
+        );
+
+        // Bare --upgrade moves the rest.
+        lock(args(Some(Vec::new()))).unwrap();
+        let all = fs::read_to_string(&build_file).unwrap();
+        assert!(all.contains("1.4.0"), "tinydep should move: {}", all);
+        assert!(all.contains("tiny140"), "hash should follow: {}", all);
+
+        // And running it again changes nothing.
+        lock(args(Some(Vec::new()))).unwrap();
+        assert_eq!(fs::read_to_string(&build_file).unwrap(), all);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn lock_offline_without_cache_errors() {
         let dir =
@@ -2387,6 +2604,7 @@ mod lock_cmd_tests {
         let build_file = dir.join("BUILD");
         fs::write(&build_file, "").unwrap();
         let err = lock(LockCmdArgs {
+            upgrade: None,
             build_file,
             third_party_folder: "third_party/rust".to_string(),
             add: vec!["ghost@1".to_string()],
@@ -2548,6 +2766,7 @@ rust_resolve(
         fs::write(&build_file, "rust_repo(\n    name = \"present\",\n    crate = \"present\",\n    version = \"1.0.0\",\n)\n").unwrap();
         let before = fs::read_to_string(&build_file).unwrap();
         lock(LockCmdArgs {
+            upgrade: None,
             build_file: build_file.clone(),
             third_party_folder: "third_party/rust".to_string(),
             add: vec!["present@1".to_string()],
@@ -2564,5 +2783,31 @@ rust_resolve(
         })
         .unwrap();
         assert_eq!(fs::read_to_string(&build_file).unwrap(), before);
+    }
+    /// `--add` keeps declared versions where they still fit, so adding one
+    /// crate never churns the rest. `--upgrade` drops exactly that
+    /// preference, for everything or for named crates.
+    #[test]
+    fn upgrade_drops_the_declared_version_as_a_preference() {
+        // Flag absent: every declared version stays preferred.
+        assert!(!upgrading(&None, "serde"));
+
+        // Bare --upgrade: nothing is preferred, so everything moves.
+        let all = Some(Vec::new());
+        assert!(upgrading(&all, "serde"));
+        assert!(upgrading(&all, "anything-at-all"));
+
+        // Named: only those crates move.
+        let some = Some(vec!["serde".to_string(), "hex".to_string()]);
+        assert!(upgrading(&some, "serde"));
+        assert!(upgrading(&some, "hex"));
+        assert!(!upgrading(&some, "tokio"));
+
+        // A crate is declared under whichever separator its package uses and
+        // typed under whichever the user remembers.
+        let dashed = Some(vec!["serde-json".to_string()]);
+        assert!(upgrading(&dashed, "serde_json"));
+        let under = Some(vec!["rustls_webpki".to_string()]);
+        assert!(upgrading(&under, "rustls-webpki"));
     }
 }

@@ -106,13 +106,23 @@ Enable features, and anything they turn on is declared for you:
 plz run //tools/please_rust -- lock --add serde@1 --features derive
 ```
 
+To move crates to the newest version their requirements allow, which is what
+`cargo update` does:
+```ini
+plz run //tools/please_rust -- lock --upgrade            # everything
+plz run //tools/please_rust -- lock --upgrade serde      # one crate
+```
+A direct declaration keeps its compatibility range, so `0.4.1` reaches the
+newest `0.4.x` and does not cross to `0.5`. Indirect crates move when the
+crate that needs them asks for something newer. MSRV filtering still applies.
+
 Version selection is a PubGrub solve over the crates.io index: it backtracks
 rather than failing when a late requirement rules out an earlier choice, and
 it respects `rust-version`, so an older `rust_toolchain` gets the newest
 releases that actually support it. Already-declared versions are preferred,
-so adding one crate does not churn the rest of the graph. `--ignore-msrv`
-turns MSRV filtering off; `--greedy` selects the older non-backtracking
-resolver.
+so adding one crate does not churn the rest of the graph, and `--upgrade` is
+how you drop that preference. `--ignore-msrv` turns MSRV filtering off;
+`--greedy` selects the older non-backtracking resolver.
 
 Declarations are shared by everyone working in the repo, so `lock` solves
 for every platform in `--targets` (linux x86_64 and both darwin arches by
