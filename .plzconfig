@@ -15,6 +15,7 @@ PleaseRustTool = //tools/please_rust:bootstrap
 ; names cannot collide with a consumer's third_party/rust ones
 CriterionDep = //third_party/crates:criterion
 BindgenTool = ///third_party/crates/bindgen_cli//:bindgen_bin
+CbindgenTool = ///third_party/crates/cbindgen//:cbindgen_bin
 Rustc = //third_party/rust:toolchain_rustc|rustc
 ; Exercise the pipelined shape in this repo; consumers default to off
 PipelinedCompilation = true
@@ -127,6 +128,12 @@ Inherit = true
 ConfigKey = BindgenTool
 DefaultValue = ///third_party/crates/bindgen_cli//:bindgen_bin
 Help = Build label of the bindgen binary used by rust_bindgen. Built from crates via rust_repo (bindgen-cli).
+Inherit = true
+
+[PluginConfig "cbindgen_tool"]
+ConfigKey = CbindgenTool
+DefaultValue = ///third_party/crates/cbindgen//:cbindgen_bin
+Help = Build label of the cbindgen binary used by rust_cbindgen. Built from crates via rust_repo (cbindgen), the same way bindgen is.
 Inherit = true
 
 [PluginConfig "libclang_path"]

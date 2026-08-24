@@ -141,7 +141,7 @@ rust_repo(
 )
 
 rust_repo(
-    name = "itertools",
+    name = "itertools-0.12.1",
     crate = "itertools",
     version = "0.12.1",
     indirect = True,
@@ -266,6 +266,7 @@ rust_repo(
     crate = "linux-raw-sys",
     version = "0.4.14",
     indirect = True,
+    platforms = ["linux"],
 )
 
 
@@ -347,7 +348,7 @@ rust_repo(
 )
 
 rust_repo(
-    name = "heck",
+    name = "heck-0.5.0",
     crate = "heck",
     version = "0.5.0",
     hashes = ["2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"],
@@ -362,9 +363,10 @@ rust_repo(
 )
 
 rust_repo(
-    name = "log-0.4.21",
+    name = "log",
     crate = "log",
-    version = "0.4.21",
+    version = "0.4.33",
+    hashes = ["0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"],
     indirect = True,
 )
 
@@ -723,17 +725,19 @@ rust_repo(
 )
 
 rust_repo(
-    name = "libsecp256k1_gen_ecmult",
+    name = "libsecp256k1_gen_ecmult-0.3.0",
     crate = "libsecp256k1-gen-ecmult",
     version = "0.3.0",
     indirect = True,
+    platforms = [],
 )
 
 rust_repo(
-    name = "libsecp256k1_gen_genmult",
+    name = "libsecp256k1_gen_genmult-0.3.0",
     crate = "libsecp256k1-gen-genmult",
     version = "0.3.0",
     indirect = True,
+    platforms = [],
 )
 
 rust_repo(
@@ -1081,7 +1085,7 @@ rust_repo(
 )
 
 rust_repo(
-    name = "serde_spanned",
+    name = "serde_spanned-0.6.9",
     crate = "serde_spanned",
     version = "0.6.9",
     hashes = ["bf41e0cfaf7226dca15e8197172c295a782857fcb97fad1808a166870dee75a3"],
@@ -1137,7 +1141,7 @@ rust_repo(
 )
 
 rust_repo(
-    name = "toml_datetime",
+    name = "toml_datetime-0.6.11",
     crate = "toml_datetime",
     version = "0.6.11",
     hashes = ["22cddaf88f4fbc13c51aebbf5f8eceb5c7c5a9da2ac40a13519eb5b0a0e8f11c"],
@@ -1180,7 +1184,7 @@ rust_repo(
 
 
 rust_repo(
-    name = "winnow",
+    name = "winnow-0.7.14",
     crate = "winnow",
     version = "0.7.14",
     hashes = ["5a5364e9d77fcdeeaa6062ced926ee3381faa2ee02d3eb83a5c27a8825540829"],
@@ -1221,7 +1225,7 @@ rust_resolve(
         "either|either|1.12.0||false|true",
         "lock_api|lock_api|0.4.12||false|true",
         "parking_lot|parking_lot|0.12.3||false|true",
-        "itertools|itertools|0.12.1||false|true",
+        "itertools-0.12.1|itertools|0.12.1||false|true",
         "slab|slab|0.4.9||false|true",
         "pin_utils|pin-utils|0.1.0||false|true",
         "fnv|fnv|1.0.7||false|true",
@@ -1250,9 +1254,9 @@ rust_resolve(
         "want|want|0.3.1||false|true",
         "petgraph|petgraph|0.6.5||false|true",
         "futures_channel|futures-channel|0.3.30||false|true",
-        "heck|heck|0.5.0||false|true",
+        "heck-0.5.0|heck|0.5.0||false|true",
         "httpdate|httpdate|1.0.3||false|true",
-        "log-0.4.21|log|0.4.21||false|true",
+        "log|log|0.4.33||false|true",
         "multimap|multimap|0.10.0||false|true",
         "tower_layer|tower-layer|0.3.2||false|true",
         "regex_automata|regex-automata|0.4.7||false|true",
@@ -1302,8 +1306,8 @@ rust_resolve(
         "generic_array|generic-array|0.14.7||false|true",
         "version_check|version_check|0.9.5||false|true",
         "typenum|typenum|1.17.0||false|true",
-        "libsecp256k1_gen_ecmult|libsecp256k1-gen-ecmult|0.3.0||false|true",
-        "libsecp256k1_gen_genmult|libsecp256k1-gen-genmult|0.3.0||false|true",
+        "libsecp256k1_gen_ecmult-0.3.0|libsecp256k1-gen-ecmult|0.3.0||false|true",
+        "libsecp256k1_gen_genmult-0.3.0|libsecp256k1-gen-genmult|0.3.0||false|true",
         "blake3|blake3|1.5.4|default,std|true|true",
         "arrayvec|arrayvec|0.7.6||false|true",
         "constant_time_eq|constant_time_eq|0.3.1||false|true",
@@ -1348,19 +1352,19 @@ rust_resolve(
         "serde_core|serde_core|1.0.228||false|true",
         "serde_derive|serde_derive|1.0.228||false|true",
         "serde_json|serde_json|1.0.147|default|true|true",
-        "serde_spanned|serde_spanned|0.6.9||false|true",
+        "serde_spanned-0.6.9|serde_spanned|0.6.9||false|true",
         "smallvec|smallvec|1.15.2||false|true",
         "strsim|strsim|0.11.1||false|true",
         "syn-2.0.111|syn|2.0.111|full,parsing,default|true|true",
         "thiserror-1.0.69|thiserror|1.0.69|default|true|true",
         "thiserror_impl-1.0.69|thiserror-impl|1.0.69||false|true",
         "toml|toml|0.8.23|default|true|true",
-        "toml_datetime|toml_datetime|0.6.11||false|true",
+        "toml_datetime-0.6.11|toml_datetime|0.6.11||false|true",
         "toml_edit|toml_edit|0.22.27||false|true",
         "toml_write|toml_write|0.1.2||false|true",
         "unicode_ident|unicode-ident|1.0.22||false|true",
         "utf8parse|utf8parse|0.2.2||false|true",
-        "winnow|winnow|0.7.14||false|true",
+        "winnow-0.7.14|winnow|0.7.14||false|true",
         "zmij|zmij|0.1.9||false|true",
         "bindgen|bindgen|0.71.1||false|true",
         "bindgen_cli|bindgen-cli|0.71.1||true|true",
@@ -1379,7 +1383,7 @@ rust_resolve(
         "libloading|libloading|0.8.9||true|true",
         "annotate_snippets|annotate-snippets|0.11.5||true|true",
         "unicode_width|unicode-width|0.2.2||false|true",
-        "log|log|0.4.33||false|true",
+        "log-0.4.33|log|0.4.33||false|true",
         "priority_queue|priority-queue|2.7.0||false|true",
         "pubgrub|pubgrub|0.4.0||true|true",
         "syn|syn|3.0.3||true|true",
@@ -1388,14 +1392,23 @@ rust_resolve(
         "version_ranges|version-ranges|0.1.3||false|true",
         "base64-0.12.3|base64|0.12.3||true|true",
         "getrandom-0.1.16|getrandom|0.1.16||false|true",
-        "heck-0.4.1|heck|0.4.1||true|true",
-        "itertools-0.10.5|itertools|0.10.5||true|true",
-        "libsecp256k1_gen_ecmult-0.2.1|libsecp256k1-gen-ecmult|0.2.1||true|true",
-        "libsecp256k1_gen_genmult-0.2.1|libsecp256k1-gen-genmult|0.2.1||true|true",
+        "heck|heck|0.4.1||true|true",
+        "itertools|itertools|0.10.5||true|true",
+        "libsecp256k1_gen_ecmult|libsecp256k1-gen-ecmult|0.2.1||true|true",
+        "libsecp256k1_gen_genmult|libsecp256k1-gen-genmult|0.2.1||true|true",
         "rand-0.7.3|rand|0.7.3||true|true",
         "rand_chacha-0.2.2|rand_chacha|0.2.2||false|true",
         "rand_core-0.5.1|rand_core|0.5.1||false|true",
         "errno|errno|0.3.14||true|true",
+        "allocator_api2|allocator-api2|0.2.21||false|true",
+        "cbindgen|cbindgen|0.29.4||true|true",
+        "foldhash|foldhash|0.2.0||false|true",
+        "serde_spanned|serde_spanned|1.1.1||false|true",
+        "toml-0.9.12+spec-1.1.0|toml|0.9.12+spec-1.1.0||false|true",
+        "toml_datetime|toml_datetime|0.7.5+spec-1.1.0||false|true",
+        "toml_parser|toml_parser|1.1.3+spec-1.1.0||false|true",
+        "toml_writer|toml_writer|1.1.2+spec-1.1.0||false|true",
+        "winnow|winnow|1.0.4||false|true",
     ],
 )
 
@@ -1501,6 +1514,7 @@ rust_repo(
     version = "0.1.14",
     hashes = ["7dd6e30e90baa6f72411720665d41d89b9a3d039dc45b8faea1ddd07f617f6af"],
     indirect = True,
+    platforms = [],
 )
 
 # Added by please_rust sync
@@ -1537,11 +1551,12 @@ rust_repo(
 
 # Added by please_rust sync
 rust_repo(
-    name = "log",
+    name = "log-0.4.33",
     crate = "log",
     version = "0.4.33",
     hashes = ["0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"],
     indirect = True,
+    platforms = [],
 )
 
 rust_repo(
@@ -1606,28 +1621,28 @@ rust_repo(
 )
 
 rust_repo(
-    name = "heck-0.4.1",
+    name = "heck",
     crate = "heck",
     version = "0.4.1",
     hashes = ["95505c38b4572b2d910cecb0281560f54b440a19336cbbcb27bf6ce6adc6f5a8"],
 )
 
 rust_repo(
-    name = "itertools-0.10.5",
+    name = "itertools",
     crate = "itertools",
     version = "0.10.5",
     hashes = ["b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"],
 )
 
 rust_repo(
-    name = "libsecp256k1_gen_ecmult-0.2.1",
+    name = "libsecp256k1_gen_ecmult",
     crate = "libsecp256k1-gen-ecmult",
     version = "0.2.1",
     hashes = ["ccab96b584d38fac86a83f07e659f0deafd0253dc096dab5a36d53efe653c5c3"],
 )
 
 rust_repo(
-    name = "libsecp256k1_gen_genmult-0.2.1",
+    name = "libsecp256k1_gen_genmult",
     crate = "libsecp256k1-gen-genmult",
     version = "0.2.1",
     hashes = ["67abfe149395e3aa1c48a2beb32b068e2334402df8181f818d3aee2b304c4f5d"],
@@ -1662,4 +1677,79 @@ rust_repo(
     crate = "errno",
     version = "0.3.14",
     hashes = ["39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"],
+)
+
+# Added by please_rust sync
+rust_repo(
+    name = "allocator_api2",
+    crate = "allocator-api2",
+    version = "0.2.21",
+    hashes = ["683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"],
+    indirect = True,
+    platforms = [],
+)
+
+rust_repo(
+    name = "cbindgen",
+    crate = "cbindgen",
+    version = "0.29.4",
+    hashes = ["2ecb53484c9c167ba674026b656d8a27d7657a58e6066aa902bfb1a4aa00ae20"],
+)
+
+rust_repo(
+    name = "foldhash",
+    crate = "foldhash",
+    version = "0.2.0",
+    hashes = ["77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"],
+    indirect = True,
+    platforms = [],
+)
+
+rust_repo(
+    name = "serde_spanned",
+    crate = "serde_spanned",
+    version = "1.1.1",
+    hashes = ["6662b5879511e06e8999a8a235d848113e942c9124f211511b16466ee2995f26"],
+    indirect = True,
+)
+
+rust_repo(
+    name = "toml-0.9.12+spec-1.1.0",
+    crate = "toml",
+    version = "0.9.12+spec-1.1.0",
+    hashes = ["cf92845e79fc2e2def6a5d828f0801e29a2f8acc037becc5ab08595c7d5e9863"],
+    indirect = True,
+)
+
+rust_repo(
+    name = "toml_datetime",
+    crate = "toml_datetime",
+    version = "0.7.5+spec-1.1.0",
+    hashes = ["92e1cfed4a3038bc5a127e35a2d360f145e1f4b971b551a2ba5fd7aedf7e1347"],
+    indirect = True,
+)
+
+rust_repo(
+    name = "toml_parser",
+    crate = "toml_parser",
+    version = "1.1.3+spec-1.1.0",
+    hashes = ["1d38ac1cf9b95face32296c0a3ede1fdc270627c9d9c02a7274dd6d960dc4d56"],
+    indirect = True,
+)
+
+rust_repo(
+    name = "toml_writer",
+    crate = "toml_writer",
+    version = "1.1.2+spec-1.1.0",
+    hashes = ["7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"],
+    indirect = True,
+    platforms = [],
+)
+
+rust_repo(
+    name = "winnow",
+    crate = "winnow",
+    version = "1.0.4",
+    hashes = ["23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"],
+    indirect = True,
 )

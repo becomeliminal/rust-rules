@@ -35,8 +35,18 @@ rust_library(
     edition = "2021",
 )
 
+# The header the C side includes is generated from the Rust source rather
+# than hand-written, so a signature that changes on one side stops the other
+# compiling instead of crashing at run time.
+rust_cbindgen(
+    name = "ffi_header",
+    root = "rust_ffi_lib.rs",
+    crate_name = "ffi",
+)
+
 c_binary(
     name = "uses_rust",
     srcs = ["main.c"],
+    hdrs = [":ffi_header"],
     deps = [":rust_ffi"],
 )
