@@ -1,5 +1,10 @@
 Version 0.7.1
 -------------
+  * A toolchain no longer keeps the dist, std, or rust-src tarballs. The
+    hash is still of those bytes, checked before the archive is removed, so
+    it is not a second copy of the toolchain sat next to it. The two libLLVM
+    files in one toolchain share an inode: a hardlink, because `<name>_rustc`
+    and `<name>_llvm_tools` each have to contain a real file when staged alone.
   * rust_project finds plz the way the repo does. The discovery script called
     `plz`, which a CI runner does not have and a repo drives through
     ./pleasew, so project generation failed there. It resolves $PLZ, then plz
