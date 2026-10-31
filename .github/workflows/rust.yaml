@@ -204,7 +204,7 @@ jobs:
   # nobody develops on daily is exactly the one that needs a build to fail
   # loudly when it breaks.
   macos:
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

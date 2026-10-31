@@ -35,7 +35,7 @@ jobs:
             runs-on: ubuntu-latest
             gating: true
           - platform: darwin_arm64
-            runs-on: macos-latest
+            runs-on: macos-15
             gating: false
     runs-on: ${{ matrix.runs-on }}
     continue-on-error: ${{ !matrix.gating }}
