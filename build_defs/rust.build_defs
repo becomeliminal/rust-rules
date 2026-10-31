@@ -62,75 +62,6 @@ def target_triple(context:str='rust'):
     return rust_triple(CONFIG.TARGET_OS, CONFIG.TARGET_ARCH, context)
 
 
-def _fetch_archive(url:str, dest:str, hashes:list=None):
-    """Shell: download url to dest, check its sha256, extract, delete dest.
-
-    dest is in the action temp dir. Removing it before the action finishes
-    means the tarball is not an output, which a separate download target
-    cannot arrange: that target's own output is the archive, and deleting it
-    afterwards only makes Please fetch it again. The hash is of the tarball,
-    any match accepted, which is what remote_file did. No hashes skips the
-    check, as an omitted std or rust-src hash does.
-    """
-    qdest = _sq(dest)
-    fetch = 'curl -fsSL --retry 5 --retry-delay 2 -o %s %s' % (qdest, _sq(url))
-    extract = 'tar -xzf %s && rm -f %s' % (qdest, qdest)
-    if not hashes:
-        return '%s && %s' % (fetch, extract)
-    accepted = []
-    for h in hashes:
-        # remote_file allows an optional "sha256:" prefix and ignores it.
-        if ':' in h:
-            _, _, h = h.rpartition(':')
-            h = h.strip()
-        accepted.append(h)
-    # One double-quoted string so the awk program's single quotes stay literal.
-    # $1 is expanded by awk, not by the build language.
-    digest = "digest=$(if command -v sha256sum >/dev/null 2>&1; then sha256sum %s | awk '{print $1}'; else openssl dgst -sha256 %s | awk '{print $NF}'; fi)" % (qdest, qdest)
-    checks = []
-    for h in accepted:
-        checks.append('[ "$digest" = %s ]' % _sq(h))
-    checks = ' || '.join(checks)
-    # The extra braces keep the || from swallowing a failed curl. && and ||
-    # associate left, so a bare `curl && check || echo` reports a hash
-    # failure when the download itself failed.
-    verify = '{ { %s; } || { echo "bad hash for %s: $digest" >&2; exit 1; }; }' % (checks, url)
-    return ' && '.join([fetch, digest, verify, extract])
-
-
-def _link_libllvm(triple:str):
-    """Shell: hardlink rustc's libLLVM onto the llvm-tools copy inside $OUT.
-
-    The dist ships the same bytes in both trees. A hardlink is a real file in
-    each, so the split rules still have one after they mv a tree into its own
-    output. A symlink would dangle in whichever output does not contain the
-    target. The linker script beside the library (INPUT(...)) is not the
-    library and is left as it is.
-
-    Please keeps an existing output when the new tree hashes the same. The
-    hardlink hashes the same as the two copies it collapses, so a rebuild
-    would otherwise leave the duplicates in place. The marker file is a byte
-    the old tree does not have, which makes Please install this tree.
-    """
-    return (
-        '{ '
-        'rustc_lib="$OUT/rustc/lib"; '
-        'llvm_lib="$OUT/llvm-tools-preview/lib/rustlib/%s/lib"; '
-        'n=0; '
-        'for src in "$rustc_lib"/libLLVM.so.* "$rustc_lib"/libLLVM*.dylib; do '
-        '[ -f "$src" ] && [ ! -L "$src" ] || continue; '
-        'base=$(basename "$src"); '
-        'dest="$llvm_lib/$base"; '
-        '[ -f "$dest" ] && [ ! -L "$dest" ] || { echo "libLLVM $base is in rustc but not llvm-tools" >&2; exit 1; }; '
-        'ln -f "$src" "$dest" || exit 1; '
-        'n=$((n+1)); '
-        'done; '
-        '[ "$n" -gt 0 ] || { echo "no libLLVM shared library in rustc/lib" >&2; exit 1; }; '
-        'echo > "$OUT/.libllvm-hardlink"; '
-        '}'
-    ) % triple
-
-
 def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=None, visibility=None, nightly=False,
                    architectures:list=[], std_hashes:dict={}, src_hash:str=None):
     """Defines rules to fetch a Rust toolchain.
@@ -144,7 +75,7 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
       os (str): Operating system to download for, as the full triple, e.g. 'unknown-linux-gnu', 'pc-windows-msvc', etc.
                 Defaults to the host OS, as best we can.
       arch (str): Architecture to download for, e.g. 'i686' or 'x86_64'. Defaults to the host one.
-      hashes (list): sha256 of the dist tarball, one per host platform. Any match is accepted.
+      hashes (list) List of hashes to verify on download.
       deps (list): Extra dependencies of the rule.
       visibility (list): Visibility declaration of the rule.
       architectures (list): Additional platforms to install the standard library for, either in
@@ -182,6 +113,13 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
     # for the host's, and the sysroot is staged by every compile.
     if CONFIG.RUST.TARGET_TRIPLE and CONFIG.RUST.TARGET_TRIPLE != triple:
         architectures += [CONFIG.RUST.TARGET_TRIPLE]
+    download_rule = remote_file(
+        name = '_%s#download' % name,
+        url = 'https://static.rust-lang.org/dist/%s.tar.gz' % base,
+        #key = 'https://static.rust-lang.org/rust-key.gpg.ascii',
+        hashes = hashes,
+        deps = deps,
+    )
     # One rule, one directory, entry points into it - the shape go_toolchain
     # uses. Everything the toolchain provides lives inside a single output, so
     # an action cannot stage a binary without the libraries sitting beside it.
@@ -194,11 +132,13 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
     # clippy-driver and rustfmt resolve librustc_driver the same way, so they
     # move next to rustc rather than being copied out into rules of their own.
     llvm_bin = '%s/llvm-tools-preview/lib/rustlib/%s/bin' % (name, triple)
+    sysroot = '%s/rust-std-%s' % (name, triple)
 
     # A standard library for another platform goes into this same sysroot,
     # under its own triple, which is where rustc --target looks for it. One
     # sysroot serving every target is what rustup produces too, and it keeps
     # cross-compiling to a matter of passing --target.
+    std_rules = []
     std_cmds = []
     for plat in architectures:
         # A Please os_arch pair, or a Rust triple named verbatim for the
@@ -214,15 +154,16 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
         if plat_triple == triple:
             continue
         std_base = 'rust-std-%s-%s' % (version, plat_triple)
+        std_rules += [remote_file(
+            name = '_%s#std_%s' % (name, plat),
+            url = 'https://static.rust-lang.org/dist/%s.tar.gz' % std_base,
+            hashes = [std_hashes[plat]] if plat in std_hashes else None,
+        )]
         std_cmds += [
-            _fetch_archive(
-                'https://static.rust-lang.org/dist/%s.tar.gz' % std_base,
-                'std-%s.tar.gz' % plat,
-                [std_hashes[plat]] if plat in std_hashes else None,
-            ),
             'mv %s/rust-std-%s/lib/rustlib/%s $OUT/rust-std-%s/lib/rustlib/' % (std_base, plat_triple, plat_triple, triple),
         ]
 
+    extract = ['for f in $SRCS_STD; do tar -xzf $f; done'] if std_rules else []
     # Build the output from a keep-list rather than extracting everything and
     # deleting what we do not want. Same reason either way - the dist ships
     # 887M of HTML documentation, and this output is one directory so that a
@@ -235,12 +176,9 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
     # Selecting is preferred over deleting because what lands in $OUT is then
     # stated rather than implied: no glob decides it, and a component the dist
     # adds later cannot quietly start riding along.
-    #
-    # The tarballs are downloaded here rather than by a remote_file. That
-    # target's output is the archive, so it stayed next to the toolchain after
-    # the hash check. Nothing reads it again.
     cmds = [
-        _fetch_archive('https://static.rust-lang.org/dist/%s.tar.gz' % base, 'dist.tar.gz', hashes),
+        'tar -xzf $SRCS_DIST',
+    ] + extract + [
         'mkdir $OUT',
         'mv {b}/rustc {b}/cargo {b}/rust-std-{t} {b}/llvm-tools-preview $OUT/'.format(b = base, t = triple),
         # clippy-driver and rustfmt resolve librustc_driver relative to their
@@ -250,20 +188,13 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
         'mv %s/rustfmt-preview/bin/rustfmt $OUT/rustc/bin/' % base,
         # rustc's own component carries 16M of licence HTML.
         'rm -rf $OUT/rustc/share/doc',
-    ] + std_cmds + [
-        _link_libllvm(triple),
-    ]
+    ] + std_cmds
 
     toolchain = build_rule(
         name = name,
+        srcs = {'dist': [download_rule], 'std': std_rules},
         outs = [name],
         cmd = ' && '.join(cmds),
-        deps = deps,
-        # The fetch needs the network, which a sandboxed or remote action does
-        # not have. remote_file had the same exemption and ran in the client;
-        # workers then fetch the finished directory.
-        local = True,
-        sandbox = False,
         # Files only. A non-empty directory cannot be an entry point under
         # remote execution: plz validates every declared entry point by
         # membership in the flattened action outputs, and flattening keys
@@ -286,33 +217,28 @@ def rust_toolchain(name:str, version:str, os=None, arch=None, hashes=None, deps=
             'llvm-profdata': '%s/llvm-profdata' % llvm_bin,
         },
         binary = True,
-        building_description = 'Fetching...',
+        building_description = 'Extracting...',
         visibility = visibility,
     )
 
     # The standard library's own sources, which rust-analyzer needs for
     # go-to-definition into std and cannot get from the rlibs. Its own
-    # target: nothing but `please_rust ide` wants it, so a repo that never
-    # generates a rust-project.json never fetches it. Not triple-specific,
-    # and 8.7MB against the distribution's 800. The tarball is checked and
-    # removed inside the action, same as the dist.
+    # download and its own target: nothing but `please_rust ide` wants it, so
+    # a repo that never generates a rust-project.json never fetches it. Not
+    # triple-specific, and 8.7MB against the distribution's 800.
+    src_download = remote_file(
+        name = '_%s#src' % name,
+        url = 'https://static.rust-lang.org/dist/rust-src-%s.tar.gz' % version,
+        hashes = [src_hash] if src_hash else None,
+    )
     build_rule(
         name = '%s_sysroot_src' % name,
+        srcs = [src_download],
         outs = ['rust-src'],
         # rust-analyzer wants the `library` directory itself, which is what
         # sysroot_src names in a rust-project.json.
-        cmd = ' && '.join([
-            _fetch_archive(
-                'https://static.rust-lang.org/dist/rust-src-%s.tar.gz' % version,
-                'rust-src.tar.gz',
-                [src_hash] if src_hash else None,
-            ),
-            'mv rust-src-%s/rust-src/lib/rustlib/src/rust/library $OUT' % version,
-        ]),
+        cmd = 'tar -xzf $SRCS && mv rust-src-%s/rust-src/lib/rustlib/src/rust/library $OUT' % version,
         output_is_complete = True,
-        local = True,
-        sandbox = False,
-        building_description = 'Fetching...',
         visibility = visibility,
     )
 
